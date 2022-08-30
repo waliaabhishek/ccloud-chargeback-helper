@@ -1,0 +1,35 @@
+configs:
+  connection:
+    - id: CCloud Org 1
+      ccloud_details:
+        api_key: env::CCLOUD_API_KEY
+        api_secret: env::CCLOUD_API_SECRET
+        url: https://api.telemetry.confluent.cloud/v2/metrics/cloud/query
+      storage:
+        metrics:
+        billing_csv:
+      requests:
+        - id: Fetch Request Bytes
+          aggregations:
+            - metric: io.confluent.kafka.server/request_bytes
+          granularity: PT1H
+          group_by:
+            - metric.principal_id
+          limit: 1000
+          filter:
+            field: resource.kafka.id
+            op: EQ
+            value:
+              - env::CLUSTER_ID_1
+        - id: Fetch Response Bytes
+          aggregations:
+            - metric: io.confluent.kafka.server/response_bytes
+          granularity: PT1H
+          group_by:
+            - metric.principal_id
+          limit: 100
+          filter:
+            - field: resource.kafka.id
+              op: EQ
+              value:
+                - env::CLUSTER_ID_1
