@@ -59,4 +59,3 @@ def run_workflow(arg_flags: Namespace):
     curr_df = metrics_dataframe(aggregation_metric_name=new_req["aggregations"][0]["metric"], metrics_output=resp_body)
     curr_df.print_sample_df()
     curr_df.output_to_csv(storage_path[DirType.MetricsData])
-
