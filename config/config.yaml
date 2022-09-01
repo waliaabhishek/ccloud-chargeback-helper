@@ -1,4 +1,4 @@
-configs:
+config:
   connection:
     - id: CCloud Org 1
       ccloud_details:
@@ -29,7 +29,7 @@ configs:
             - metric.principal_id
           limit: 100
           filter:
-            - field: resource.kafka.id
-              op: EQ
-              value:
-                - env::CCLOUD_BILLING_CLUSTER_ID_1
+            field: resource.kafka.id
+            op: EQ
+            value:
+              - env::CCLOUD_BILLING_CLUSTER_ID_1
