@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import timedelta
+from enum import Enum, auto
 import os
 import pandas as pd
 from typing import Any, Dict, Tuple
@@ -7,17 +8,22 @@ from helpers import logged_method, timed_method
 from csv import QUOTE_NONNUMERIC
 
 
+class DatasetNames(Enum):
+    metricsapi_representation = auto()
+    pivoted_on_timestamp = auto()
+
+
 @dataclass
 class metrics_dataframe:
     aggregation_metric_name: str = field(repr=False, init=True)
-    metrics_output: Dict = field(repr=False, init=True)
+    _metrics_output: Dict = field(repr=False, init=True)
     parsed_datasets: Dict[str, Dict[str, Any]] = field(init=False, default_factory=dict)
     # parsed_df: pd.DataFrame = field(init=False)
     # req_res_bytes_df: pd.DataFrame = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.generate_df_from_output()
-        self.metrics_output = None
+        self._metrics_output = None
 
     def append_dataset(self, ds_name: str, is_shaped: bool, ds: pd.DataFrame):
         temp = {}
@@ -40,14 +46,14 @@ class metrics_dataframe:
         temp = self.get_dataset(ds_name_to_shape)[1].pivot(
             index="timestamp", columns="metric.principal_id", values="value"
         )
-        self.append_dataset(ds_name="pivoted_on_timestamp", is_shaped=True, ds=temp)
+        self.append_dataset(ds_name=DatasetNames.pivoted_on_timestamp.name, is_shaped=True, ds=temp)
 
     @timed_method
     @logged_method
     def generate_df_from_output(self):
-        temp = pd.DataFrame(self.metrics_output["data"])
+        temp = pd.DataFrame(self._metrics_output["data"])
         temp["timestamp"] = pd.to_datetime(temp["timestamp"])
-        core_ds_name = "metricsapi_representation"
+        core_ds_name = DatasetNames.metricsapi_representation.name
         self.append_dataset(ds_name=core_ds_name, is_shaped=False, ds=temp)
         print("Trying to shape selective datasets")
         if self.is_shapeable():
@@ -79,7 +85,7 @@ class metrics_dataframe:
     def output_to_csv(self, basepath: str):
         for name, is_shaped, ds in self.get_all_datasets():
             if ds is not None:
-                if name is "pivoted_on_timestamp":
+                if name is DatasetNames.pivoted_on_timestamp.name:
                     ts_range = ds.index.normalize().unique()
                     dt_range = ts_range.date
                     for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
@@ -87,7 +93,7 @@ class metrics_dataframe:
                         out_path = os.path.join(basepath, f"{dt_val}_{name}.csv")
                         subset = ds[(ds.index >= gt_eq_date) & (ds.index < lt_date)]
                         subset.to_csv(out_path, quoting=QUOTE_NONNUMERIC)
-                elif name is "metricsapi_representation":
+                elif name is DatasetNames.metricsapi_representation.name:
                     ts_range = ds["timestamp"].dt.normalize().unique()
                     dt_range = ts_range.date
                     for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
