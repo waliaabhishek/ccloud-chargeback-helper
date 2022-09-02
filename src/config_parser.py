@@ -5,7 +5,7 @@ import os
 from pprint import pprint
 from typing import Dict, List
 import yaml
-from ccloud.core import CCloudHTTPRequest, execute_ccloud_request, initialize_ccloud_entities
+from ccloud.core import CCloudHTTPRequest, initialize_ccloud_entities
 from data_processing.metrics_processing import metrics_dataframe
 import helpers
 from helpers import logged_method, timed_method
@@ -52,13 +52,10 @@ def locate_storage_path(
 def run_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
     storage_path = locate_storage_path(dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData])
-    # new_req = create_ccloud_request(request=core_config["configs"]["connection"][0]["requests"][0], intervals=3)
-    # connection = get_http_connection(ccloud_details=core_config["configs"]["connection"][0]["ccloud_details"])
-    # resp_code, resp_body = execute_ccloud_request(
-    #     ccloud_url=arg_flags.ccloud_url, auth=connection, payload=new_req, timeout=200
-    # )
-    # curr_df = metrics_dataframe(aggregation_metric_name=new_req["aggregations"][0]["metric"], metrics_output=resp_body)
-    # curr_df.output_to_csv(storage_path[DirType.MetricsData])
-
-    ccloud_orgs = initialize_ccloud_entities(core_config["config"]["connection"])
-    pprint(ccloud_orgs)
+    
+    ccloud_orgs = initialize_ccloud_entities(
+        connections=core_config["config"]["connection"], days_in_memory=core_config["system"]["days_in_memory"]
+    )
+    for org_key, org in ccloud_orgs.items():
+        org.execute_all_requests(output_basepath=storage_path[DirType.MetricsData])
+        org.export_metrics_to_csv(output_basepath=storage_path[DirType.MetricsData])
