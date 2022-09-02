@@ -1,4 +1,6 @@
 config:
+  system:
+    days_in_memory: 7
   connection:
     - id: CCloud Org 1
       ccloud_details:
