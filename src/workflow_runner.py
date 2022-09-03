@@ -8,13 +8,14 @@ import yaml
 from ccloud.core import CCloudHTTPRequest, initialize_ccloud_entities
 from data_processing.metrics_processing import metrics_dataframe
 import helpers
-from helpers import logged_method, timed_method
+from helpers import ensure_path, logged_method, timed_method
 
 
 class DirType(Enum):
     MetricsData = auto()
     BillingsData = auto()
     OutputData = auto()
+    PersistenceStats = auto()
 
 
 @logged_method
@@ -29,7 +30,7 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
 
 @timed_method
 @logged_method
-def locate_metrics_data(metrics_location: str):
+def locate_existing_metrics_data(metrics_location: str):
     debug("Trying to locate Metrics files: " + metrics_location)
     pass
 
@@ -41,8 +42,7 @@ def locate_storage_path(
     for item in dir_type:
         temp = os.path.join(basepath, base_dir, item.name, "")
         print(temp)
-        if not os.path.exists(temp):
-            os.makedirs(temp)
+        ensure_path(path=temp)
         ret[item] = temp
     return ret
 
@@ -51,11 +51,18 @@ def locate_storage_path(
 @logged_method
 def run_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
-    storage_path = locate_storage_path(dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData])
-    
+    storage_path = locate_storage_path(
+        dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats]
+    )
+    existing_metrics_data = locate_existing_metrics_data(storage_path[DirType.MetricsData])
+
     ccloud_orgs = initialize_ccloud_entities(
-        connections=core_config["config"]["connection"], days_in_memory=core_config["system"]["days_in_memory"]
+        connections=core_config["config"]["connection"],
+        days_in_memory=core_config["config"]["system"]["days_in_memory"],
     )
     for org_key, org in ccloud_orgs.items():
-        org.execute_all_requests(output_basepath=storage_path[DirType.MetricsData])
+        org.execute_all_requests(
+            output_basepath=storage_path[DirType.MetricsData],
+            days_in_memory=core_config["config"]["system"]["days_in_memory"],
+        )
         org.export_metrics_to_csv(output_basepath=storage_path[DirType.MetricsData])
