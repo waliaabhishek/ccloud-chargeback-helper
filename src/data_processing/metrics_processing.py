@@ -3,14 +3,15 @@ from datetime import timedelta
 from enum import Enum, auto
 import os
 import pandas as pd
-from typing import Any, Dict, Tuple
-from helpers import logged_method, timed_method
+from typing import Any, Dict, List, Tuple
+from helpers import ensure_path, logged_method, timed_method, sanitize_metric_name
 from csv import QUOTE_NONNUMERIC
 
 
 class DatasetNames(Enum):
     metricsapi_representation = auto()
     pivoted_on_timestamp = auto()
+    metrics_persistence_status = auto()
 
 
 @dataclass
@@ -18,12 +19,12 @@ class metrics_dataframe:
     aggregation_metric_name: str = field(repr=False, init=True)
     _metrics_output: Dict = field(repr=False, init=True)
     parsed_datasets: Dict[str, Dict[str, Any]] = field(init=False, default_factory=dict)
-    # parsed_df: pd.DataFrame = field(init=False)
-    # req_res_bytes_df: pd.DataFrame = field(default=None, init=False)
+    persistence_status: Dict[str, List[str]] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
         self.generate_df_from_output()
         self._metrics_output = None
+        self.aggregation_metric_name = self.aggregation_metric_name
 
     def append_dataset(self, ds_name: str, is_shaped: bool, ds: pd.DataFrame):
         temp = {}
@@ -64,8 +65,8 @@ class metrics_dataframe:
 
     def is_shapeable(self) -> bool:
         if self.aggregation_metric_name in [
-            "io.confluent.kafka.server/request_bytes",
-            "io.confluent.kafka.server/response_bytes",
+            sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
+            sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
         ]:
             return True
         else:
@@ -82,6 +83,10 @@ class metrics_dataframe:
             outer_ts_boundary = inner_ts_boundary + timedelta(days=1)
             yield (date_only_str, inner_ts_boundary, outer_ts_boundary)
 
+    def add_to_persistence_list(self, date_value: str):
+        # TODO: Implement Persistence list add and send to file.
+        pass
+
     def output_to_csv(self, basepath: str):
         for name, is_shaped, ds in self.get_all_datasets():
             if ds is not None:
@@ -90,7 +95,9 @@ class metrics_dataframe:
                     dt_range = ts_range.date
                     for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
                         subset = None
-                        out_path = os.path.join(basepath, f"{dt_val}_{name}.csv")
+                        out_path = os.path.join(basepath, f"{dt_val}")
+                        ensure_path(path=out_path)
+                        out_path = os.path.join(basepath, f"{dt_val}", f"{self.aggregation_metric_name}__{name}.csv")
                         subset = ds[(ds.index >= gt_eq_date) & (ds.index < lt_date)]
                         subset.to_csv(out_path, quoting=QUOTE_NONNUMERIC)
                 elif name is DatasetNames.metricsapi_representation.name:
@@ -98,6 +105,8 @@ class metrics_dataframe:
                     dt_range = ts_range.date
                     for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
                         subset = None
-                        out_path = os.path.join(basepath, f"{dt_val}_{name}.csv")
-                        subset = ds[(ds["timestamp"] >= gt_eq_date) & (ds.index < lt_date)]
+                        out_path = os.path.join(basepath, f"{dt_val}")
+                        ensure_path(path=out_path)
+                        out_path = os.path.join(basepath, f"{dt_val}", f"{self.aggregation_metric_name}__{name}.csv")
+                        subset = ds[(ds["timestamp"] >= gt_eq_date) & (ds["timestamp"] < lt_date)]
                         subset.to_csv(out_path, index=False, quoting=QUOTE_NONNUMERIC)

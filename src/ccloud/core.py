@@ -3,7 +3,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
 from data_processing.metrics_processing import metrics_dataframe
-from helpers import logged_method, timed_method
+from helpers import logged_method, timed_method, sanitize_id, sanitize_metric_name
 from typing import Any, Dict, List, Tuple
 from copy import deepcopy
 import datetime
@@ -30,20 +30,19 @@ class CCloudHTTPRequest:
     days_in_memory: int = field(default=7)
     massaged_request: Dict = field(init=False)
     http_response: Dict[str, Dict] = field(default_factory=dict, init=False)
-    metrics_dataframes: Dict[str, metrics_dataframe] = field(init=False, default=None)
+    metrics_dataframes: Dict[str, metrics_dataframe] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.http_response["data"] = []
         self.create_ccloud_request()
+        self.aggregation_metric = sanitize_metric_name(self.massaged_request["aggregations"][0]["metric"])
         self._base_payload = None
 
     def create_ccloud_request(self) -> Dict:
         req = deepcopy(self._base_payload)
         self.req_id = sanitize_id(str(req.pop("id")))
         req["filter"] = self.generate_filter_struct(req["filter"])
-        # req["intervals"] = self.generate_iso8601_dt_intervals(CCMEReq_Granularity.P1D.name, intervals=intervals)
         self.massaged_request = req
-        self.aggregation_metric = self.massaged_request["aggregations"][0]["metric"]
 
     def generate_filter_struct(self, filter: Dict) -> Dict:
         cluster_list = filter["value"]
@@ -83,12 +82,16 @@ class CCloudHTTPRequest:
             json=self.massaged_request,
             params=params,
         )
-        print(resp.text)
         self.massaged_request.pop("intervals")
         if resp.status_code == 200:
             out_json = resp.json()
             self.http_response["data"].extend(out_json["data"])
-            if out_json["meta"]["pagination"]["next_page_token"] is not None:
+            if (
+                "meta" in out_json
+                and "pagination" in out_json["meta"]
+                and "next_page_token" in out_json["meta"]["pagination"]
+                and out_json["meta"]["pagination"]["next_page_token"] is not None
+            ):
                 params["page_token"] = str(out_json["meta"]["pagination"]["next_page_token"])
                 self.execute_request(http_connection=http_connection, date_range=date_range, params=params)
         else:
@@ -100,13 +103,12 @@ class CCloudHTTPRequest:
         return temp[self.days_in_memory - 1 :]
 
     def add_dataframes(self, date_range: Tuple, output_basepath: str):
-        datasets_for_eviction = self.find_datasets_to_evict()
-        for dataset in datasets_for_eviction:
+        for dataset in self.find_datasets_to_evict():
             self.metrics_dataframes.pop(dataset).output_to_csv(basepath=output_basepath)
         self.metrics_dataframes[str(date_range[1])] = metrics_dataframe(
             aggregation_metric_name=self.aggregation_metric, _metrics_output=self.http_response
         )
-        self.http_response = None
+        self.http_response["data"] = []
 
 
 @dataclass(kw_only=True)
@@ -119,7 +121,7 @@ class CCloudOrg:
     def execute_all_requests(self, output_basepath: str, days_in_memory: int = 7):
         for req_name, request in self.HTTPRequests.items():
             for req_interval in self.generate_iso8601_dt_intervals(
-                req_id=req_name, granularity=CCMEReq_Granularity.P1D.name, intervals=7
+                granularity=CCMEReq_Granularity.P1D.name, intervals=7
             ):
                 request.execute_request(http_connection=self.HTTPConnection, date_range=req_interval)
                 request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
@@ -133,13 +135,9 @@ class CCloudOrg:
         curr_date = datetime.datetime.now(tz=datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         for _ in range(intervals):
             curr_date = curr_date - datetime.timedelta(days=1)
-            curr = tuple(curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
+            curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
             self.metrics_intervals.append(curr)
             yield curr
-
-
-def sanitize_id(input: str) -> str:
-    return input.strip().replace(" ", "_")
 
 
 def initialize_ccloud_entities(connections: List, days_in_memory: int = 7) -> Dict[str, CCloudOrg]:
@@ -157,10 +155,3 @@ def initialize_ccloud_entities(connections: List, days_in_memory: int = 7) -> Di
             http_requests[http_req.req_id if http_req.req_id else req_count] = http_req
         orgs[org_id] = CCloudOrg(HTTPConnection=http_connection, HTTPRequests=http_requests, org_id=org_id)
     return orgs
-
-
-# @timed_method
-# @logged_method
-# def execute_ccloud_request(ccloud_url: str, auth: HTTPBasicAuth, payload: Dict, **kwargs) -> Tuple[int, Dict]:
-#     resp = requests.post(url=ccloud_url, auth=auth, json=payload, **kwargs)
-#     return resp.status_code, resp.json()
