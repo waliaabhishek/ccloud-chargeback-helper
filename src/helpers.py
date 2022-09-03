@@ -1,4 +1,5 @@
 from logging import DEBUG, INFO, log
+import os
 import pprint
 from os import environ
 from functools import wraps
@@ -36,6 +37,19 @@ def env_parse_replace(input):
                 env_parse_replace(v)
             elif isinstance(v, str):
                 input[k] = find_replace_env_vars(v)
+
+
+def ensure_path(path: str):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+
+def sanitize_id(input: str) -> str:
+    return input.strip().replace(" ", "_")
+
+
+def sanitize_metric_name(input: str) -> str:
+    return input.strip().replace("/", "_").replace(" ", "_").replace(".", "_")
 
 
 def mandatory_check(key, value):
