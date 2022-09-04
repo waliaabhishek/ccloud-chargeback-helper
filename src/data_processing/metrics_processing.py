@@ -1,11 +1,13 @@
+import os
+from csv import QUOTE_NONNUMERIC
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
-import os
+from typing import Any, Dict, Tuple
+
 import pandas as pd
-from typing import Any, Dict, List, Tuple
-from helpers import ensure_path, logged_method, timed_method, sanitize_metric_name
-from csv import QUOTE_NONNUMERIC
+from helpers import ensure_path, logged_method, sanitize_metric_name, timed_method
+from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 
 class DatasetNames(Enum):
@@ -19,7 +21,6 @@ class metrics_dataframe:
     aggregation_metric_name: str = field(repr=False, init=True)
     _metrics_output: Dict = field(repr=False, init=True)
     parsed_datasets: Dict[str, Dict[str, Any]] = field(init=False, default_factory=dict)
-    persistence_status: Dict[str, List[str]] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
         self.generate_df_from_output()
@@ -83,11 +84,7 @@ class metrics_dataframe:
             outer_ts_boundary = inner_ts_boundary + timedelta(days=1)
             yield (date_only_str, inner_ts_boundary, outer_ts_boundary)
 
-    def add_to_persistence_list(self, date_value: str):
-        # TODO: Implement Persistence list add and send to file.
-        pass
-
-    def output_to_csv(self, basepath: str):
+    def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.MetricsData]):
         for name, is_shaped, ds in self.get_all_datasets():
             if ds is not None:
                 if name is DatasetNames.pivoted_on_timestamp.name:
@@ -100,6 +97,9 @@ class metrics_dataframe:
                         out_path = os.path.join(basepath, f"{dt_val}", f"{self.aggregation_metric_name}__{name}.csv")
                         subset = ds[(ds.index >= gt_eq_date) & (ds.index < lt_date)]
                         subset.to_csv(out_path, quoting=QUOTE_NONNUMERIC)
+                        PERSISTENCE_STORE.add_to_persistence(
+                            date_value=dt_val, metric_name=self.aggregation_metric_name
+                        )
                 elif name is DatasetNames.metricsapi_representation.name:
                     ts_range = ds["timestamp"].dt.normalize().unique()
                     dt_range = ts_range.date
@@ -110,3 +110,6 @@ class metrics_dataframe:
                         out_path = os.path.join(basepath, f"{dt_val}", f"{self.aggregation_metric_name}__{name}.csv")
                         subset = ds[(ds["timestamp"] >= gt_eq_date) & (ds["timestamp"] < lt_date)]
                         subset.to_csv(out_path, index=False, quoting=QUOTE_NONNUMERIC)
+                        PERSISTENCE_STORE.add_to_persistence(
+                            date_value=dt_val, metric_name=self.aggregation_metric_name
+                        )

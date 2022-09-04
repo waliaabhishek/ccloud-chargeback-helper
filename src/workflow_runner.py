@@ -1,21 +1,14 @@
+import threading
 from argparse import Namespace
-from enum import Enum, auto
 from logging import debug
-import os
-from pprint import pprint
-from typing import Dict, List
+from typing import Dict
+
 import yaml
-from ccloud.core import CCloudHTTPRequest, initialize_ccloud_entities
-from data_processing.metrics_processing import metrics_dataframe
+
 import helpers
-from helpers import ensure_path, logged_method, timed_method
-
-
-class DirType(Enum):
-    MetricsData = auto()
-    BillingsData = auto()
-    OutputData = auto()
-    PersistenceStats = auto()
+from ccloud.core import initialize_ccloud_entities
+from helpers import logged_method, timed_method
+from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType, sync_to_file
 
 
 @logged_method
@@ -35,26 +28,13 @@ def locate_existing_metrics_data(metrics_location: str):
     pass
 
 
-def locate_storage_path(
-    basepath: str = os.getcwd(), base_dir: str = "output", dir_type: List[DirType] = DirType.MetricsData
-) -> Dict[DirType, str]:
-    ret = {}
-    for item in dir_type:
-        temp = os.path.join(basepath, base_dir, item.name, "")
-        print(temp)
-        ensure_path(path=temp)
-        ret[item] = temp
-    return ret
-
-
 @timed_method
 @logged_method
 def run_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
-    storage_path = locate_storage_path(
-        dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats]
-    )
-    existing_metrics_data = locate_existing_metrics_data(storage_path[DirType.MetricsData])
+    existing_metrics_data = locate_existing_metrics_data(STORAGE_PATH[DirType.MetricsData])
+    thread = threading.Thread(target=sync_to_file, args=(PERSISTENCE_STORE, 5))
+    thread.start()
 
     ccloud_orgs = initialize_ccloud_entities(
         connections=core_config["config"]["connection"],
@@ -62,7 +42,9 @@ def run_workflow(arg_flags: Namespace):
     )
     for org_key, org in ccloud_orgs.items():
         org.execute_all_requests(
-            output_basepath=storage_path[DirType.MetricsData],
+            output_basepath=STORAGE_PATH[DirType.MetricsData],
             days_in_memory=core_config["config"]["system"]["days_in_memory"],
         )
-        org.export_metrics_to_csv(output_basepath=storage_path[DirType.MetricsData])
+        org.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
+    PERSISTENCE_STORE.stop_sync()
+    thread.join()
