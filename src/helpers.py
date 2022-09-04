@@ -1,9 +1,8 @@
-from logging import DEBUG, INFO, log
 import os
 import pprint
-from os import environ
-from functools import wraps
 import timeit
+from functools import wraps
+from os import environ
 
 ENV_PREFIX = "env::"
 pretty = pprint.PrettyPrinter(indent=2)
