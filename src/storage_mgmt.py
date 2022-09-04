@@ -77,11 +77,15 @@ class persistence_mgmt:
             if metric_name not in self.__status[date_value]:
                 self.__status[date_value].append(metric_name)
                 self.sync_needed = True
-                # self.__change_count += 1
         else:
             self.__status[date_value] = [str(metric_name)]
             self.sync_needed = True
-            # self.__change_count += 1
+
+    def is_dataset_present(self, date_value: str, metric_name: str) -> bool:
+        if date_value in self.__status.keys():
+            if metric_name in self.__status[date_value]:
+                return True
+        return False
 
 
 def sync_to_file(persistence_object: persistence_mgmt, flush_to_file: int = 5):

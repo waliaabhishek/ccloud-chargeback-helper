@@ -9,6 +9,7 @@ from helpers import sanitize_id, sanitize_metric_name
 from requests.auth import HTTPBasicAuth
 
 from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
+from storage_mgmt import PERSISTENCE_STORE
 
 
 @dataclass(kw_only=True)
@@ -116,14 +117,14 @@ class CCloudHTTPRequest:
 @dataclass(kw_only=True)
 class CCloudOrg:
     org_id: str
-    metrics_intervals: List[Tuple] = field(init=False, default_factory=list)
+    # metrics_intervals: List[Tuple] = field(init=False, default_factory=list)
     HTTPConnection: CCloudConnection
     HTTPRequests: Dict[str, CCloudHTTPRequest]
 
     def execute_all_requests(self, output_basepath: str, days_in_memory: int = 7):
         for req_name, request in self.HTTPRequests.items():
             for req_interval in self.generate_iso8601_dt_intervals(
-                granularity=CCMEReq_Granularity.P1D.name, intervals=7
+                granularity=CCMEReq_Granularity.P1D.name, metric_name=request.aggregation_metric, intervals=7
             ):
                 request.execute_request(http_connection=self.HTTPConnection, date_range=req_interval)
                 request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
@@ -133,13 +134,14 @@ class CCloudOrg:
             for metrics_date, metrics_dataframe in request.metrics_dataframes.items():
                 metrics_dataframe.output_to_csv(basepath=output_basepath)
 
-    def generate_iso8601_dt_intervals(self, granularity: str, intervals: int = 7):
+    def generate_iso8601_dt_intervals(self, granularity: str, metric_name: str, intervals: int = 7):
         curr_date = datetime.datetime.now(tz=datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         for _ in range(intervals):
             curr_date = curr_date - datetime.timedelta(days=1)
             curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
-            self.metrics_intervals.append(curr)
-            yield curr
+            # self.metrics_intervals.append(curr)
+            if not PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
+                yield curr
 
 
 def initialize_ccloud_entities(connections: List, days_in_memory: int = 7) -> Dict[str, CCloudOrg]:
