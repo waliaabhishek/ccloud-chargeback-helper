@@ -2,7 +2,7 @@ import os
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from json import dumps
+from json import dumps, load
 from time import sleep
 from typing import Dict, List
 
@@ -42,8 +42,8 @@ class persistence_mgmt:
     __status: Dict[str, List[str]] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
-        temp_path = os.path.join(STORAGE_PATH[DirType.PersistenceStats], f"{DirType.PersistenceStats.name}.json")
-        self.__out_path = temp_path
+        self.__out_path = os.path.join(STORAGE_PATH[DirType.PersistenceStats], f"{DirType.PersistenceStats.name}.json")
+        self.rehydrate_persistence_status()
         self.sync_runner_status = threading.Event()
         self.start_sync()
 
@@ -57,6 +57,19 @@ class persistence_mgmt:
     def write_file(self):
         with open(self.__out_path, "w") as f:
             f.write(dumps(self.__status, indent=1))
+
+    def find_datasets_to_evict(self) -> List[str]:
+        temp = list(self.__status.keys())
+        temp.sort(reverse=True)
+        return temp[6:]
+
+    def rehydrate_persistence_status(self):
+        if os.path.exists(self.__out_path):
+            with open(self.__out_path, "r") as f:
+                self.__status = load(f)
+        for item in self.find_datasets_to_evict():
+            self.__status.pop(item)
+        print(self.__status)
 
     def add_to_persistence(self, date_value: str, metric_name: str):
         date_value = str(date_value)
