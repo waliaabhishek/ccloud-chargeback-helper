@@ -61,7 +61,7 @@ class persistence_mgmt:
     def find_datasets_to_evict(self) -> List[str]:
         temp = list(self.__status.keys())
         temp.sort(reverse=True)
-        return temp[6:]
+        return temp[7:]
 
     def rehydrate_persistence_status(self):
         if os.path.exists(self.__out_path):
