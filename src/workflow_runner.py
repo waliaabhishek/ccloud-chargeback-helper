@@ -6,7 +6,7 @@ from typing import Dict
 import yaml
 
 import helpers
-from ccloud.core import initialize_ccloud_entities
+from ccloud.metrics import initialize_ccloud_entities
 from helpers import logged_method, timed_method
 from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType, sync_to_file
 
@@ -32,7 +32,7 @@ def locate_existing_metrics_data(metrics_location: str):
 @logged_method
 def run_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
-    existing_metrics_data = locate_existing_metrics_data(STORAGE_PATH[DirType.MetricsData])
+    # existing_metrics_data = locate_existing_metrics_data(STORAGE_PATH[DirType.MetricsData])
     thread = threading.Thread(target=sync_to_file, args=(PERSISTENCE_STORE, 5))
     thread.start()
 
@@ -46,5 +46,6 @@ def run_workflow(arg_flags: Namespace):
             days_in_memory=core_config["config"]["system"]["days_in_memory"],
         )
         org.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
+
     PERSISTENCE_STORE.stop_sync()
     thread.join()
