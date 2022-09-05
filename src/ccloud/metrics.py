@@ -142,6 +142,8 @@ class CCloudOrg:
             # self.metrics_intervals.append(curr)
             if not PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
                 yield curr
+            else:
+                print(f"Dataset already available for metric {metric_name} on {curr[1]}")
 
 
 def initialize_ccloud_entities(connections: List, days_in_memory: int = 7) -> Dict[str, CCloudOrg]:
