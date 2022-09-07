@@ -4,24 +4,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 import requests
+from ccloud.connections import CCloudConnection
 from data_processing.metrics_processing import metrics_dataframe
 from helpers import sanitize_id, sanitize_metric_name
 from requests.auth import HTTPBasicAuth
 
 from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
 from storage_mgmt import PERSISTENCE_STORE
-
-
-@dataclass(kw_only=True)
-class CCloudConnection:
-    api_key: str
-    api_secret: str
-    CCloudHTTPConnection: HTTPBasicAuth = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.CCloudHTTPConnection = HTTPBasicAuth(username=self.api_key, password=self.api_secret)
-        self.api_key = None
-        self.api_secret = None
 
 
 @dataclass(kw_only=True)
@@ -112,52 +101,3 @@ class CCloudHTTPRequest:
             aggregation_metric_name=self.aggregation_metric, _metrics_output=self.http_response
         )
         self.http_response["data"] = []
-
-
-@dataclass(kw_only=True)
-class CCloudOrg:
-    org_id: str
-    # metrics_intervals: List[Tuple] = field(init=False, default_factory=list)
-    HTTPConnection: CCloudConnection
-    HTTPRequests: Dict[str, CCloudHTTPRequest]
-
-    def execute_all_requests(self, output_basepath: str, days_in_memory: int = 7):
-        for req_name, request in self.HTTPRequests.items():
-            for req_interval in self.generate_iso8601_dt_intervals(
-                granularity=CCMEReq_Granularity.P1D.name, metric_name=request.aggregation_metric, intervals=7
-            ):
-                request.execute_request(http_connection=self.HTTPConnection, date_range=req_interval)
-                request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
-
-    def export_metrics_to_csv(self, output_basepath: str):
-        for req_name, request in self.HTTPRequests.items():
-            for metrics_date, metrics_dataframe in request.metrics_dataframes.items():
-                metrics_dataframe.output_to_csv(basepath=output_basepath)
-
-    def generate_iso8601_dt_intervals(self, granularity: str, metric_name: str, intervals: int = 7):
-        curr_date = datetime.datetime.now(tz=datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        for _ in range(intervals):
-            curr_date = curr_date - datetime.timedelta(days=1)
-            curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
-            # self.metrics_intervals.append(curr)
-            if not PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
-                yield curr
-            else:
-                print(f"Dataset already available for metric {metric_name} on {curr[1]}")
-
-
-def initialize_ccloud_entities(connections: List, days_in_memory: int = 7) -> Dict[str, CCloudOrg]:
-    orgs = {}
-    req_count = 0
-    for conn in connections:
-        org_id = sanitize_id(conn["id"]) if sanitize_id(conn["id"]) else req_count
-        api_key = conn["ccloud_details"]["api_key"]
-        api_secret = conn["ccloud_details"]["api_secret"]
-        http_connection = CCloudConnection(api_key=api_key, api_secret=api_secret)
-        http_requests = {}
-        for req in conn["requests"]:
-            req_count += 1
-            http_req = CCloudHTTPRequest(_base_payload=req, days_in_memory=days_in_memory)
-            http_requests[http_req.req_id if http_req.req_id else req_count] = http_req
-        orgs[org_id] = CCloudOrg(HTTPConnection=http_connection, HTTPRequests=http_requests, org_id=org_id)
-    return orgs

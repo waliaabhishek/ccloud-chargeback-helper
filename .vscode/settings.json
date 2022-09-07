@@ -4,6 +4,8 @@
     "CCME",
     "dataframe",
     "dataframes",
+    "Ksqldb",
+    "ksqldbcm",
     "metricsapi",
     "mgmt"
   ]
