@@ -1,4 +1,4 @@
-from workflow_runner import run_workflow
+from workflow_runner import execute_workflow
 import argparse
 
 parser = argparse.ArgumentParser(
@@ -13,13 +13,7 @@ wf_args.add_argument(
     default="./config/config.yaml",
     help="Provide the Service Account Display Name with which the account will be created.",
 )
-wf_args.add_argument(
-    "--ccloud-url",
-    type=str,
-    default="https://api.telemetry.confluent.cloud/v2/metrics/cloud/query",
-    help="CCloud URL that will be called for collecting the metrics",
-)
 
 arg_flags = parser.parse_args()
 
-run_workflow(arg_flags)
+execute_workflow(arg_flags)

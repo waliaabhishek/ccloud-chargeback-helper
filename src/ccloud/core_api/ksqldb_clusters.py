@@ -34,7 +34,8 @@ class CCloudKsqldbCluster:
 @dataclass
 class CCloudKsqldbClusterList(CCloudBase):
     ccloud_envs: CCloudEnvironmentList
-    ksqldb_clusters: Dict[str, CCloudKsqldbCluster] = field(default_factory=dict)
+
+    ksqldb_clusters: Dict[str, CCloudKsqldbCluster] = field(default_factory=dict, init=False)
 
     # This init function will initiate the base object and then check CCloud
     # for all the active API Keys. All API Keys that are listed in CCloud are

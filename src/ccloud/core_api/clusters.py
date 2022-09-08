@@ -22,7 +22,8 @@ class CCloudCluster:
 @dataclass
 class CCloudClusterList(CCloudBase):
     ccloud_env: CCloudEnvironmentList
-    cluster: Dict[str, CCloudCluster] = field(default_factory=dict)
+
+    cluster: Dict[str, CCloudCluster] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()

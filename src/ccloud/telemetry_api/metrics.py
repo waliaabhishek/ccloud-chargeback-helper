@@ -16,10 +16,11 @@ from storage_mgmt import PERSISTENCE_STORE
 @dataclass(kw_only=True)
 class CCloudHTTPRequest:
     _base_payload: Dict
-    req_id: str = field(init=False)
-    ccloud_url: str = field(default="https://api.telemetry.confluent.cloud/v2/metrics/cloud/query")
-    aggregation_metric: str = field(init=False)
+    ccloud_url: str = field(default=None)
     days_in_memory: int = field(default=7)
+
+    req_id: str = field(init=False)
+    aggregation_metric: str = field(init=False)
     massaged_request: Dict = field(init=False)
     http_response: Dict[str, Dict] = field(default_factory=dict, init=False)
     metrics_dataframes: Dict[str, metrics_dataframe] = field(init=False, default_factory=dict)
@@ -62,9 +63,6 @@ class CCloudHTTPRequest:
         elif filter["op"] in [member.name for member in CCMEReq_UnaryOp]:
             # TODO:: not sure how to implement this yet either.
             pass
-
-    # def inject_interval_into_request(self, date_range: Tuple):
-    #     self.massaged_request["intervals"] = [date_range[0]]
 
     def execute_request(self, http_connection: CCloudConnection, date_range: Tuple, params={}):
         self.massaged_request["intervals"] = [date_range[2]]

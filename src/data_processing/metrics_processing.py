@@ -20,6 +20,7 @@ class DatasetNames(Enum):
 class metrics_dataframe:
     aggregation_metric_name: str = field(repr=False, init=True)
     _metrics_output: Dict = field(repr=False, init=True)
+
     parsed_datasets: Dict[str, Dict[str, Any]] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:

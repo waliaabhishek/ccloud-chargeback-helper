@@ -23,12 +23,13 @@ class CCloudConnector:
 
 
 @dataclass
-class CCloudConnectorsList(CCloudBase):
+class CCloudConnectorList(CCloudBase):
     ccloud_kafka_clusters: CCloudClusterList
     ccloud_service_accounts: CCloudServiceAccountList
     ccloud_users: CCloudUserAccountList
     ccloud_api_keys: CCloudAPIKeyList
-    connectors: Dict[str, CCloudConnector] = field(default_factory=dict)
+
+    connectors: Dict[str, CCloudConnector] = field(default_factory=dict, init=False)
     url_get_connector_config: str = field(init=False)
 
     def __post_init__(self) -> None:

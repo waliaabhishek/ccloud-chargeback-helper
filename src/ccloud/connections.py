@@ -34,8 +34,9 @@ class URIDetails:
 class CCloudConnection:
     api_key: str
     api_secret: str
-    uri: URIDetails = field(default_factory=URIDetails, init=False)
     base_url: EndpointURL = field(default=EndpointURL.API_URL)
+
+    uri: URIDetails = field(default_factory=URIDetails, init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 
     def __post_init__(self) -> None:
@@ -50,6 +51,7 @@ class CCloudConnection:
 @dataclass
 class CCloudBase:
     _ccloud_connection: CCloudConnection
+
     url: str = field(init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 

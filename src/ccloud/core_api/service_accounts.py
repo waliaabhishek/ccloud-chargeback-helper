@@ -19,7 +19,7 @@ class CCloudServiceAccount:
 
 @dataclass(kw_only=True)
 class CCloudServiceAccountList(CCloudBase):
-    sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict)
+    sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()

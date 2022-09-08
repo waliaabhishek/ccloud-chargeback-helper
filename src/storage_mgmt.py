@@ -34,8 +34,9 @@ STORAGE_PATH = locate_storage_path(
 
 
 @dataclass(kw_only=True)
-class persistence_mgmt:
+class PersistenceStore:
     flush_to_disk_interval_sec: int = field(default=3)
+
     sync_needed: bool = field(default=False, init=False)
     sync_runner_status: threading.Event = field(init=False)
     __out_path: str = field(init=False)
@@ -88,11 +89,11 @@ class persistence_mgmt:
         return False
 
 
-def sync_to_file(persistence_object: persistence_mgmt, flush_to_file: int = 5):
+def sync_to_file(persistence_object: PersistenceStore, flush_to_file: int = 5):
     while persistence_object.sync_runner_status.is_set():
         if persistence_object.sync_needed:
             persistence_object.write_file()
         sleep(flush_to_file)
 
 
-PERSISTENCE_STORE = persistence_mgmt()
+PERSISTENCE_STORE = PersistenceStore()

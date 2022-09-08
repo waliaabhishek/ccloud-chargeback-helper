@@ -16,7 +16,7 @@ class CCloudEnvironment:
 
 @dataclass(kw_only=True)
 class CCloudEnvironmentList(CCloudBase):
-    env: Dict[str, CCloudEnvironment] = field(default_factory=dict)
+    env: Dict[str, CCloudEnvironment] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -25,8 +25,8 @@ class CCloudAPIKey:
 
 @dataclass
 class CCloudAPIKeyList(CCloudBase):
-    ccloud_sa: service_account.CCloudServiceAccountList
-    api_keys: Dict[str, CCloudAPIKey] = field(default_factory=dict)
+    # ccloud_sa: service_account.CCloudServiceAccountList
+    api_keys: Dict[str, CCloudAPIKey] = field(default_factory=dict, init=False)
 
     # This init function will initiate the base object and then check CCloud
     # for all the active API Keys. All API Keys that are listed in CCloud are
@@ -80,33 +80,33 @@ class CCloudAPIKeyList(CCloudBase):
                 output.append(item)
         return output
 
-    def print_api_keys(self, ccloud_sa: service_account.CCloudServiceAccountList, api_keys: List[CCloudAPIKey] = None):
-        print(
-            "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
-                "API Key",
-                "API Key Cluster ID",
-                "Created",
-                "API Key Owner ID",
-                "API Key Owner Name",
-                "API Key Description",
-            )
-        )
-        if api_keys:
-            iter_data = api_keys
-        else:
-            iter_data = [v for v in self.api_keys.values()]
-        for item in iter_data:
-            sa_details = ccloud_sa.sa[item.owner_id]
-            print(
-                "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
-                    item.api_key,
-                    item.cluster_id,
-                    item.created_at,
-                    item.owner_id,
-                    sa_details.name,
-                    item.api_key_description,
-                )
-            )
+    # def print_api_keys(self, ccloud_sa: service_account.CCloudServiceAccountList, api_keys: List[CCloudAPIKey] = None):
+    #     print(
+    #         "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
+    #             "API Key",
+    #             "API Key Cluster ID",
+    #             "Created",
+    #             "API Key Owner ID",
+    #             "API Key Owner Name",
+    #             "API Key Description",
+    #         )
+    #     )
+    #     if api_keys:
+    #         iter_data = api_keys
+    #     else:
+    #         iter_data = [v for v in self.api_keys.values()]
+    #     for item in iter_data:
+    #         sa_details = ccloud_sa.sa[item.owner_id]
+    #         print(
+    #             "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
+    #                 item.api_key,
+    #                 item.cluster_id,
+    #                 item.created_at,
+    #                 item.owner_id,
+    #                 sa_details.name,
+    #                 item.api_key_description,
+    #             )
+    #         )
 
     # def delete_keys_from_cache(self, sa_name) -> int:
     #     count = 0

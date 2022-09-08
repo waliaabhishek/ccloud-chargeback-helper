@@ -18,7 +18,7 @@ class CCloudUserAccount:
 
 @dataclass(kw_only=True)
 class CCloudUserAccountList(CCloudBase):
-    users: Dict[str, CCloudUserAccount] = field(default_factory=dict)
+    users: Dict[str, CCloudUserAccount] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()

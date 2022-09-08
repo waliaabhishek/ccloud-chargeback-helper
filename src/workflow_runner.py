@@ -6,7 +6,8 @@ from typing import Dict
 import yaml
 
 import helpers
-from ccloud.metrics import initialize_ccloud_entities
+from ccloud.main import initialize_ccloud_objects
+from ccloud.org import CCloudOrgList
 from helpers import logged_method, timed_method
 from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType, sync_to_file
 
@@ -23,28 +24,20 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
 
 @timed_method
 @logged_method
-def locate_existing_metrics_data(metrics_location: str):
-    debug("Trying to locate Metrics files: " + metrics_location)
-    pass
-
-
-@timed_method
-@logged_method
-def run_workflow(arg_flags: Namespace):
+def execute_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
-    # existing_metrics_data = locate_existing_metrics_data(STORAGE_PATH[DirType.MetricsData])
+    days_in_memory = core_config["config"]["system"]["days_in_memory"]
     thread = threading.Thread(target=sync_to_file, args=(PERSISTENCE_STORE, 5))
     thread.start()
 
-    ccloud_orgs = initialize_ccloud_entities(
-        connections=core_config["config"]["connection"],
-        days_in_memory=core_config["config"]["system"]["days_in_memory"],
+    ccloud_orgs = CCloudOrgList(
+        _orgs=core_config["config"]["org_details"],
+        _days_in_memory=days_in_memory,
     )
+
+    ccloud_orgs.execute_requests()
+
     for org_key, org in ccloud_orgs.items():
-        org.execute_all_requests(
-            output_basepath=STORAGE_PATH[DirType.MetricsData],
-            days_in_memory=core_config["config"]["system"]["days_in_memory"],
-        )
         org.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
 
     PERSISTENCE_STORE.stop_sync()
