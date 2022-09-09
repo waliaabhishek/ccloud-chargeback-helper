@@ -10,11 +10,11 @@ from helpers import sanitize_id, sanitize_metric_name
 from requests.auth import HTTPBasicAuth
 
 from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
-from storage_mgmt import PERSISTENCE_STORE
+from storage_mgmt import METRICS_PERSISTENCE_STORE
 
 
 @dataclass(kw_only=True)
-class CCloudHTTPRequest:
+class CCloudTelemetryDataset:
     _base_payload: Dict
     ccloud_url: str = field(default=None)
     days_in_memory: int = field(default=7)
@@ -34,7 +34,7 @@ class CCloudHTTPRequest:
     def create_ccloud_request(self) -> Dict:
         req = deepcopy(self._base_payload)
         self.req_id = sanitize_id(str(req.pop("id")))
-        req["filter"] = self.generate_filter_struct(req["filter"])
+        req["filter"] = self.generate_filter_struct(filter=req["filter"])
         self.massaged_request = req
 
     def generate_filter_struct(self, filter: Dict) -> Dict:
@@ -46,7 +46,7 @@ class CCloudHTTPRequest:
                 # TODO: Add logic to get cluster list and create a compound filter.
                 # currently using a list
                 temp_cluster_list = ["lkc-pg5gx2", "lkc-pg5gx2"]
-                temp_req = [{"field:": filter["field"], "op": filter["op"], "value": temp_cluster_list}]
+                temp_req = {"field:": filter["field"], "op": filter["op"], "value": temp_cluster_list}
                 self.generate_filter_struct(temp_req)
             elif len(cluster_list) > 1:
                 filter_list_1 = [
@@ -68,7 +68,7 @@ class CCloudHTTPRequest:
         self.massaged_request["intervals"] = [date_range[2]]
         resp = requests.post(
             url=self.ccloud_url,
-            auth=http_connection.CCloudHTTPConnection,
+            auth=http_connection.http_connection,
             json=self.massaged_request,
             params=params,
         )

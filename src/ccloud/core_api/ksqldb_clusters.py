@@ -56,18 +56,20 @@ class CCloudKsqldbClusterList(CCloudBase):
             resp = requests.get(url=self.url, auth=self.http_connection, params=params)
             if resp.status_code == 200:
                 out_json = resp.json()
-                for item in out_json["data"]:
-                    print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
-                    self.__add_to_cache(
-                        CCloudKsqldbCluster(
-                            cluster_id=item["id"],
-                            cluster_name=item["spec"]["display_name"],
-                            csu_count=item["spec"]["csu"],
-                            env_id=item["spec"]["environment"]["id"],
-                            kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
-                            owner_id=item["spec"]["credential_identity"]["id"],
+                if out_json["data"]:
+                    for item in out_json["data"]:
+                        print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
+                        self.__add_to_cache(
+                            CCloudKsqldbCluster(
+                                cluster_id=item["id"],
+                                cluster_name=item["spec"]["display_name"],
+                                csu_count=item["spec"]["csu"],
+                                env_id=item["spec"]["environment"]["id"],
+                                kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
+                                owner_id=item["spec"]["credential_identity"]["id"],
+                                created_at=item["metadata"]["created_at"],
+                            )
                         )
-                    )
                 if "next" in out_json["metadata"]:
                     query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                     params["page_token"] = str(query_params["page_token"][0])

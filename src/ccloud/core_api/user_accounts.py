@@ -13,7 +13,6 @@ class CCloudUserAccount:
     name: str
     created_at: str
     updated_at: str
-    is_ignored: bool
 
 
 @dataclass(kw_only=True)
@@ -43,7 +42,7 @@ class CCloudUserAccountList(CCloudBase):
                         updated_at=item["metadata"]["updated_at"],
                     )
                 )
-                print(f"Found User: {item['id']}; Name {item['display_name']}")
+                print(f"Found User: {item['id']}; Name {item['full_name']}")
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])

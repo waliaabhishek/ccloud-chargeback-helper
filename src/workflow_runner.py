@@ -6,10 +6,9 @@ from typing import Dict
 import yaml
 
 import helpers
-from ccloud.main import initialize_ccloud_objects
 from ccloud.org import CCloudOrgList
 from helpers import logged_method, timed_method
-from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType, sync_to_file
+from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType, sync_to_file
 
 
 @logged_method
@@ -27,7 +26,7 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
 def execute_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
     days_in_memory = core_config["config"]["system"]["days_in_memory"]
-    thread = threading.Thread(target=sync_to_file, args=(PERSISTENCE_STORE, 5))
+    thread = threading.Thread(target=sync_to_file, args=(METRICS_PERSISTENCE_STORE, 3))
     thread.start()
 
     ccloud_orgs = CCloudOrgList(
@@ -37,8 +36,9 @@ def execute_workflow(arg_flags: Namespace):
 
     ccloud_orgs.execute_requests()
 
-    for org_key, org in ccloud_orgs.items():
-        org.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
+    # for org_key, org in ccloud_orgs.items():
+    #     org.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
 
-    PERSISTENCE_STORE.stop_sync()
+    METRICS_PERSISTENCE_STORE.stop_sync()
+    print("Waiting for State Sync ticker for Final sync before exit")
     thread.join()

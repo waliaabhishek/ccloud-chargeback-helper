@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import datetime
+from time import sleep
 from typing import Dict, List
 
 from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
@@ -10,18 +11,33 @@ from ccloud.core_api.environments import CCloudEnvironmentList
 from ccloud.core_api.ksqldb_clusters import CCloudKsqldbClusterList
 from ccloud.core_api.service_accounts import CCloudServiceAccountList
 from ccloud.core_api.user_accounts import CCloudUserAccountList
-from ccloud.telemetry_api.metrics import CCloudHTTPRequest
+from ccloud.telemetry_api.billings_csv import CCloudBillingDataset
+from ccloud.telemetry_api.telemetry import CCloudTelemetryDataset
 from ccloud.model import CCMEReq_Granularity
 from helpers import sanitize_id
-from storage_mgmt import PERSISTENCE_STORE, STORAGE_PATH, DirType
+from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
+
+
+@dataclass
+class CCloudBillingHandler:
+    billing_data: CCloudBillingDataset = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.billing_data = CCloudBillingDataset()
+
+    def read_all(self):
+        self.billing_data.read_all()
+
+    def execute_requests(self):
+        self.billing_data.read_all()
 
 
 @dataclass
 class CCloudTelemetryHandler(CCloudBase):
-    _requests = List
+    _requests: List
     days_in_memory: int = field(default=7)
 
-    telemetry_requests: Dict[str, CCloudHTTPRequest] = field(init=False, default_factory=dict)
+    telemetry_requests: Dict[str, CCloudTelemetryDataset] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -33,17 +49,17 @@ class CCloudTelemetryHandler(CCloudBase):
 
     def read_all(self):
         for req in self._requests:
-            http_req = CCloudHTTPRequest(
+            http_req = CCloudTelemetryDataset(
                 _base_payload=req,
                 ccloud_url=self.url,
                 days_in_memory=self.days_in_memory,
             )
             self.__add_to_cache(http_req=http_req)
 
-    def __add_to_cache(self, http_req: CCloudHTTPRequest) -> None:
+    def __add_to_cache(self, http_req: CCloudTelemetryDataset) -> None:
         if http_req.req_id == "":
             http_req.req_id = str(len(self.telemetry_requests))
-        self.telemetry_requests[http_req.org_id] = http_req
+        self.telemetry_requests[http_req.req_id] = http_req
 
     def execute_requests(self, output_basepath: str):
         for req_name, request in self.telemetry_requests.items():
@@ -63,8 +79,7 @@ class CCloudTelemetryHandler(CCloudBase):
         for _ in range(intervals):
             curr_date = curr_date - datetime.timedelta(days=1)
             curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
-            # self.metrics_intervals.append(curr)
-            if not PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
+            if not METRICS_PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
                 yield curr
             else:
                 print(f"Dataset already available for metric {metric_name} on {curr[1]}")
@@ -74,6 +89,8 @@ class CCloudTelemetryHandler(CCloudBase):
 class CCloudMetricsHandler:
     _ccloud_connection: CCloudConnection
 
+    last_refresh: datetime = field(init=False, default=None)
+    min_refresh_gap: datetime.timedelta = field(init=False, default=datetime.timedelta(minutes=60))
     cc_sa: CCloudServiceAccountList = field(init=False)
     cc_users: CCloudUserAccountList = field(init=False)
     cc_api_keys: CCloudAPIKeyList = field(init=False)
@@ -83,30 +100,35 @@ class CCloudMetricsHandler:
     cc_ksqldb_clusters: CCloudKsqldbClusterList = field(init=False)
 
     def __post_init__(self) -> None:
+        self.last_refresh = datetime.datetime.now() - self.min_refresh_gap
         self.read_all()
 
     def read_all(self):
-        self.cc_sa = CCloudServiceAccountList(_ccloud_connection=self._ccloud_connection)
-        self.cc_users = CCloudUserAccountList(_ccloud_connection=self._ccloud_connection)
-        self.cc_api_keys = CCloudAPIKeyList(_ccloud_connection=self._ccloud_connection)
-        self.cc_environments = CCloudEnvironmentList(_ccloud_connection=self._ccloud_connection)
-        self.cc_clusters = CCloudClusterList(
-            _ccloud_connection=self._ccloud_connection, ccloud_env=self.cc_environments
-        )
-        self.cc_connectors = CCloudConnectorList(
-            _ccloud_connection=self._ccloud_connection,
-            ccloud_kafka_clusters=self.cc_clusters,
-            ccloud_service_accounts=self.cc_sa,
-            ccloud_users=self.cc_users,
-            ccloud_api_keys=self.cc_api_keys,
-        )
-        self.cc_ksqldb_clusters = CCloudKsqldbClusterList(
-            _ccloud_connection=self._ccloud_connection,
-            ccloud_envs=self.cc_environments,
-        )
+        if self.min_refresh_gap > datetime.datetime.now() - self.last_refresh:
+            print("Not refreshing the CCloud Object state as TimeDelta is not enough.")
+        else:
+            self.cc_sa = CCloudServiceAccountList(_ccloud_connection=self._ccloud_connection)
+            self.cc_users = CCloudUserAccountList(_ccloud_connection=self._ccloud_connection)
+            self.cc_api_keys = CCloudAPIKeyList(_ccloud_connection=self._ccloud_connection)
+            self.cc_environments = CCloudEnvironmentList(_ccloud_connection=self._ccloud_connection)
+            self.cc_clusters = CCloudClusterList(
+                _ccloud_connection=self._ccloud_connection, ccloud_env=self.cc_environments
+            )
+            self.cc_connectors = CCloudConnectorList(
+                _ccloud_connection=self._ccloud_connection,
+                ccloud_kafka_clusters=self.cc_clusters,
+                ccloud_service_accounts=self.cc_sa,
+                ccloud_users=self.cc_users,
+                ccloud_api_keys=self.cc_api_keys,
+            )
+            self.cc_ksqldb_clusters = CCloudKsqldbClusterList(
+                _ccloud_connection=self._ccloud_connection,
+                ccloud_envs=self.cc_environments,
+            )
+            self.last_refresh = datetime.datetime.now()
 
     def execute_requests(self):
-        print(f"Refreshing CCloud Object Store State for corelation")
+        print(f"Trying to refresh CCloud Object Store State for corelation")
         self.read_all()
 
 
@@ -118,12 +140,13 @@ class CCloudOrg:
 
     telemetry_data: CCloudTelemetryHandler = field(init=False)
     metrics_data: CCloudMetricsHandler = field(init=False)
+    billing_data: CCloudBillingHandler = field(init=False)
 
     def __post_init__(self) -> None:
         self.org_id = sanitize_id(self._org_details["id"])
         temp_conn = CCloudConnection(
             api_key=self._org_details["ccloud_details"]["telemetry"]["api_key"],
-            api_secret=self._org_details["ccloud_details"]["telemetry"]["api_key"],
+            api_secret=self._org_details["ccloud_details"]["telemetry"]["api_secret"],
             base_url=EndpointURL.TELEMETRY_URL,
         )
         self.telemetry_data = CCloudTelemetryHandler(
@@ -134,9 +157,11 @@ class CCloudOrg:
 
         temp_conn = CCloudConnection(
             api_key=self._org_details["ccloud_details"]["metrics"]["api_key"],
-            api_secret=self._org_details["ccloud_details"]["metrics"]["api_key"],
+            api_secret=self._org_details["ccloud_details"]["metrics"]["api_secret"],
         )
         self.metrics_data = CCloudMetricsHandler(_ccloud_connection=temp_conn)
+
+        self.billing_data = CCloudBillingHandler()
         self._requests = None
 
     def execute_requests(self):
@@ -144,6 +169,8 @@ class CCloudOrg:
         self.telemetry_data.execute_requests(output_basepath=STORAGE_PATH[DirType.MetricsData])
         print(f"Gathering CCloud Existing Objects Data")
         self.metrics_data.execute_requests()
+        print(f"Checking for new Billing CSV Files")
+        self.billing_data.execute_requests()
 
 
 @dataclass(kw_only=True)

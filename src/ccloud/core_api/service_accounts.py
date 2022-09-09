@@ -14,7 +14,6 @@ class CCloudServiceAccount:
     description: str
     created_at: str
     updated_at: str
-    is_ignored: bool
 
 
 @dataclass(kw_only=True)

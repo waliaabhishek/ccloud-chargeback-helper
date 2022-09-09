@@ -36,16 +36,19 @@ class CCloudConnection:
     api_secret: str
     base_url: EndpointURL = field(default=EndpointURL.API_URL)
 
-    uri: URIDetails = field(default_factory=URIDetails, init=False)
+    uri: URIDetails = field(default=URIDetails(), init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 
     def __post_init__(self) -> None:
-        self.http_connection = HTTPBasicAuth(username=self.api_key, password=self.api_secret)
-        self.api_key = None
-        self.api_secret = None
+        object.__setattr__(self, "http_connection", HTTPBasicAuth(self.api_key, self.api_secret))
+        object.__setattr__(self, "api_key", None)
+        object.__setattr__(self, "api_secret", None)
 
     def get_endpoint_url(self, key="/") -> str:
-        return self.uri[self.base_url.name] + key
+        if self.base_url is EndpointURL.API_URL:
+            return self.uri.API_URL + key
+        else:
+            return self.uri.TELEMETRY_URL + key
 
 
 @dataclass
