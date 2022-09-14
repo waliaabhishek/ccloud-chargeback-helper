@@ -69,6 +69,7 @@ class metrics_dataframe:
             print("Successfully re-shaped time-series metrics")
         else:
             print("Did not detect the right aggregation metric. Ignoring.")
+        self.print_sample_df()
 
     def is_shapeable(self) -> bool:
         if self.aggregation_metric_name in [
@@ -84,6 +85,7 @@ class metrics_dataframe:
             if ds.data is not None:
                 print(f"Sample Dataset for {name}, is_shaped: {ds.is_shaped}:")
                 print(ds.data.head(3))
+                print(ds.data.info())
 
     def get_date_ranges(self, ts_range, dt_range) -> Tuple[str, pd.Timestamp, pd.Timestamp]:
         for inner_ts_boundary, date_only_str in zip(ts_range, dt_range):
