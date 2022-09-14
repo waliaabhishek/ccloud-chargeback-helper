@@ -5,7 +5,7 @@ from enum import Enum, auto
 from json import dumps, load
 from time import sleep
 from typing import Dict, List
-
+import psutil
 from helpers import ensure_path
 
 
@@ -98,6 +98,12 @@ def sync_to_file(persistence_object: PersistenceStore, flush_to_file: int = 5):
     while persistence_object.sync_runner_status.is_set():
         if persistence_object.sync_needed:
             persistence_object.write_file()
+        sleep(flush_to_file)
+
+
+def current_memory_usage(persistence_object: PersistenceStore, flush_to_file: int = 5):
+    while persistence_object.sync_runner_status.is_set():
+        print(f"Current Memory Utilization: {psutil.Process().memory_info().rss / (1024 * 1024)}")
         sleep(flush_to_file)
 
 
