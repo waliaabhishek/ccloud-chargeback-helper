@@ -4,9 +4,11 @@
     "CCME",
     "dataframe",
     "dataframes",
+    "itertuples",
     "Ksqldb",
     "ksqldbcm",
     "metricsapi",
-    "mgmt"
+    "mgmt",
+    "psutil"
   ]
 }
