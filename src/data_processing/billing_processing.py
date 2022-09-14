@@ -1,3 +1,4 @@
+import datetime
 import os
 from csv import QUOTE_NONNUMERIC
 from dataclasses import dataclass, field
@@ -60,7 +61,7 @@ class BillingDict:
         )
 
     def generate_date_ranges(self, freq: str = "1H"):
-        range_per_row_count, frequency = [], [freq for x in range(self.data.size)]
+        range_per_row_count, frequency = [], [freq for x in range(len(self.data.index))]
         for item in self.data.itertuples(index=False, name="BillingCSVRow"):
             temp = self.__generate_date_range_per_row(item=item)
             range_per_row_count.append(temp.size)
@@ -69,8 +70,12 @@ class BillingDict:
         self.data[BILLING_CSV_COLUMNS.c_interval_count] = range_per_row_count
         self.data[BILLING_CSV_COLUMNS.c_interval_freq] = frequency
 
-    def __generate_date_range_per_row(self, item: NamedTuple, freq: str = "1H"):
-        start_date, end_date = item.StartDate, item.EndDate - timedelta(minutes=10)
+    def __generate_date_range_per_row(
+        self, item: NamedTuple, freq: str = "1H", override_start_date: str = None, override_end_date: str = None
+    ):
+        start_date = datetime.datetime.fromisoformat(override_start_date) if override_start_date else item.StartDate
+        end_date = datetime.datetime.fromisoformat(override_end_date) if override_end_date else item.EndDate
+        end_date = end_date - timedelta(minutes=10)
         return pd.date_range(start_date, end_date, freq=freq)
 
     def generate_hourly_dataset_grouped_by_entity(self):
@@ -96,7 +101,41 @@ class BillingDict:
             yield pd.DataFrame.from_records(temp_dict, index=BILLING_CSV_COLUMNS.c_ts)
 
     def generate_hourly_dataset_grouped_by_days(self):
-        start_date, end_date = self.hourly_date_range[0], self.hourly_date_range[len(self.hourly_date_range - 1)]
+        start_date, end_date = str(self.hourly_date_range[0]), str(
+            self.hourly_date_range[len(self.hourly_date_range) - 1]
+        )
+        inclusive_dates = self.__generate_date_range_per_row(
+            item=None, override_start_date=start_date, override_end_date=end_date, freq="1D"
+        )
+        for every_day in inclusive_dates:
+            per_hour_range = self.__generate_date_range_per_row(
+                item=None, override_start_date=str(every_day), override_end_date=str(every_day + timedelta(days=1))
+            )
+            temp_list = []
+            for row_val in self.data.itertuples(index=False, name="BillingCSVRow"):
+                row_range = self.__generate_date_range_per_row(item=row_val)
+                row_switcher = row_range.isin(per_hour_range.to_list())
+                temp_list.extend(
+                    [
+                        {
+                            BILLING_CSV_COLUMNS.c_ts: presence_ts,
+                            BILLING_CSV_COLUMNS.env_id: row_val.EnvironmentID,
+                            BILLING_CSV_COLUMNS.cluster_id: row_val.LogicalClusterID,
+                            BILLING_CSV_COLUMNS.cluster_name: row_val.LogicalClusterName,
+                            BILLING_CSV_COLUMNS.product_name: row_val.Product,
+                            BILLING_CSV_COLUMNS.product_type: row_val.Type,
+                            BILLING_CSV_COLUMNS.quantity: row_val.Quantity,
+                            BILLING_CSV_COLUMNS.orig_amt: row_val.OriginalAmount,
+                            BILLING_CSV_COLUMNS.total: row_val.Total,
+                            BILLING_CSV_COLUMNS.c_split_quantity: row_val.Quantity / row_range.size,
+                            BILLING_CSV_COLUMNS.c_split_amt: row_val.OriginalAmount / row_range.size,
+                            BILLING_CSV_COLUMNS.c_split_total: row_val.Total / row_range.size,
+                        }
+                        for presence_flag, presence_ts in zip(row_switcher, row_range)
+                        if bool(presence_flag) is True
+                    ]
+                )
+            yield pd.DataFrame.from_records(temp_list, index=BILLING_CSV_COLUMNS.c_ts)
 
 
 @dataclass(kw_only=True)
@@ -174,4 +213,6 @@ if __name__ == "__main__":
         ds: BillingDict = ds
         # print(ds.hourly_date_range)
         for item in ds.generate_hourly_dataset_grouped_by_entity():
+            print(item)
+        for item in ds.generate_hourly_dataset_grouped_by_days():
             print(item)
