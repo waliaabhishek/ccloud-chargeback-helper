@@ -45,7 +45,7 @@ class CCloudAPIKeyList(CCloudBase):
         if resp.status_code == 200:
             out_json = resp.json()
             for item in out_json["data"]:
-                print("Found API Key " + item["id"] + " with name " + item["spec"]["display_name"])
+                print("Found API Key " + item["id"] + " with owner " + item["spec"]["owner"]["id"])
                 self.__add_to_cache(
                     CCloudAPIKey(
                         api_key=item["id"],
