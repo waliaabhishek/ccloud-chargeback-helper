@@ -158,6 +158,7 @@ class CCloudOrg:
         temp_conn = CCloudConnection(
             api_key=self._org_details["ccloud_details"]["metrics"]["api_key"],
             api_secret=self._org_details["ccloud_details"]["metrics"]["api_secret"],
+            base_url=EndpointURL.API_URL,
         )
         self.metrics_data = CCloudMetricsHandler(_ccloud_connection=temp_conn)
 
