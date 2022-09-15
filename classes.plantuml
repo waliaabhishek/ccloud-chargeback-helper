@@ -1,0 +1,403 @@
+@startuml classes
+set namespaceSeparator none
+class "BillingCSVColumnNames" as src.data_processing.billing_processing.BillingCSVColumnNames {
+  c_interval_count : str
+  c_interval_freq : str
+  c_split_amt : str
+  c_split_quantity : str
+  c_split_total : str
+  c_ts : str
+  cluster_id : str
+  cluster_name : str
+  disc : str
+  end_date : str
+  env_id : str
+  orig_amt : str
+  price : str
+  product_name : str
+  product_type : str
+  quantity : str
+  quantity_unit : str
+  start_date : str
+  total : str
+  unit : str
+  override_column_names(key, value)
+}
+class "BillingDataset" as src.data_processing.billing_processing.BillingDataset {
+  file_path : str
+  parsed_datasets : Dict[str, BillingDict]
+  append_dataset(ds_name: str, is_shaped: bool, ds: pd.DataFrame)
+  generate_df_from_output()
+  get_all_datasets() -> Tuple[str, BillingDict]
+  get_dataset(ds_name: str) -> BillingDict
+  print_sample_df() -> None
+  transform_to_hourly_slots()
+}
+class "BillingDatasetNames" as src.data_processing.billing_processing.BillingDatasetNames {
+  name
+}
+class "BillingDict" as src.data_processing.billing_processing.BillingDict {
+  data : DataFrame
+  hourly_date_range : List
+  is_shaped : bool
+  generate_date_ranges(freq: str)
+  generate_hourly_dataset_grouped_by_days()
+  generate_hourly_dataset_grouped_by_entity()
+}
+class "CCMEReq_Aggregations" as src.ccloud.model.CCMEReq_Aggregations {
+  agg : str
+  metric : str
+}
+class "CCMEReq_CompareOp" as src.ccloud.model.CCMEReq_CompareOp {
+  name
+}
+class "CCMEReq_CompoundFilter" as src.ccloud.model.CCMEReq_CompoundFilter {
+  filters : List[CCMEReq_FieldFilter | CCMEReq_UnaryFilter]
+  op
+}
+class "CCMEReq_ConditionalOp" as src.ccloud.model.CCMEReq_ConditionalOp {
+  name
+}
+class "CCMEReq_FieldFilter" as src.ccloud.model.CCMEReq_FieldFilter {
+  field : str
+  op
+  value : str | int
+}
+class "CCMEReq_Format" as src.ccloud.model.CCMEReq_Format {
+  name
+}
+class "CCMEReq_Granularity" as src.ccloud.model.CCMEReq_Granularity {
+  name
+}
+class "CCMEReq_Order" as src.ccloud.model.CCMEReq_Order {
+  name
+}
+class "CCMEReq_OrderBy" as src.ccloud.model.CCMEReq_OrderBy {
+  agg : str
+  metric : str
+  order
+}
+class "CCMEReq_UnaryFilter" as src.ccloud.model.CCMEReq_UnaryFilter {
+  filter
+  op
+}
+class "CCMEReq_UnaryOp" as src.ccloud.model.CCMEReq_UnaryOp {
+  name
+}
+class "CCMERequest" as src.ccloud.model.CCMERequest {
+  aggregations : List[CCMEReq_Aggregations]
+  filter : Optional[CCMEReq_FieldFilter | CCMEReq_UnaryFilter | CCMEReq_CompoundFilter]
+  format
+  granularity
+  group_by : List[str]
+  intervals : List[str]
+  limit : int
+  order_by : Optional[List[CCMEReq_OrderBy]]
+}
+class "CCloudAPIKey" as src.ccloud.core_api.api_keys.CCloudAPIKey {
+  api_key : str
+  api_key_description : str
+  api_secret : str
+  cluster_id : str
+  created_at : str
+  owner_id : str
+}
+class "CCloudAPIKeyList" as src.ccloud.core_api.api_keys.CCloudAPIKeyList {
+  api_keys : Dict[str, CCloudAPIKey]
+  url
+  find_keys_with_sa(sa_id: str) -> List[CCloudAPIKey]
+  find_keys_with_sa_and_cluster(sa_id: str, cluster_id: str) -> List[CCloudAPIKey]
+  read_all(params)
+}
+class "CCloudBase" as src.ccloud.connections.CCloudBase {
+  http_connection : HTTPBasicAuth
+  url : str
+}
+class "CCloudBillingDataset" as src.ccloud.telemetry_api.billings_csv.CCloudBillingDataset {
+  available_files : List[str]
+  billing_dataframes : Dict[str, BillingDataset]
+  flush_to_disk_interval_sec : int
+  path_to_monitor : str
+  sync_needed : bool
+  sync_runner_status : Event
+  analyse_directory()
+  read_all()
+  start_sync()
+  stop_sync()
+}
+class "CCloudBillingHandler" as src.ccloud.org.CCloudBillingHandler {
+  billing_data
+  execute_requests()
+  read_all()
+}
+class "CCloudCluster" as src.ccloud.core_api.clusters.CCloudCluster {
+  availability : str
+  bootstrap_url : str
+  cloud : str
+  cluster_id : str
+  cluster_name : str
+  env_id : str
+  region : str
+}
+class "CCloudClusterList" as src.ccloud.core_api.clusters.CCloudClusterList {
+  ccloud_env
+  cluster : Dict[str, CCloudCluster]
+  url
+  find_cluster(cluster_id)
+  read_all(env_id: str, params)
+}
+class "CCloudConnection" as src.ccloud.connections.CCloudConnection {
+  api_key : str
+  api_secret : str
+  base_url
+  http_connection : HTTPBasicAuth
+  uri
+  get_endpoint_url(key) -> str
+}
+class "CCloudConnector" as src.ccloud.core_api.connectors.CCloudConnector {
+  cluster_id : str
+  connector_class : str
+  connector_name : str
+  connector_type : str
+  env_id : str
+  owner_id : CCloudServiceAccount | CCloudUserAccount
+}
+class "CCloudConnectorList" as src.ccloud.core_api.connectors.CCloudConnectorList {
+  ccloud_api_keys
+  ccloud_kafka_clusters
+  ccloud_service_accounts
+  ccloud_users
+  connectors : Dict[str, CCloudConnector]
+  url
+  url_get_connector_config : str
+  find_cluster(cluster_id)
+  locate_api_key_owner(api_key: str) -> CCloudUserAccount | CCloudServiceAccount
+  read_all()
+  read_all_connector_names(kafka_cluster: CCloudCluster, params)
+  read_connector_config(kafka_cluster: CCloudCluster, call_url: str, params)
+}
+class "CCloudEnvironment" as src.ccloud.core_api.environments.CCloudEnvironment {
+  created_at : str
+  display_name : str
+  env_id : str
+}
+class "CCloudEnvironmentList" as src.ccloud.core_api.environments.CCloudEnvironmentList {
+  env : Dict[str, CCloudEnvironment]
+  url
+  find_environment(env_id)
+  read_all(params)
+}
+class "CCloudKsqldbCluster" as src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbCluster {
+  cluster_id : str
+  cluster_name : str
+  created_at : str
+  csu_count : str
+  env_id : str
+  kafka_cluster_id : str
+  owner_id : str
+}
+class "CCloudKsqldbClusterList" as src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbClusterList {
+  ccloud_envs
+  ksqldb_clusters : Dict[str, CCloudKsqldbCluster]
+  url
+  read_all(params)
+}
+class "CCloudMetricsHandler" as src.ccloud.org.CCloudMetricsHandler {
+  cc_api_keys
+  cc_clusters
+  cc_connectors
+  cc_environments
+  cc_ksqldb_clusters
+  cc_sa
+  cc_users
+  last_refresh : Optional[datetime]
+  min_refresh_gap : timedelta
+  execute_requests()
+  read_all()
+}
+class "CCloudOrg" as src.ccloud.org.CCloudOrg {
+  billing_data
+  metrics_data
+  org_id : str
+  telemetry_data
+  execute_requests()
+}
+class "CCloudOrgList" as src.ccloud.org.CCloudOrgList {
+  org : Dict[str, CCloudOrg]
+  execute_requests()
+}
+class "CCloudServiceAccount" as src.ccloud.core_api.service_accounts.CCloudServiceAccount {
+  created_at : str
+  description : str
+  name : str
+  resource_id : str
+  updated_at : str
+}
+class "CCloudServiceAccountList" as src.ccloud.core_api.service_accounts.CCloudServiceAccountList {
+  sa : Dict[str, CCloudServiceAccount]
+  url
+  find_sa(sa_name)
+  read_all(params)
+}
+class "CCloudTelemetryDataset" as src.ccloud.telemetry_api.telemetry.CCloudTelemetryDataset {
+  aggregation_metric : str
+  ccloud_url : Optional[str]
+  days_in_memory : int
+  http_response : Dict[str, Dict]
+  massaged_request : Dict
+  metrics_dataframes : Dict[str, metrics_dataframe]
+  req_id : str
+  add_dataframes(date_range: Tuple, output_basepath: str)
+  create_ccloud_request() -> Dict
+  execute_request(http_connection: CCloudConnection, date_range: Tuple, params)
+  find_datasets_to_evict() -> List[str]
+  generate_filter_struct(filter: Dict) -> Dict
+}
+class "CCloudTelemetryHandler" as src.ccloud.org.CCloudTelemetryHandler {
+  days_in_memory : int
+  telemetry_requests : Dict[str, CCloudTelemetryDataset]
+  url
+  execute_requests(output_basepath: str)
+  export_metrics_to_csv(output_basepath: str)
+  generate_iso8601_dt_intervals(granularity: str, metric_name: str, intervals: int)
+  read_all()
+}
+class "CCloudUserAccount" as src.ccloud.core_api.user_accounts.CCloudUserAccount {
+  created_at : str
+  name : str
+  resource_id : str
+  updated_at : str
+}
+class "CCloudUserAccountList" as src.ccloud.core_api.user_accounts.CCloudUserAccountList {
+  url
+  users : Dict[str, CCloudUserAccount]
+  find_user(ccloud_user)
+  read_all(params)
+}
+class "DirType" as src.storage_mgmt.DirType {
+  name
+}
+class "EndpointURL" as src.ccloud.connections.EndpointURL {
+  name
+}
+class "MetricsDatasetNames" as src.data_processing.metrics_processing.MetricsDatasetNames {
+  name
+}
+class "MetricsDict" as src.data_processing.metrics_processing.MetricsDict {
+  data : DataFrame
+  is_shaped : bool
+}
+class "PersistenceStore" as src.storage_mgmt.PersistenceStore {
+  flush_to_disk_interval_sec : int
+  historical_data_to_maintain : int
+  out_path : str
+  sync_needed : bool
+  sync_runner_status : Event
+  add_to_persistence(date_value: str, metric_name: str)
+  find_datasets_to_evict() -> List[str]
+  is_dataset_present(date_value: str, metric_name: str) -> bool
+  rehydrate_persistence_status()
+  start_sync()
+  stop_sync()
+  write_file()
+}
+class "URIDetails" as src.ccloud.connections.URIDetails {
+  API_URL : str
+  TELEMETRY_URL : str
+  api_keys : str
+  clusters : str
+  environments : str
+  get_connector_config : str
+  list_connector_names : str
+  list_ksql_clusters : str
+  service_accounts : str
+  telemetry_query_metrics : str
+  user_accounts : str
+}
+class "metrics_dataframe" as src.data_processing.metrics_processing.metrics_dataframe {
+  aggregation_metric_name : str
+  parsed_datasets : Dict[str, MetricsDict]
+  append_dataset(ds_name: str, is_shaped: bool, ds: pd.DataFrame)
+  generate_df_from_output()
+  get_all_datasets() -> Tuple[str, MetricsDict]
+  get_dataset(ds_name: str) -> MetricsDict
+  get_date_ranges(ts_range, dt_range) -> Tuple[str, pd.Timestamp, pd.Timestamp]
+  is_shapeable() -> bool
+  output_to_csv(basepath: str)
+  print_sample_df() -> None
+  shape_specific_dataframes(ds_name_to_shape: str)
+}
+class "main" as src.main {
+  ccloud_org: CCloudOrgList
+  persistence_store: PersistenceStore
+}
+
+src.ccloud.org.CCloudOrgList --* src.main::ccloud_org : orgs_iterator
+src.storage_mgmt.PersistenceStore --* src.main::persistence_store : persistence_store
+src.storage_mgmt.DirType --* src.storage_mgmt.PersistenceStore::out_path : dir_type_reference
+
+src.ccloud.model.CCMEReq_CompareOp --* src.ccloud.model.CCMEReq_FieldFilter : op
+src.ccloud.model.CCMEReq_ConditionalOp --* src.ccloud.model.CCMEReq_CompoundFilter : op
+src.ccloud.model.CCMEReq_FieldFilter --* src.ccloud.model.CCMEReq_UnaryFilter : filter
+src.ccloud.model.CCMEReq_UnaryOp --* src.ccloud.model.CCMEReq_UnaryFilter : op
+src.ccloud.model.CCMEReq_Aggregations --* src.ccloud.model.CCMERequest::aggregations : aggregations
+src.ccloud.model.CCMEReq_FieldFilter --* src.ccloud.model.CCMERequest::filter : aggregations
+src.ccloud.model.CCMEReq_UnaryFilter --* src.ccloud.model.CCMERequest::filter : aggregations
+src.ccloud.model.CCMEReq_CompoundFilter --* src.ccloud.model.CCMERequest::filter : aggregations
+src.ccloud.model.CCMEReq_Format --* src.ccloud.model.CCMERequest::format : format
+src.ccloud.model.CCMEReq_Granularity --* src.ccloud.model.CCMERequest::granularity : granularity
+src.ccloud.model.CCMEReq_OrderBy --* src.ccloud.model.CCMERequest::order_by : granularity
+src.ccloud.model.CCMEReq_Order --* src.ccloud.model.CCMEReq_OrderBy::order : order
+
+src.ccloud.connections.CCloudConnection --* src.ccloud.connections.CCloudBase : _ccloud_connection
+src.ccloud.connections.EndpointURL --* src.ccloud.connections.CCloudConnection : base_url
+src.ccloud.connections.URIDetails --* src.ccloud.connections.CCloudConnection : uri
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.api_keys.CCloudAPIKeyList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.clusters.CCloudClusterList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.connectors.CCloudConnectorList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.environments.CCloudEnvironmentList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbClusterList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.service_accounts.CCloudServiceAccountList
+src.ccloud.connections.CCloudBase --* src.ccloud.core_api.user_accounts.CCloudUserAccountList
+
+src.data_processing.billing_processing.BillingCSVColumnNames --* src.data_processing.billing_processing.BillingDict::data : dataframe_columns
+src.data_processing.billing_processing.BillingDatasetNames --* src.data_processing.billing_processing.BillingDataset::parsed_datasets : dataset_name
+
+src.ccloud.core_api.service_accounts.CCloudServiceAccount --* src.ccloud.core_api.service_accounts.CCloudServiceAccountList::sa : service_account
+src.ccloud.core_api.user_accounts.CCloudUserAccount --* src.ccloud.core_api.user_accounts.CCloudUserAccountList::users : user_accounts
+src.ccloud.core_api.environments.CCloudEnvironment --* src.ccloud.core_api.environments.CCloudEnvironmentList::env : env
+src.ccloud.core_api.clusters.CCloudCluster --* src.ccloud.core_api.clusters.CCloudClusterList::cluster : kafka_clusters
+src.ccloud.core_api.api_keys.CCloudAPIKey --* src.ccloud.core_api.api_keys.CCloudAPIKeyList::api_keys : api_keys
+src.ccloud.core_api.connectors.CCloudConnector --* src.ccloud.core_api.connectors.CCloudConnectorList::connectors : connectors
+src.ccloud.core_api.api_keys.CCloudAPIKeyList <-- src.ccloud.core_api.connectors.CCloudConnectorList::ccloud_api_keys : api_keys
+src.ccloud.core_api.clusters.CCloudClusterList <-- src.ccloud.core_api.connectors.CCloudConnectorList::ccloud_kafka_clusters : kafka_clusters
+src.ccloud.core_api.service_accounts.CCloudServiceAccountList <-- src.ccloud.core_api.connectors.CCloudConnectorList::ccloud_service_accounts : service_accounts
+src.ccloud.core_api.user_accounts.CCloudUserAccountList <-- src.ccloud.core_api.connectors.CCloudConnectorList::ccloud_users : users
+src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbCluster --* src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbClusterList::ksqldb_clusters : ksql_cluster
+src.ccloud.core_api.environments.CCloudEnvironmentList <-- src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbClusterList::ccloud_envs : ksql_cluster
+src.ccloud.core_api.clusters.CCloudClusterList::ccloud_env <-- src.ccloud.core_api.environments.CCloudEnvironmentList
+src.ccloud.core_api.clusters.CCloudCluster::env_id --> src.ccloud.core_api.environments.CCloudEnvironment::env_id 
+src.ccloud.core_api.api_keys.CCloudAPIKey::owner_id --> src.ccloud.core_api.service_accounts.CCloudServiceAccount::resource_id
+src.ccloud.core_api.api_keys.CCloudAPIKey::owner_id --> src.ccloud.core_api.user_accounts.CCloudUserAccount::resource_id
+src.ccloud.core_api.api_keys.CCloudAPIKey::cluster_id -> src.ccloud.core_api.clusters.CCloudCluster::resource_id
+src.ccloud.org.CCloudOrg --* src.ccloud.org.CCloudOrgList::org
+src.ccloud.org.CCloudBillingHandler --* src.ccloud.org.CCloudOrg::billing_data : billing_data
+src.ccloud.telemetry_api.billings_csv.CCloudBillingDataset --* src.ccloud.org.CCloudBillingHandler::billing_data : billing_data
+src.data_processing.billing_processing.BillingDataset --* src.ccloud.telemetry_api.billings_csv.CCloudBillingDataset::billing_dataframes : billing_data
+src.data_processing.billing_processing.BillingDict --* src.data_processing.billing_processing.BillingDataset::parsed_datasets : billing_data
+src.ccloud.org.CCloudTelemetryHandler --* src.ccloud.org.CCloudOrg::telemetry_data : telemetry_data
+src.ccloud.telemetry_api.telemetry.CCloudTelemetryDataset --* src.ccloud.org.CCloudTelemetryHandler::telemetry_requests : telemetry_data
+src.data_processing.metrics_processing.metrics_dataframe --* src.ccloud.telemetry_api.telemetry.CCloudTelemetryDataset::metrics_dataframes : telemetry_data
+src.ccloud.model.CCMERequest --* src.ccloud.telemetry_api.telemetry.CCloudTelemetryDataset::massaged_request : telemetry_data
+src.data_processing.metrics_processing.MetricsDict --* src.data_processing.metrics_processing.metrics_dataframe::parsed_datasets : telemetry_data
+src.data_processing.metrics_processing.MetricsDatasetNames --* src.data_processing.metrics_processing.metrics_dataframe::parsed_datasets : telemetry_data
+src.ccloud.org.CCloudMetricsHandler --* src.ccloud.org.CCloudOrg::metrics_data : metrics_data
+src.ccloud.core_api.api_keys.CCloudAPIKeyList --* src.ccloud.org.CCloudMetricsHandler::cc_api_keys : metrics_data
+src.ccloud.core_api.clusters.CCloudClusterList --* src.ccloud.org.CCloudMetricsHandler::cc_clusters : metrics_data
+src.ccloud.core_api.connectors.CCloudConnectorList --* src.ccloud.org.CCloudMetricsHandler::cc_connectors : metrics_data
+src.ccloud.core_api.environments.CCloudEnvironmentList --* src.ccloud.org.CCloudMetricsHandler::cc_environments : metrics_data
+src.ccloud.core_api.ksqldb_clusters.CCloudKsqldbClusterList --* src.ccloud.org.CCloudMetricsHandler::cc_ksqldb_clusters : metrics_data
+src.ccloud.core_api.service_accounts.CCloudServiceAccountList --* src.ccloud.org.CCloudMetricsHandler::cc_sa : metrics_data
+src.ccloud.core_api.user_accounts.CCloudUserAccountList --* src.ccloud.org.CCloudMetricsHandler::cc_users : metrics_data
+
+@enduml
