@@ -107,9 +107,11 @@ class BillingDict:
         inclusive_dates = self.__generate_date_range_per_row(
             item=None, override_start_date=start_date, override_end_date=end_date, freq="1D"
         )
-        for every_day in inclusive_dates:
+        for dataset_date in inclusive_dates:
             per_hour_range = self.__generate_date_range_per_row(
-                item=None, override_start_date=str(every_day), override_end_date=str(every_day + timedelta(days=1))
+                item=None,
+                override_start_date=str(dataset_date),
+                override_end_date=str(dataset_date + timedelta(days=1)),
             )
             temp_list = []
             for row_val in self.data.itertuples(index=False, name="BillingCSVRow"):
@@ -135,7 +137,7 @@ class BillingDict:
                         if bool(presence_flag) is True
                     ]
                 )
-            yield pd.DataFrame.from_records(temp_list, index=BILLING_CSV_COLUMNS.c_ts)
+            yield (dataset_date, pd.DataFrame.from_records(temp_list, index=BILLING_CSV_COLUMNS.c_ts))
 
 
 @dataclass(kw_only=True)
@@ -156,7 +158,7 @@ class BillingDataset:
     def get_all_datasets(self) -> Tuple[str, BillingDict]:
         for item in self.parsed_datasets.keys():
             ds = self.get_dataset(item)
-            yield item, ds
+            yield (item, ds)
 
     def generate_df_from_output(self):
         temp = pd.read_csv(
