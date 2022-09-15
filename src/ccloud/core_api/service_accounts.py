@@ -34,17 +34,18 @@ class CCloudServiceAccountList(CCloudBase):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
-            for item in out_json["data"]:
-                self.__add_to_cache(
-                    CCloudServiceAccount(
-                        resource_id=item["id"],
-                        name=item["display_name"],
-                        description=item["description"],
-                        created_at=item["metadata"]["created_at"],
-                        updated_at=item["metadata"]["updated_at"],
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json["data"]:
+                    self.__add_to_cache(
+                        CCloudServiceAccount(
+                            resource_id=item["id"],
+                            name=item["display_name"],
+                            description=item["description"],
+                            created_at=item["metadata"]["created_at"],
+                            updated_at=item["metadata"]["updated_at"],
+                        )
                     )
-                )
-                print(f"Found SA: {item['id']}; Name {item['display_name']}")
+                    print(f"Found SA: {item['id']}; Name {item['display_name']}")
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])

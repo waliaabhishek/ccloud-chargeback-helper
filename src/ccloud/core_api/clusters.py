@@ -45,19 +45,20 @@ class CCloudClusterList(CCloudBase):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
-            for item in out_json["data"]:
-                print("Found cluster " + item["id"] + " with name " + item["spec"]["display_name"])
-                self.__add_to_cache(
-                    CCloudCluster(
-                        env_id=env_id,
-                        cluster_id=item["id"],
-                        cluster_name=item["spec"]["display_name"],
-                        cloud=item["spec"]["cloud"],
-                        availability=item["spec"]["availability"],
-                        region=item["spec"]["region"],
-                        bootstrap_url=item["spec"]["kafka_bootstrap_endpoint"],
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json["data"]:
+                    print("Found cluster " + item["id"] + " with name " + item["spec"]["display_name"])
+                    self.__add_to_cache(
+                        CCloudCluster(
+                            env_id=env_id,
+                            cluster_id=item["id"],
+                            cluster_name=item["spec"]["display_name"],
+                            cloud=item["spec"]["cloud"],
+                            availability=item["spec"]["availability"],
+                            region=item["spec"]["region"],
+                            bootstrap_url=item["spec"]["kafka_bootstrap_endpoint"],
+                        )
                     )
-                )
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])

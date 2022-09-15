@@ -32,15 +32,16 @@ class CCloudEnvironmentList(CCloudBase):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
-            for item in out_json["data"]:
-                print("Found environment " + item["id"] + " with name " + item["display_name"])
-                self.__add_env_to_cache(
-                    CCloudEnvironment(
-                        env_id=item["id"],
-                        display_name=item["display_name"],
-                        created_at=item["metadata"]["created_at"],
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json["data"]:
+                    print("Found environment " + item["id"] + " with name " + item["display_name"])
+                    self.__add_env_to_cache(
+                        CCloudEnvironment(
+                            env_id=item["id"],
+                            display_name=item["display_name"],
+                            created_at=item["metadata"]["created_at"],
+                        )
                     )
-                )
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])

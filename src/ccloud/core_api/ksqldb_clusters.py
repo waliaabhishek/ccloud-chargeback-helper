@@ -56,7 +56,7 @@ class CCloudKsqldbClusterList(CCloudBase):
             resp = requests.get(url=self.url, auth=self.http_connection, params=params)
             if resp.status_code == 200:
                 out_json = resp.json()
-                if out_json["data"]:
+                if out_json is not None and out_json["data"] is not None:
                     for item in out_json["data"]:
                         print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
                         self.__add_to_cache(

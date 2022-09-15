@@ -66,8 +66,9 @@ class CCloudConnectorList(CCloudBase):
         resp = requests.get(url=temp_url)
         if resp.status_code == 200:
             out_json = resp.json()
-            for item in out_json:
-                yield item
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json:
+                    yield item
 
     def read_connector_config(self, kafka_cluster: CCloudCluster, call_url: str, params={}):
         resp = requests.get(url=call_url, auth=self.http_connection, params=params)

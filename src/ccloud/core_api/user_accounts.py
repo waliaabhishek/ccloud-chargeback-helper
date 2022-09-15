@@ -33,16 +33,17 @@ class CCloudUserAccountList(CCloudBase):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
-            for item in out_json["data"]:
-                self.__add_to_cache(
-                    CCloudUserAccount(
-                        resource_id=item["id"],
-                        name=item["full_name"],
-                        created_at=item["metadata"]["created_at"],
-                        updated_at=item["metadata"]["updated_at"],
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json["data"]:
+                    self.__add_to_cache(
+                        CCloudUserAccount(
+                            resource_id=item["id"],
+                            name=item["full_name"],
+                            created_at=item["metadata"]["created_at"],
+                            updated_at=item["metadata"]["updated_at"],
+                        )
                     )
-                )
-                print(f"Found User: {item['id']}; Name {item['full_name']}")
+                    print(f"Found User: {item['id']}; Name {item['full_name']}")
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])
