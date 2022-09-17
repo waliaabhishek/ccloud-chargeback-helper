@@ -1,14 +1,23 @@
+from enum import Enum, auto
 import threading
 from argparse import Namespace
 from logging import debug
 from typing import Dict
 import yaml
-from data_processing.billing_processing import BillingDict
+from data_processing.billing_processing import BillingDataframe
+import datetime
+
 
 import helpers
 from ccloud.org import CCloudOrgList
 from helpers import logged_method, timed_method
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType, current_memory_usage, sync_to_file
+
+
+class WorkflowStage(Enum):
+    GATHER = auto()
+    CALCULATE_OUTPUT = auto()
+    SLEEP = auto()
 
 
 @logged_method
@@ -23,7 +32,7 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
 
 @logged_method
 @timed_method
-def gather_cycle(ccloud_orgs: CCloudOrgList):
+def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # This will try to refresh and read all the data that might be new from the last gather phase.
     # Org Object has built in safeguard to prevent repetitive gathering. for the same datasets.
     # for Cloud Objects --> 1 hour is the minimum.
@@ -36,14 +45,15 @@ def gather_cycle(ccloud_orgs: CCloudOrgList):
         org.telemetry_data.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
 
 
-def calculate_cycle(ccloud_orgs: CCloudOrgList):
+def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
     for org_id, org in ccloud_orgs.org.items():
         for file_path, billing_dataframe in org.billing_data.billing_data.billing_dataframes.items():
             for _, billing_dict in billing_dataframe.get_all_datasets():
-                billing_dict: BillingDict = billing_dict
-                for dataset_date, dataframe in billing_dict.generate_hourly_dataset_grouped_by_days():
+                billing_dict: BillingDataframe = billing_dict
+                for dataset_date, billing_dataframe in billing_dict.generate_hourly_dataset():
                     # TODO: Read the date and then find the corresponding data from telemetry dataset in files.
                     # Read the data and then start calculating the output dataset.
+                    dataset_date = datetime.datetime.fromisoformat(dataset_date).date()
                     pass
 
 
@@ -65,7 +75,7 @@ def execute_workflow(arg_flags: Namespace):
         _days_in_memory=days_in_memory,
     )
 
-    gather_cycle(ccloud_orgs=ccloud_orgs)
+    run_gather_cycle(ccloud_orgs=ccloud_orgs)
 
     # Begin shutdown process.
     METRICS_PERSISTENCE_STORE.stop_sync()

@@ -1,16 +1,17 @@
 import datetime
 from copy import deepcopy
 from dataclasses import dataclass, field
+import os
 from typing import Dict, List, Tuple
-
+import pandas as pd
 import requests
 from ccloud.connections import CCloudConnection
-from data_processing.metrics_processing import metrics_dataframe
-from helpers import sanitize_id, sanitize_metric_name
+from data_processing.metrics_processing import MetricsDataframe, MetricsDatasetNames
+from helpers import ensure_path, sanitize_id, sanitize_metric_name
 from requests.auth import HTTPBasicAuth
 
 from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
-from storage_mgmt import METRICS_PERSISTENCE_STORE
+from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 
 @dataclass(kw_only=True)
@@ -23,7 +24,7 @@ class CCloudTelemetryDataset:
     aggregation_metric: str = field(init=False)
     massaged_request: Dict = field(init=False)
     http_response: Dict[str, Dict] = field(default_factory=dict, init=False)
-    metrics_dataframes: Dict[str, metrics_dataframe] = field(init=False, default_factory=dict)
+    metrics_dataframes: Dict[str, MetricsDataframe] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.http_response["data"] = []
@@ -87,6 +88,76 @@ class CCloudTelemetryDataset:
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
+    def get_filepath(
+        self,
+        date_value: datetime.date,
+        basepath=STORAGE_PATH(DirType.MetricsData),
+        metric_dataset_name: MetricsDatasetNames = MetricsDatasetNames.metricsapi_representation,
+    ):
+        date_folder_path = os.path.join(basepath, f"{str(date_value)}")
+        ensure_path()(path=date_folder_path)
+        file_path = os.path.join(
+            basepath,
+            f"{str(date_value)}",
+            f"{self.aggregation_metric_name}__{metric_dataset_name.name}.csv",
+        )
+        return date_folder_path, file_path
+
+    def is_file_present(self, file_path: str) -> bool:
+        return os.path.exists(file_path) and os.path.isfile(file_path)
+
+    def read_dataset_into_cache(self, datetime_value: datetime.datetime) -> bool:
+        date_value = str(datetime_value.date())
+        if date_value not in self.metrics_dataframes.keys():
+            _, out_file_path = self.get_filepath(date_value=date_value)
+            if self.is_file_present(file_path=out_file_path):
+                self.metrics_dataframes[str(date_value)] = MetricsDataframe(
+                    aggregation_metric_name=self.aggregation_metric,
+                    _metrics_output={},
+                    filename_for_read_in=out_file_path,
+                )
+                return True
+            else:
+                return False
+
+    def generate_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
+        able_to_read = self.read_dataset_into_cache(datetime_value=datetime_slice_iso_format)
+        if not able_to_read:
+            print(
+                f"Telemetry Dataset not available on Disk for Metric: {self.aggregation_metric} for Date: {str(datetime_slice_iso_format.date())}"
+            )
+            print(f"The data calculations might be skewed.")
+            return None
+        target_df = self.metrics_dataframes.get(str(datetime_slice_iso_format.date()))
+        target_df = target_df.get_dataset(ds_name=MetricsDatasetNames.metricsapi_representation.name)
+        row_range = target_df["timestamp"]
+        row_switcher = row_range.isin(
+            [
+                str(datetime_slice_iso_format),
+            ]
+        )
+
+        out = []
+        for row_val in self.data.itertuples(index=False, name="TelemetryData"):
+            out.extend(
+                [
+                    {
+                        "timestamp": presence_ts,
+                        "metric.principal_id": row_val.metric.principal_id,
+                        "value": row_val.value,
+                    }
+                    for presence_flag, presence_ts in zip(row_switcher, row_range)
+                    if bool(presence_flag) is True
+                ]
+            )
+        return pd.DataFrame.from_records(
+            out,
+            index=[
+                "timestamp",
+                "metric.principal_id",
+            ],
+        )
+
     def find_datasets_to_evict(self) -> List[str]:
         temp = list(self.metrics_dataframes.keys())
         temp.sort(reverse=True)
@@ -95,7 +166,7 @@ class CCloudTelemetryDataset:
     def add_dataframes(self, date_range: Tuple, output_basepath: str):
         for dataset in self.find_datasets_to_evict():
             self.metrics_dataframes.pop(dataset).output_to_csv(basepath=output_basepath)
-        self.metrics_dataframes[str(date_range[1])] = metrics_dataframe(
+        self.metrics_dataframes[str(date_range[1])] = MetricsDataframe(
             aggregation_metric_name=self.aggregation_metric, _metrics_output=self.http_response
         )
         self.http_response["data"] = []

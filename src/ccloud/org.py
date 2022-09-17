@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 import datetime
 from time import sleep
-from typing import Dict, List
-
+from typing import Dict, List, Set, Tuple
+import pandas as pd
 from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
 from ccloud.core_api.api_keys import CCloudAPIKeyList
 from ccloud.core_api.clusters import CCloudClusterList
@@ -14,22 +14,37 @@ from ccloud.core_api.user_accounts import CCloudUserAccountList
 from ccloud.telemetry_api.billings_csv import CCloudBillingDataset
 from ccloud.telemetry_api.telemetry import CCloudTelemetryDataset
 from ccloud.model import CCMEReq_Granularity
-from helpers import sanitize_id
+from helpers import sanitize_id, sanitize_metric_name
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 
 @dataclass
 class CCloudBillingHandler:
     billing_data: CCloudBillingDataset = field(init=False)
+    available_hour_slices_in_dataset: List[str] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
         self.billing_data = CCloudBillingDataset()
 
     def read_all(self):
         self.billing_data.read_all()
+        self.available_hour_slices_in_dataset = sorted(list(self.__calculate_daterange_in_all_datasets()))
 
     def execute_requests(self):
         self.billing_data.read_all()
+
+    def __calculate_daterange_in_all_datasets(self) -> Set[str]:
+        out = set()
+        for _, billing_dataframe in self.billing_data.billing_datasets.items():
+            out = out.union(billing_dataframe.hourly_date_range)
+        return out
+
+    def generate_hourly_dataset(self, date_value: datetime.datetime) -> pd.DataFrame:
+        out = pd.DataFrame()
+        for filename, billing_dataframe in self.billing_data.billing_datasets.items():
+            file_level_df = billing_dataframe.generate_hourly_dataset(datetime_slice_iso_format=date_value)
+            out = pd.concat([out, file_level_df])
+        return out
 
 
 @dataclass
@@ -83,6 +98,23 @@ class CCloudTelemetryHandler(CCloudBase):
                 yield curr
             else:
                 print(f"Dataset already available for metric {metric_name} on {curr[1]}")
+
+    def generate_hourly_dataset(self, date_value: datetime.datetime, billing_mgmt: bool = True):
+        metrics_list = [
+            sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
+            sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
+        ]
+        out = pd.DataFrame()
+        data_missing_on_disk = False
+        for req_id, telemetry_dataset in self.telemetry_requests.items():
+            if telemetry_dataset.aggregation_metric not in metrics_list:
+                continue
+            file_level_df = telemetry_dataset.generate_hourly_dataset(datetime_slice_iso_format=date_value)
+            if file_level_df is not None:
+                out = pd.concat([out, file_level_df])
+            else:
+                data_missing_on_disk = True
+        return data_missing_on_disk, out
 
 
 @dataclass
@@ -172,6 +204,10 @@ class CCloudOrg:
         self.metrics_data.execute_requests()
         print(f"Checking for new Billing CSV Files")
         self.billing_data.execute_requests()
+
+    def find_available_hour_slices_in_billing_datasets(self) -> datetime.datetime:
+        for item in self.billing_data.available_hour_slices_in_dataset:
+            yield datetime.datetime.fromisoformat(item)
 
 
 @dataclass(kw_only=True)
