@@ -19,6 +19,7 @@ config:
             - metric: io.confluent.kafka.server/request_bytes
           granularity: PT1H
           group_by:
+            - resource.kafka.id
             - metric.principal_id
           limit: 1000
           filter:
@@ -31,6 +32,7 @@ config:
             - metric: io.confluent.kafka.server/response_bytes
           granularity: PT1H
           group_by:
+            - resource.kafka.id
             - metric.principal_id
           limit: 100
           filter:
