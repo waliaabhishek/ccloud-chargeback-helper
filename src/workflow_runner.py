@@ -9,9 +9,15 @@ import datetime
 
 
 import helpers
-from ccloud.org import CCloudOrgList
-from helpers import logged_method, timed_method
+from ccloud.org import CCloudOrg, CCloudOrgList
+from helpers import logged_method, sanitize_metric_name, timed_method
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType, current_memory_usage, sync_to_file
+
+
+BILLING_METRICS_SCOPE = {
+    "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
+    "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
+}
 
 
 class WorkflowStage(Enum):
@@ -41,20 +47,27 @@ def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     ccloud_orgs.execute_requests()
 
     #  Invoke write to Disk.
-    for org in ccloud_orgs.org.values():
-        org.telemetry_data.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
+    for org in ccloud_orgs.orgs.values():
+        org.metrics_handler.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
 
 
 def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
-    for org_id, org in ccloud_orgs.org.items():
-        for file_path, billing_dataframe in org.billing_data.billing_data.billing_dataframes.items():
-            for _, billing_dict in billing_dataframe.get_all_datasets():
-                billing_dict: BillingDataframe = billing_dict
-                for dataset_date, billing_dataframe in billing_dict.generate_hourly_dataset():
-                    # TODO: Read the date and then find the corresponding data from telemetry dataset in files.
-                    # Read the data and then start calculating the output dataset.
-                    dataset_date = datetime.datetime.fromisoformat(dataset_date).date()
-                    pass
+    # for org_id, org in ccloud_orgs.orgs.items():
+    #     org: CCloudOrg = org
+    #     for file_path, billing_dataframe in org.billing_handler.billing_dataset.billing_dataframes.items():
+    #         for _, billing_dict in billing_dataframe.get_all_datasets():
+    #             billing_dict: BillingDataframe = billing_dict
+    #             for dataset_date, billing_dataframe in billing_dict.get_hourly_dataset():
+    #                 # TODO: Read the date and then find the corresponding data from telemetry dataset in files.
+    #                 # Read the data and then start calculating the output dataset.
+    #                 dataset_date = datetime.datetime.fromisoformat(dataset_date).date()
+    #                 pass
+    for org_id, org in ccloud_orgs.orgs.items():
+        for hour_slice in org.find_available_hour_slices_in_billing_datasets():
+            billing_data = org.billing_handler.get_hourly_dataset(hour_slice)
+            metrics_found, metrics_data = org.metrics_handler.get_hourly_dataset(
+                date_value=hour_slice, billing_mgmt=True
+            )
 
 
 @timed_method

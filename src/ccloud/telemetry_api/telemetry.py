@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import requests
 from ccloud.connections import CCloudConnection
-from data_processing.metrics_processing import MetricsDataframe, MetricsDatasetNames
+from data_processing.metrics_processing import METRICS_CSV_COLUMNS, MetricsDataframe, MetricsDatasetNames
 from helpers import ensure_path, sanitize_id, sanitize_metric_name
 from requests.auth import HTTPBasicAuth
 
@@ -15,7 +15,7 @@ from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 
 @dataclass(kw_only=True)
-class CCloudTelemetryDataset:
+class CCloudMetricsDataset:
     _base_payload: Dict
     ccloud_url: str = field(default=None)
     days_in_memory: int = field(default=7)
@@ -41,23 +41,21 @@ class CCloudTelemetryDataset:
     def generate_filter_struct(self, filter: Dict) -> Dict:
         cluster_list = filter["value"]
         if filter["op"] in [member.name for member in CCMEReq_CompareOp]:
-            if len(filter["value"]) == 1:
-                return {"field": filter["field"], "op": filter["op"], "value": cluster_list[0]}
-            elif "ALL_CLUSTERS" in cluster_list:
+            if "ALL_CLUSTERS" in cluster_list:
                 # TODO: Add logic to get cluster list and create a compound filter.
                 # currently using a list
-                temp_cluster_list = ["lkc-pg5gx2", "lkc-pg5gx2"]
-                temp_req = {"field:": filter["field"], "op": filter["op"], "value": temp_cluster_list}
-                self.generate_filter_struct(temp_req)
-            elif len(cluster_list) > 1:
+                cluster_list = ["lkc-pg5gx2", "lkc-pg5gx2"]
+            if len(cluster_list) == 1:
+                return {"field": filter["field"], "op": filter["op"], "value": cluster_list[0]}
+            if len(cluster_list) >= 1:
                 filter_list_1 = [
                     {"field": filter["field"], "op": CCMEReq_CompareOp.EQ.name, "value": c_id} for c_id in cluster_list
                 ]
-                out_test = {
-                    "op": CCMEReq_ConditionalOp.AND.name,
+                out_filter = {
+                    "op": CCMEReq_ConditionalOp.OR.name,
                     "filters": filter_list_1,
                 }
-                return out_test
+                return out_filter
         elif filter["op"] in [member.name for member in CCMEReq_ConditionalOp]:
             # TODO: Not sure how to implement it yet.
             pass
@@ -120,7 +118,7 @@ class CCloudTelemetryDataset:
             else:
                 return False
 
-    def generate_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
+    def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
         able_to_read = self.read_dataset_into_cache(datetime_value=datetime_slice_iso_format)
         if not able_to_read:
             print(
@@ -130,31 +128,28 @@ class CCloudTelemetryDataset:
             return None
         target_df = self.metrics_dataframes.get(str(datetime_slice_iso_format.date()))
         target_df = target_df.get_dataset(ds_name=MetricsDatasetNames.metricsapi_representation.name)
-        row_range = target_df["timestamp"]
-        row_switcher = row_range.isin(
-            [
-                str(datetime_slice_iso_format),
-            ]
-        )
+        row_range = target_df[METRICS_CSV_COLUMNS.IN_TS]
+        row_switcher = row_range.isin([str(datetime_slice_iso_format)])
 
         out = []
         for row_val in self.data.itertuples(index=False, name="TelemetryData"):
             out.extend(
                 [
                     {
-                        "timestamp": presence_ts,
-                        "metric.principal_id": row_val.metric.principal_id,
-                        "value": row_val.value,
+                        METRICS_CSV_COLUMNS.OUT_TS: presence_ts,
+                        METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER: row_val["resource.kafka.id"],
+                        METRICS_CSV_COLUMNS.OUT_PRINCIPAL: row_val.metric.principal_id,
+                        self.aggregation_metric: row_val.value,
                     }
                     for presence_flag, presence_ts in zip(row_switcher, row_range)
                     if bool(presence_flag) is True
                 ]
             )
-        return pd.DataFrame.from_records(
+        return self.aggregation_metric, pd.DataFrame.from_records(
             out,
             index=[
-                "timestamp",
-                "metric.principal_id",
+                METRICS_CSV_COLUMNS.OUT_TS,
+                METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
             ],
         )
 

@@ -21,7 +21,7 @@ class CCloudBillingDataset:
     sync_needed: bool = field(default=False, init=False)
     sync_runner_status: threading.Event = field(init=False)
     available_files: List[str] = field(init=False, default_factory=list)
-    billing_datasets: Dict[str, BillingDataframe] = field(init=False, default_factory=dict)
+    billing_dataframes: Dict[str, BillingDataframe] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.sync_runner_status = threading.Event()
@@ -40,7 +40,7 @@ class CCloudBillingDataset:
     def read_all(self):
         self.analyse_directory()
         available_file_paths = set([str(x) for x in self.available_files])
-        files_in_ds = set(self.billing_datasets.keys())
+        files_in_ds = set(self.billing_dataframes.keys())
         for file_path in available_file_paths - files_in_ds:
             self.generate_df_from_output(file_path=file_path)
         self.print_sample_df()

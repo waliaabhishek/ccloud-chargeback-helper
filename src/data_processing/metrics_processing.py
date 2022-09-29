@@ -9,6 +9,25 @@ from typing import Any, Dict, Tuple
 import pandas as pd
 from helpers import ensure_path, logged_method, sanitize_metric_name, timed_method
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
+from workflow_runner import BILLING_METRICS_SCOPE
+
+
+class MetricsCSVColumnNames:
+    IN_TS = "timestamp"
+    IN_PRINCIPAL = "metric.principal_id"
+    IN_KAFKA_CLUSTER = "resource.kafka.id"
+    IN_VALUE = "value"
+
+    OUT_TS = "Interval"
+    OUT_PRINCIPAL = "Principal"
+    OUT_KAFKA_CLUSTER = "KafkaID"
+    OUT_VALUE = "Value"
+
+    def override_column_names(self, key, value):
+        object.__setattr__(self, key, value)
+
+
+METRICS_CSV_COLUMNS = MetricsCSVColumnNames()
 
 
 class MetricsDatasetNames(Enum):
@@ -33,7 +52,7 @@ class MetricsDataframe:
 
     def __post_init__(self) -> None:
         if self.filename_for_read_in is None and self._metrics_output is not None:
-            self.generate_df_from_output()
+            self.read_dataframe_from_input()
         else:
             self.read_dataframe_from_file()
         self._metrics_output = None
@@ -55,15 +74,21 @@ class MetricsDataframe:
 
     def shape_specific_dataframes(self, ds_name_to_shape: str):
         temp = self.get_dataset(ds_name_to_shape).data.pivot(
-            index="timestamp", columns="metric.principal_id", values="value"
+            index=[METRICS_CSV_COLUMNS.IN_TS, METRICS_CSV_COLUMNS.IN_KAFKA_CLUSTER],
+            columns=METRICS_CSV_COLUMNS.IN_PRINCIPAL,
+            values=METRICS_CSV_COLUMNS.IN_VALUE,
         )
         self.append_dataset(ds_name=MetricsDatasetNames.pivoted_on_timestamp.name, is_shaped=True, ds=temp)
 
-    def generate_df_from_output(self):
-        temp = pd.DataFrame(self._metrics_output["data"])
-        temp["timestamp"] = pd.to_datetime(temp["timestamp"])
+    def is_shapeable(self) -> bool:
+        if self.aggregation_metric_name in BILLING_METRICS_SCOPE.values():
+            return True
+        else:
+            return False
+
+    def create_dataframe(self, metricsapi_repr_df: pd.DataFrame):
         core_ds_name = MetricsDatasetNames.metricsapi_representation.name
-        self.append_dataset(ds_name=core_ds_name, is_shaped=False, ds=temp)
+        self.append_dataset(ds_name=core_ds_name, is_shaped=False, ds=metricsapi_repr_df)
         print("Trying to shape selective datasets")
         if self.is_shapeable():
             self.shape_specific_dataframes(ds_name_to_shape=core_ds_name)
@@ -72,14 +97,18 @@ class MetricsDataframe:
             print("Did not detect the right aggregation metric. Ignoring.")
         self.print_sample_df()
 
-    def is_shapeable(self) -> bool:
-        if self.aggregation_metric_name in [
-            sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
-            sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
-        ]:
-            return True
-        else:
-            return False
+    def read_dataframe_from_file(self):
+        temp = pd.read_csv(
+            self.file_path,
+            parse_dates=[METRICS_CSV_COLUMNS.IN_TS],
+            infer_datetime_format=True,
+        )
+        self.create_dataframe(metricsapi_repr_df=temp)
+
+    def read_dataframe_from_input(self):
+        temp = pd.DataFrame(self._metrics_output["data"])
+        temp[METRICS_CSV_COLUMNS.IN_TS] = pd.to_datetime(temp[METRICS_CSV_COLUMNS.IN_TS])
+        self.create_dataframe(metricsapi_repr_df=temp)
 
     def print_sample_df(self) -> None:
         for name, ds in self.get_all_datasets():
@@ -108,22 +137,6 @@ class MetricsDataframe:
         )
         return date_folder_path, file_path
 
-    def read_dataframe_from_file(self):
-        temp = pd.read_csv(
-            self.file_path,
-            parse_dates=["timestamp"],
-            infer_datetime_format=True,
-        )
-        core_ds_name = MetricsDatasetNames.metricsapi_representation.name
-        self.append_dataset(ds_name=core_ds_name, is_shaped=False, ds=temp)
-        print("Trying to shape selective datasets")
-        if self.is_shapeable():
-            self.shape_specific_dataframes(ds_name_to_shape=core_ds_name)
-            print("Successfully re-shaped time-series metrics")
-        else:
-            print("Did not detect the right aggregation metric. Ignoring.")
-        self.print_sample_df()
-
     def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.MetricsData]):
         for name, ds in self.get_all_datasets():
             if ds.data is not None:
@@ -141,14 +154,17 @@ class MetricsDataframe:
                             date_value=dt_val, metric_name=self.aggregation_metric_name
                         )
                 elif name is MetricsDatasetNames.metricsapi_representation.name:
-                    ts_range = ds.data["timestamp"].dt.normalize().unique()
+                    ts_range = ds.data[METRICS_CSV_COLUMNS.IN_TS].dt.normalize().unique()
                     dt_range = ts_range.date
                     for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
                         subset = None
                         _, out_file_path = self.get_filepath(
                             date_value=dt_val, metric_dataset_name=MetricsDatasetNames.metricsapi_representation
                         )
-                        subset = ds.data[(ds.data["timestamp"] >= gt_eq_date) & (ds.data["timestamp"] < lt_date)]
+                        subset = ds.data[
+                            (ds.data[METRICS_CSV_COLUMNS.IN_TS] >= gt_eq_date)
+                            & (ds.data[METRICS_CSV_COLUMNS.IN_TS] < lt_date)
+                        ]
                         subset.to_csv(out_file_path, index=False, quoting=QUOTE_NONNUMERIC)
                         METRICS_PERSISTENCE_STORE.add_to_persistence(
                             date_value=dt_val, metric_name=self.aggregation_metric_name

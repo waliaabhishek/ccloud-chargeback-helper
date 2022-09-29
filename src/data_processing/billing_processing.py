@@ -97,7 +97,7 @@ class BillingDataframe:
             ]
             yield pd.DataFrame.from_records(temp_dict, index=BILLING_CSV_COLUMNS.c_ts)
 
-    def generate_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
+    def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
         # start_date, end_date = str(self.hourly_date_range[0]), str(
         #     self.hourly_date_range[len(self.hourly_date_range) - 1]
         # )

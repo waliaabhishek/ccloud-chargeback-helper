@@ -74,6 +74,14 @@ class CCloudAPIKeyList(CCloudBase):
                 output.append(item)
         return output
 
+    def find_sa_count_for_clusters(self, cluster_id: str) -> Dict[str, int]:
+        out = {}
+        for item in self.api_keys.values():
+            if item.cluster_id == cluster_id:
+                count = out.get(item.owner_id, int(0))
+                out[item.owner_id] = count + 1
+        return out
+
     def find_keys_with_sa_and_cluster(self, sa_id: str, cluster_id: str) -> List[CCloudAPIKey]:
         output = []
         for item in self.api_keys.values():
@@ -108,53 +116,3 @@ class CCloudAPIKeyList(CCloudBase):
     #                 item.api_key_description,
     #             )
     #         )
-
-    # def delete_keys_from_cache(self, sa_name) -> int:
-    #     count = 0
-    #     for item in self.api_keys.values():
-    #         if sa_name == item.owner_id:
-    #             self.api_keys.pop(item.api_key, None)
-    #             count += 1
-    #     return count
-
-    # def __delete_key_from_cache(self, key_id: str) -> int:
-    #     self.api_keys.pop(key_id, None)
-
-    # def create_api_key(self, env_id: str, cluster_id: str, sa_id: str, sa_name: str, description: str = None):
-    #     self.__confluent_cli_set_env(env_id)
-    #     self.__confluent_cli_set_cluster(cluster_id)
-    #     api_key_description = (
-    #         "API Key for " + sa_name + " created by CI/CD framework." if not description else description
-    #     )
-    #     cmd_create_api_key = (
-    #         "confluent api-key create -o json --service-account "
-    #         + sa_id
-    #         + " --resource "
-    #         + cluster_id
-    #         + ' --description "'
-    #         + api_key_description
-    #         + '"'
-    #         + self.__CMD_STDERR_TO_STDOUT
-    #     )
-    #     output = loads(self.__execute_subcommand(cmd_create_api_key))
-    #     # TODO: Add exception handling for not being able to create the API Key.
-    #     self.__add_to_cache(
-    #         CCloudAPIKey(
-    #             api_key=output["key"],
-    #             api_secret=output["secret"],
-    #             api_key_description=api_key_description,
-    #             owner_id=sa_id,
-    #             cluster_id=cluster_id,
-    #             created_at=str(datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")),
-    #         )
-    #     )
-    #     return (output, True)
-
-    # def delete_api_key(self, api_key: str) -> bool:
-    #     cmd_delete_api_key = "confluent api-key delete " + api_key
-    #     output = self.__execute_subcommand(cmd_delete_api_key)
-    #     if not output.startswith("Deleted API key "):
-    #         raise Exception("Could not delete the API Key.")
-    #     else:
-    #         self.__delete_key_from_cache(api_key)
-    #     return True
