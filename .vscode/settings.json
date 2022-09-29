@@ -2,6 +2,7 @@
   "cSpell.words": [
     "basepath",
     "CCME",
+    "cname",
     "dataframe",
     "dataframes",
     "isin",
@@ -10,6 +11,8 @@
     "ksqldbcm",
     "metricsapi",
     "mgmt",
-    "psutil"
+    "pname",
+    "psutil",
+    "ptype"
   ]
 }
