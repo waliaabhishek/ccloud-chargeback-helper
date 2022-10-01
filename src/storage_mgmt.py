@@ -114,3 +114,6 @@ BILLING_PERSISTENCE_STORE = PersistenceStore(
     out_path=os.path.join(STORAGE_PATH[DirType.PersistenceStats], f"Billing_{DirType.PersistenceStats.name}.json"),
     historical_data_to_maintain=-1,
 )
+CHARGEBACK_PERSISTENCE_STORE = PersistenceStore(
+    out_path=os.path.join(STORAGE_PATH[DirType.PersistenceStats], f"Chargeback_{DirType.PersistenceStats.name}.json")
+)
