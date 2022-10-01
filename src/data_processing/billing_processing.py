@@ -148,7 +148,6 @@ class BillingDataframe:
                 BILLING_CSV_COLUMNS.product_type,
             ],
         )
-        # return pd.DataFrame.from_records(out)
 
 
 # if __name__ == "__main__":
