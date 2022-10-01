@@ -1,13 +1,16 @@
+from csv import QUOTE_NONNUMERIC
 from dataclasses import dataclass, field
 import datetime
 from enum import Enum
+import os
 import pandas as pd
-from typing import Dict
+from typing import Dict, List
 
 from ccloud.org import CCloudObjectsHandler
 from data_processing.billing_processing import BILLING_CSV_COLUMNS
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
-from helpers import sanitize_metric_name
+from helpers import ensure_path, sanitize_metric_name
+from storage_mgmt import CHARGEBACK_PERSISTENCE_STORE, METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
 from workflow_runner import BILLING_METRICS_SCOPE
 
 
@@ -20,6 +23,9 @@ class ChargebackColumnNames:
 
     def override_column_names(self, key, value):
         object.__setattr__(self, key, value)
+
+    def all_column_values(self) -> List:
+        return [y for x, y in vars(self).items()]
 
 
 CHARGEBACK_COLUMNS = ChargebackColumnNames()
@@ -39,7 +45,6 @@ class ChargebackUnit:
     ):
         if (principal, time_slice) in self.cb_dict:
             u, s, detailed_split = self.cb_dict[(principal, time_slice)]
-            detailed_split: Dict = detailed_split
             detailed_split[product_type_name] = (
                 detailed_split.get(product_type_name, float(0)) + additional_usage_cost + additional_usage_cost
             )
@@ -53,13 +58,46 @@ class ChargebackUnit:
             detailed_split[product_type_name] = additional_shared_cost + additional_usage_cost
             self.cb_dict[(principal, time_slice)] = (additional_usage_cost, additional_shared_cost, detailed_split)
 
+    def read_from_file(self, file_path: str):
+        temp = pd.read_csv(
+            file_path,
+            parse_dates=[CHARGEBACK_COLUMNS.TS],
+            infer_datetime_format=True,
+            index_col=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS],
+        )
+        for cb_row in temp.itertuples(index=True, name="ChargebackRow"):
+            detailed_split = {}
+            for k, v in cb_row._asdict().items():
+                if k not in vars(CHARGEBACK_COLUMNS).values():
+                    detailed_split[k] = v
+            self.cb_dict[(cb_row.Index[0], cb_row.Index[1])] = (
+                getattr(cb_row, CHARGEBACK_COLUMNS.USAGE_COST),
+                getattr(cb_row, CHARGEBACK_COLUMNS.SHARED_COST),
+                detailed_split,
+            )
 
-CHARGEBACK_UNITS = ChargebackUnit()
+    def get_dataframe(self) -> pd.DataFrame:
+        # TODO: Getting this dataframe is amazingly underoptimized.
+        # Uses an intermittent list of dict conversion and then another step to convert to dataframe
+        # No clue at the moment on how to improve this.
+        temp_records = []
+        for (k1, k2), (usage, shared, extended) in self.cb_dict.items():
+            temp_dict = {
+                CHARGEBACK_COLUMNS.PRINCIPAL: k1,
+                CHARGEBACK_COLUMNS.TS: k2,
+                CHARGEBACK_COLUMNS.USAGE_COST: usage,
+                CHARGEBACK_COLUMNS.SHARED_COST: shared,
+            }
+            temp_dict.update(extended)
+            temp_records.append(temp_dict)
+        return pd.DataFrame.from_records(temp_records, index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS])
 
 
 @dataclass(kw_only=True)
 class ChargebackDataframe:
     cc_objects: CCloudObjectsHandler = field(init=True, repr=False)
+    is_hourly_bucket: bool = field(init=True, default=True)
+    cb_unit: ChargebackUnit = field(init=False, repr=False)
     # METRICS_CSV_COLUMNS.OUT_TS: presence_ts, -- Index1
     # METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER: row_val["resource.kafka.id"], -- Index2
     # METRICS_CSV_COLUMNS.OUT_PRINCIPAL: row_val.metric.principal_id, -- column
@@ -85,14 +123,25 @@ class ChargebackDataframe:
     #     BILLING_CSV_COLUMNS.product_type,
     # ],
     _billings_dataframe: pd.DataFrame = field(init=True, repr=False)
-
-    cb_unit: ChargebackUnit = field(init=False, repr=False)
-    active_producers: pd.DataFrame = field(init=False)
-    active_consumers: pd.DataFrame = field(init=False)
+    file_path: str = field(init=True, repr=False, default=None)
 
     def __post_init__(self) -> None:
         self.cb_unit = ChargebackUnit()
-        self.compute_output()
+        if self.file_path is not None:
+            self.read_from_file()
+        else:
+            self.compute_output()
+
+    def read_from_file(self):
+        self.cb_unit.read_from_file(self.file_path)
+
+    def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.OutputData]):
+        df = self.cb_unit.get_dataframe()
+        unique_dates = df.index.unique(level=CHARGEBACK_COLUMNS.TS)
+        for item in unique_dates:
+            _, file_name, file_path = self.get_filepath(time_slice=item)
+            df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
+            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=item, metric_name=file_name)
 
     def get_active_client_count(self, df: pd.DataFrame) -> int:
         return int(df[METRICS_CSV_COLUMNS.OUT_PRINCIPAL].count())
@@ -106,6 +155,12 @@ class ChargebackDataframe:
                 bill_row.Index[3],
                 bill_row.Index[4],
             )
+            # remove the hour date from ts for daily aggregations
+            if not self.is_hourly_bucket:
+                row_ts = str(row_ts.date())
+            else:
+                row_ts = row_ts.strftime("%Y_%m_%d_%H_%M_%S")
+
             row_cname = getattr(bill_row, BILLING_CSV_COLUMNS.cluster_name.name)
             row_cost = getattr(bill_row, BILLING_CSV_COLUMNS.c_split_total.name)
             if row_ptype == "KafkaBase":
