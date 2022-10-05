@@ -1,10 +1,12 @@
 {
   "cSpell.words": [
+    "addl",
     "basepath",
     "CCME",
     "cname",
     "dataframe",
     "dataframes",
+    "inplace",
     "isin",
     "itertuples",
     "Ksqldb",
