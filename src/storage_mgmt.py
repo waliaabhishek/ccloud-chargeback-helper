@@ -70,7 +70,7 @@ class PersistenceStore:
         return temp[self.historical_data_to_maintain :]
 
     def rehydrate_persistence_status(self):
-        if os.path.exists(self.out_path):
+        if os.path.exists(self.out_path) and os.stat(self.out_path).st_size > 0:
             with open(self.out_path, "r") as f:
                 self.__status = load(f)
         for item in self.find_datasets_to_evict():
