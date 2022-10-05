@@ -4,20 +4,11 @@ from argparse import Namespace
 from logging import debug
 from typing import Dict
 import yaml
-from data_processing.billing_processing import BillingDataframe
-import datetime
 
 
-import helpers
-from ccloud.org import CCloudOrg, CCloudOrgList
-from helpers import logged_method, sanitize_metric_name, timed_method
+from ccloud.org import CCloudOrgList
+from helpers import logged_method, sanitize_metric_name, timed_method, env_parse_replace
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType, current_memory_usage, sync_to_file
-
-
-BILLING_METRICS_SCOPE = {
-    "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
-    "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
-}
 
 
 class WorkflowStage(Enum):
@@ -32,7 +23,7 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
     debug("Trying to parse Configuration File: " + config_yaml_path)
     with open(config_yaml_path, "r") as config_file:
         core_config = yaml.safe_load(config_file)
-    helpers.env_parse_replace(core_config)
+    env_parse_replace(core_config)
     return core_config
 
 
@@ -74,6 +65,8 @@ def execute_workflow(arg_flags: Namespace):
     )
 
     run_gather_cycle(ccloud_orgs=ccloud_orgs)
+
+    run_calculate_cycle(ccloud_orgs=ccloud_orgs)
 
     # Begin shutdown process.
     METRICS_PERSISTENCE_STORE.stop_sync()
