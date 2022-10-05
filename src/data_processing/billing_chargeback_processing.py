@@ -1,17 +1,11 @@
-from csv import QUOTE_NONNUMERIC
 from dataclasses import dataclass, field
 import datetime
-from enum import Enum
-import os
 import pandas as pd
 from typing import Dict, List
 
-from ccloud.org import CCloudObjectsHandler
 from data_processing.billing_processing import BILLING_CSV_COLUMNS
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
-from helpers import ensure_path, sanitize_metric_name
-from storage_mgmt import CHARGEBACK_PERSISTENCE_STORE, METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
-from workflow_runner import BILLING_METRICS_SCOPE
+from helpers import BILLING_METRICS_SCOPE
 
 
 class ChargebackColumnNames:
@@ -95,7 +89,7 @@ class ChargebackUnit:
 
 @dataclass(kw_only=True)
 class ChargebackDataframe:
-    cc_objects: CCloudObjectsHandler = field(init=True, repr=False)
+    cc_objects: object = field(init=True, repr=False)
     is_hourly_bucket: bool = field(init=True, default=True)
     cb_unit: ChargebackUnit = field(init=False, repr=False)
     # METRICS_CSV_COLUMNS.OUT_TS: presence_ts, -- Index1
@@ -122,7 +116,7 @@ class ChargebackDataframe:
     #     BILLING_CSV_COLUMNS.product_name,
     #     BILLING_CSV_COLUMNS.product_type,
     # ],
-    _billings_dataframe: pd.DataFrame = field(init=True, repr=False)
+    _billing_dataframe: pd.DataFrame = field(init=True, repr=False)
     file_path: str = field(init=True, repr=False, default=None)
 
     def __post_init__(self) -> None:
@@ -135,19 +129,22 @@ class ChargebackDataframe:
     def read_from_file(self):
         self.cb_unit.read_from_file(self.file_path)
 
-    def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.OutputData]):
-        df = self.cb_unit.get_dataframe()
-        unique_dates = df.index.unique(level=CHARGEBACK_COLUMNS.TS)
-        for item in unique_dates:
-            _, file_name, file_path = self.get_filepath(time_slice=item)
-            df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
-            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=item, metric_name=file_name)
-
     def get_active_client_count(self, df: pd.DataFrame) -> int:
         return int(df[METRICS_CSV_COLUMNS.OUT_PRINCIPAL].count())
 
-    def compute_output(self):
-        for bill_row in self._billings_dataframe.itertuples(index=True, name="BillingRow"):
+    def compute_output(
+        self,
+        time_slice: datetime.datetime,
+        force_data_add: bool = False,
+        addl_billing_dataframe: pd.DataFrame = None,
+        addl_metrics_dataframe: pd.DataFrame = None,
+    ):
+        billing_data = self._billing_dataframe
+        metrics_data = self._metrics_dataframe
+        if force_data_add:
+            billing_data = addl_billing_dataframe
+            metrics_data = addl_metrics_dataframe
+        for bill_row in billing_data.itertuples(index=True, name="BillingRow"):
             row_ts, row_env, row_cid, row_pname, row_ptype = (
                 bill_row.Index[0],
                 bill_row.Index[1],
@@ -161,8 +158,8 @@ class ChargebackDataframe:
             else:
                 row_ts = row_ts.strftime("%Y_%m_%d_%H_%M_%S")
 
-            row_cname = getattr(bill_row, BILLING_CSV_COLUMNS.cluster_name.name)
-            row_cost = getattr(bill_row, BILLING_CSV_COLUMNS.c_split_total.name)
+            row_cname = getattr(bill_row, BILLING_CSV_COLUMNS.cluster_name)
+            row_cost = getattr(bill_row, BILLING_CSV_COLUMNS.c_split_total)
             if row_ptype == "KafkaBase":
                 # GOAL: Split Cost equally across all the SA/Users that have API Keys for that Kafka Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
@@ -177,7 +174,7 @@ class ChargebackDataframe:
                 col_name = BILLING_METRICS_SCOPE[1]
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = self._metrics_dataframe[self._metrics_dataframe[col_name] > 0][
+                metric_rows = metrics_data[metrics_data[col_name] > 0][
                     [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
                 ].loc[[row_ts, row_cid]]
                 # Find the total consumption during that time slice
@@ -200,7 +197,7 @@ class ChargebackDataframe:
                 col_name = BILLING_METRICS_SCOPE["request_bytes"]
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = self._metrics_dataframe[self._metrics_dataframe[col_name] > 0][
+                metric_rows = metrics_data[metrics_data[col_name] > 0][
                     [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
                 ].loc[[row_ts, row_cid]]
                 # Find the total consumption during that time slice
@@ -227,7 +224,7 @@ class ChargebackDataframe:
                 # col_name = BILLING_METRICS_SCOPE['request_bytes']
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = self._metrics_dataframe.loc[[row_ts, row_cid]]
+                metric_rows = metrics_data.loc[[row_ts, row_cid]]
                 # Find the total consumption during that time slice
                 agg_data = metric_rows[[list(BILLING_METRICS_SCOPE.values())]].agg(["sum"])
                 # add the Ratio consumption column by dividing every row by total consuption.

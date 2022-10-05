@@ -1,8 +1,6 @@
-from copy import deepcopy
 from dataclasses import dataclass, field
 import datetime
-from time import sleep
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set
 import pandas as pd
 from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
 from ccloud.core_api.api_keys import CCloudAPIKeyList
@@ -12,42 +10,41 @@ from ccloud.core_api.environments import CCloudEnvironmentList
 from ccloud.core_api.ksqldb_clusters import CCloudKsqldbClusterList
 from ccloud.core_api.service_accounts import CCloudServiceAccountList
 from ccloud.core_api.user_accounts import CCloudUserAccountList
-from ccloud.telemetry_api.billings_csv_manager import CCloudBillingDataset
-from ccloud.telemetry_api.chargeback_manager import ChargebackDataset
-from ccloud.telemetry_api.telemetry_manager import CCloudMetricsDataset
-from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
-from data_processing.billing_chargeback_processing import ChargebackDataframe
+from ccloud.telemetry_api.billings_csv_manager import CCloudBillingManager
+from ccloud.telemetry_api.chargeback_manager import ChargebackManager
+from ccloud.telemetry_api.telemetry_manager import CCloudMetricsManager
+from ccloud.model import CCMEReq_Granularity
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
-from helpers import sanitize_id, sanitize_metric_name
+from helpers import sanitize_id, BILLING_METRICS_SCOPE
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
-from workflow_runner import BILLING_METRICS_SCOPE
 
 
 @dataclass
 class CCloudBillingHandler:
-    billing_dataset: CCloudBillingDataset = field(init=False)
+    billing_manager: CCloudBillingManager = field(init=False)
     available_hour_slices_in_dataset: List[str] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
-        self.billing_dataset = CCloudBillingDataset()
+        self.billing_manager = CCloudBillingManager()
+        self.read_all()
 
     def read_all(self):
-        self.billing_dataset.read_all()
+        self.billing_manager.read_all()
         self.available_hour_slices_in_dataset = sorted(list(self.__calculate_daterange_in_all_datasets()))
 
     def execute_requests(self):
-        self.billing_dataset.read_all()
+        self.billing_manager.read_all()
 
     def __calculate_daterange_in_all_datasets(self) -> Set[str]:
         out = set()
-        for _, billing_dataframe in self.billing_dataset.billing_dataframes.items():
+        for _, billing_dataframe in self.billing_manager.billing_dataframes.items():
             out = out.union(billing_dataframe.hourly_date_range)
         return out
 
-    def get_hourly_dataset(self, date_value: datetime.datetime) -> pd.DataFrame:
+    def get_hourly_dataset(self, time_slice: datetime.datetime) -> pd.DataFrame:
         out = pd.DataFrame()
-        for filename, billing_dataframe in self.billing_dataset.billing_dataframes.items():
-            file_level_df = billing_dataframe.get_hourly_dataset(datetime_slice_iso_format=date_value)
+        for filename, billing_dataframe in self.billing_manager.billing_dataframes.items():
+            file_level_df = billing_dataframe.get_hourly_dataset(datetime_slice_iso_format=time_slice)
             out = pd.concat([out, file_level_df])
         return out
 
@@ -57,7 +54,7 @@ class CCloudMetricsHandler(CCloudBase):
     _requests: List
     days_in_memory: int = field(default=7)
 
-    metrics_dataset: Dict[str, CCloudMetricsDataset] = field(init=False, default_factory=dict)
+    metrics_manager: Dict[str, CCloudMetricsManager] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -69,20 +66,20 @@ class CCloudMetricsHandler(CCloudBase):
 
     def read_all(self):
         for req in self._requests:
-            http_req = CCloudMetricsDataset(
+            http_req = CCloudMetricsManager(
                 _base_payload=req,
                 ccloud_url=self.url,
                 days_in_memory=self.days_in_memory,
             )
             self.__add_to_cache(http_req=http_req)
 
-    def __add_to_cache(self, http_req: CCloudMetricsDataset) -> None:
+    def __add_to_cache(self, http_req: CCloudMetricsManager) -> None:
         if http_req.req_id == "":
-            http_req.req_id = str(len(self.metrics_dataset))
-        self.metrics_dataset[http_req.req_id] = http_req
+            http_req.req_id = str(len(self.metrics_manager))
+        self.metrics_manager[http_req.req_id] = http_req
 
     def execute_requests(self, output_basepath: str):
-        for req_name, request in self.metrics_dataset.items():
+        for req_name, request in self.metrics_manager.items():
             for req_interval in self.generate_iso8601_dt_intervals(
                 granularity=CCMEReq_Granularity.P1D.name, metric_name=request.aggregation_metric, intervals=7
             ):
@@ -90,7 +87,7 @@ class CCloudMetricsHandler(CCloudBase):
                 request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
 
     def export_metrics_to_csv(self, output_basepath: str):
-        for req_name, request in self.metrics_dataset.items():
+        for req_name, request in self.metrics_manager.items():
             for metrics_date, metrics_dataframe in request.metrics_dataframes.items():
                 metrics_dataframe.output_to_csv(basepath=output_basepath)
 
@@ -104,18 +101,28 @@ class CCloudMetricsHandler(CCloudBase):
             else:
                 print(f"Dataset already available for metric {metric_name} on {curr[1]}")
 
-    def get_hourly_dataset(self, date_value: datetime.datetime, billing_mgmt: bool = True):
-        out = pd.DataFrame()
+    def get_hourly_dataset(self, time_slice: datetime.datetime, billing_mgmt: bool = True):
+        out = pd.DataFrame(
+            columns=[
+                METRICS_CSV_COLUMNS.OUT_TS,
+                METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
+                METRICS_CSV_COLUMNS.OUT_PRINCIPAL,
+            ]
+        )
         data_missing_on_disk = False
-        for _, telemetry_dataset in self.metrics_dataset.items():
+        for _, telemetry_dataset in self.metrics_manager.items():
             if billing_mgmt and telemetry_dataset.aggregation_metric not in BILLING_METRICS_SCOPE.values():
                 continue
-            metric_name, file_level_df = telemetry_dataset.get_hourly_dataset(datetime_slice_iso_format=date_value)
-            if file_level_df is not None:
+            metric_name, file_level_df = telemetry_dataset.get_hourly_dataset(datetime_slice_iso_format=time_slice)
+            if file_level_df is not None and not file_level_df.empty:
                 out = out.merge(
                     file_level_df,
                     how="outer",
-                    on=[METRICS_CSV_COLUMNS.OUT_TS, METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER],
+                    on=[
+                        METRICS_CSV_COLUMNS.OUT_TS,
+                        METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
+                        METRICS_CSV_COLUMNS.OUT_PRINCIPAL,
+                    ],
                 )
             else:
                 data_missing_on_disk = True
@@ -173,51 +180,13 @@ class CCloudObjectsHandler:
 @dataclass
 class CCloudChargebackHandler:
     cc_objects: CCloudObjectsHandler = field(init=True)
-    cb_dataset: ChargebackDataset = field(init=False)
+    cb_manager: ChargebackManager = field(init=False)
 
     def __post_init__(self) -> None:
-        self.url = self._ccloud_connection.get_endpoint_url(
-            key=self._ccloud_connection.uri.telemetry_query_metrics
-        ).format(dataset="cloud")
-        self.read_all()
-        self._requests = None
-
-    def read_all(self):
-        for req in self._requests:
-            http_req = CCloudMetricsDataset(
-                _base_payload=req,
-                ccloud_url=self.url,
-                days_in_memory=self.days_in_memory,
-            )
-            self.__add_to_cache(http_req=http_req)
-
-    def __add_to_cache(self, http_req: CCloudMetricsDataset) -> None:
-        if http_req.req_id == "":
-            http_req.req_id = str(len(self.metrics_dataset))
-        self.metrics_dataset[http_req.req_id] = http_req
-
-    def execute_requests(self, output_basepath: str):
-        for req_name, request in self.metrics_dataset.items():
-            for req_interval in self.generate_iso8601_dt_intervals(
-                granularity=CCMEReq_Granularity.P1D.name, metric_name=request.aggregation_metric, intervals=7
-            ):
-                request.execute_request(http_connection=self._ccloud_connection, date_range=req_interval)
-                request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
+        self.cb_manager = ChargebackManager(cc_objects=self.cc_objects, days_in_memory=3)
 
     def export_metrics_to_csv(self, output_basepath: str):
-        for req_name, request in self.metrics_dataset.items():
-            for metrics_date, metrics_dataframe in request.metrics_dataframes.items():
-                metrics_dataframe.output_to_csv(basepath=output_basepath)
-
-    def generate_iso8601_dt_intervals(self, granularity: str, metric_name: str, intervals: int = 7):
-        curr_date = datetime.datetime.now(tz=datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        for _ in range(intervals):
-            curr_date = curr_date - datetime.timedelta(days=1)
-            curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
-            if not METRICS_PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
-                yield curr
-            else:
-                print(f"Dataset already available for metric {metric_name} on {curr[1]}")
+        self.cb_manager.output_to_csv(basepath=output_basepath)
 
     def get_hourly_dataset(self, date_value: datetime.datetime, billing_mgmt: bool = True):
         out = pd.DataFrame()
@@ -243,7 +212,7 @@ class CCloudChargebackHandler:
         billing_dataframe: pd.DataFrame,
         metrics_dataframe: pd.DataFrame,
     ):
-        self.cb_dataset.run_calculations(
+        self.cb_manager.run_calculations(
             time_slice=time_slice, billing_dataframe=billing_dataframe, metrics_dataframe=metrics_dataframe
         )
 
@@ -305,9 +274,9 @@ class CCloudOrg:
 
     def run_calculations(self):
         for hour_slice in self.find_available_hour_slices_in_billing_datasets():
-            billing_data = self.billing_handler.get_hourly_dataset(hour_slice)
+            billing_data = self.billing_handler.get_hourly_dataset(time_slice=hour_slice)
             metrics_found, metrics_data = self.metrics_handler.get_hourly_dataset(
-                date_value=hour_slice, billing_mgmt=True
+                time_slice=hour_slice, billing_mgmt=True
             )
             if not billing_data.empty and not metrics_data.empty:
                 self.chargeback_handler.run_calculations(
@@ -315,6 +284,9 @@ class CCloudOrg:
                     billing_dataframe=billing_data,
                     metrics_dataframe=metrics_data,
                 )
+            # TODO: Need to add more status for when data is missing, cannot silently ignore.
+            # Bad user experience otherwise.
+        self.chargeback_handler.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.OutputData])
 
 
 @dataclass(kw_only=True)

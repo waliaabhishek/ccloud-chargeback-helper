@@ -5,7 +5,6 @@ from typing import Dict, List
 
 from data_processing.billing_processing import (
     BillingDataframe,
-    BillingCSVColumnNames,
     BILLING_CSV_COLUMNS,
     BillingDatasetNames,
 )
@@ -14,7 +13,7 @@ import pandas as pd
 
 
 @dataclass(kw_only=True)
-class CCloudBillingDataset:
+class CCloudBillingManager:
     path_to_monitor: str = field(default=STORAGE_PATH[DirType.BillingsData])
     flush_to_disk_interval_sec: int = field(default=3)
 
@@ -46,11 +45,11 @@ class CCloudBillingDataset:
         self.print_sample_df()
 
     def __add_to_cache(self, file_name: str, ds_name: str, is_shaped: bool, ds: pd.DataFrame):
-        self.parsed_datasets[file_name] = BillingDataframe(dataset_name=ds_name, is_shaped=is_shaped, data=ds)
+        self.billing_dataframes[file_name] = BillingDataframe(dataset_name=ds_name, is_shaped=is_shaped, data=ds)
 
     def generate_df_from_output(self, file_path: str):
         temp = pd.read_csv(
-            self.file_path,
+            file_path,
             parse_dates=[BILLING_CSV_COLUMNS.start_date, BILLING_CSV_COLUMNS.end_date],
             infer_datetime_format=True,
         )
@@ -62,8 +61,7 @@ class CCloudBillingDataset:
         )
 
     def print_sample_df(self) -> None:
-        for name, billling_ds in self.get_all_datasets():
-            if billling_ds.data is not None:
-                print(f"Sample Dataset for {name}, is_shaped: {billling_ds.is_shaped}:")
-                print(billling_ds.data.head(3))
-                print(billling_ds.data.info())
+        for name, billling_ds in self.billing_dataframes.items():
+            print(f"Sample Dataset for {name}, is_shaped: {billling_ds.is_shaped}:")
+            print(billling_ds.data.info())
+            print(billling_ds.data.head(3))

@@ -4,12 +4,12 @@ from csv import QUOTE_NONNUMERIC
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
-from typing import Any, Dict, Tuple
+from typing import Dict, Tuple
 
 import pandas as pd
-from helpers import ensure_path, logged_method, sanitize_metric_name, timed_method
+from helpers import ensure_path
 from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
-from workflow_runner import BILLING_METRICS_SCOPE
+from helpers import BILLING_METRICS_SCOPE
 
 
 class MetricsCSVColumnNames:
@@ -99,7 +99,7 @@ class MetricsDataframe:
 
     def read_dataframe_from_file(self):
         temp = pd.read_csv(
-            self.file_path,
+            self.filename_for_read_in,
             parse_dates=[METRICS_CSV_COLUMNS.IN_TS],
             infer_datetime_format=True,
         )
@@ -125,7 +125,7 @@ class MetricsDataframe:
     def get_filepath(
         self,
         date_value: datetime.date,
-        basepath=STORAGE_PATH(DirType.MetricsData),
+        basepath=STORAGE_PATH[DirType.MetricsData],
         metric_dataset_name: MetricsDatasetNames = MetricsDatasetNames.metricsapi_representation,
     ):
         date_folder_path = os.path.join(basepath, f"{str(date_value)}")
@@ -139,33 +139,33 @@ class MetricsDataframe:
 
     def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.MetricsData]):
         for name, ds in self.get_all_datasets():
-            if ds.data is not None:
-                if name is MetricsDatasetNames.pivoted_on_timestamp.name:
-                    ts_range = ds.data.index.normalize().unique()
-                    dt_range = ts_range.date
-                    for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
-                        subset = None
-                        _, out_file_path = self.get_filepath(
-                            date_value=dt_val, metric_dataset_name=MetricsDatasetNames.pivoted_on_timestamp
-                        )
-                        subset = ds.data[(ds.data.index >= gt_eq_date) & (ds.data.index < lt_date)]
-                        subset.to_csv(out_file_path, quoting=QUOTE_NONNUMERIC)
-                        METRICS_PERSISTENCE_STORE.add_to_persistence(
-                            date_value=dt_val, metric_name=self.aggregation_metric_name
-                        )
-                elif name is MetricsDatasetNames.metricsapi_representation.name:
-                    ts_range = ds.data[METRICS_CSV_COLUMNS.IN_TS].dt.normalize().unique()
-                    dt_range = ts_range.date
-                    for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
-                        subset = None
-                        _, out_file_path = self.get_filepath(
-                            date_value=dt_val, metric_dataset_name=MetricsDatasetNames.metricsapi_representation
-                        )
-                        subset = ds.data[
-                            (ds.data[METRICS_CSV_COLUMNS.IN_TS] >= gt_eq_date)
-                            & (ds.data[METRICS_CSV_COLUMNS.IN_TS] < lt_date)
-                        ]
-                        subset.to_csv(out_file_path, index=False, quoting=QUOTE_NONNUMERIC)
-                        METRICS_PERSISTENCE_STORE.add_to_persistence(
-                            date_value=dt_val, metric_name=self.aggregation_metric_name
-                        )
+            # if ds.data is not None:
+            #     if name is MetricsDatasetNames.pivoted_on_timestamp.name:
+            #         ts_range = ds.data.index[0].normalize().unique()
+            #         dt_range = ts_range.date
+            #         for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
+            #             subset = None
+            #             _, out_file_path = self.get_filepath(
+            #                 date_value=dt_val, metric_dataset_name=MetricsDatasetNames.pivoted_on_timestamp
+            #             )
+            #             subset = ds.data[(ds.data.index >= gt_eq_date) & (ds.data.index < lt_date)]
+            #             subset.to_csv(out_file_path, quoting=QUOTE_NONNUMERIC)
+            #             METRICS_PERSISTENCE_STORE.add_to_persistence(
+            #                 date_value=dt_val, metric_name=self.aggregation_metric_name
+            #             )
+            if name is MetricsDatasetNames.metricsapi_representation.name:
+                ts_range = ds.data[METRICS_CSV_COLUMNS.IN_TS].dt.normalize().unique()
+                dt_range = ts_range.date
+                for dt_val, gt_eq_date, lt_date in self.get_date_ranges(ts_range, dt_range):
+                    subset = None
+                    _, out_file_path = self.get_filepath(
+                        date_value=dt_val, metric_dataset_name=MetricsDatasetNames.metricsapi_representation
+                    )
+                    subset = ds.data[
+                        (ds.data[METRICS_CSV_COLUMNS.IN_TS] >= gt_eq_date)
+                        & (ds.data[METRICS_CSV_COLUMNS.IN_TS] < lt_date)
+                    ]
+                    subset.to_csv(out_file_path, index=False, quoting=QUOTE_NONNUMERIC)
+                    METRICS_PERSISTENCE_STORE.add_to_persistence(
+                        date_value=dt_val, metric_name=self.aggregation_metric_name
+                    )

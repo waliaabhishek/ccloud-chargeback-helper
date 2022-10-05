@@ -1,38 +1,66 @@
+from csv import QUOTE_NONNUMERIC
 import datetime
 from copy import deepcopy
 from dataclasses import dataclass, field
 import os
 from typing import Dict, List, Tuple
 import pandas as pd
-import requests
-from ccloud.connections import CCloudConnection
-from ccloud.org import CCloudObjectsHandler
 from data_processing.billing_chargeback_processing import ChargebackDataframe
-from data_processing.metrics_processing import METRICS_CSV_COLUMNS, MetricsDataframe, MetricsDatasetNames
-from helpers import ensure_path, sanitize_id, sanitize_metric_name
-from requests.auth import HTTPBasicAuth
+from helpers import ensure_path
 
-from ccloud.model import CCMEReq_CompareOp, CCMEReq_ConditionalOp, CCMEReq_Granularity, CCMEReq_UnaryOp
-from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
+from storage_mgmt import CHARGEBACK_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 
 @dataclass(kw_only=True)
-class ChargebackDataset:
-    cc_objects: CCloudObjectsHandler = field(init=True, repr=False)
-    daily_dataset: Dict[str, ChargebackDataframe] = field(init=False)
-    hourly_dataset: Dict[str, ChargebackDataframe] = field(init=False)
+class ChargebackManager:
+    cc_objects: object = field(init=True, repr=False)
+    daily_dataset: Dict[str, ChargebackDataframe] = field(init=True, default_factory=dict)
+    hourly_dataset: Dict[str, ChargebackDataframe] = field(init=True, default_factory=dict)
+    days_in_memory: int = field(default=3)
 
     def __post_init__(self) -> None:
+        # self.daily_dataset = dict()
+        # self.hourly_dataset = dict()
         pass
 
     def run_calculations(
         self, time_slice: datetime.datetime, billing_dataframe: pd.DataFrame, metrics_dataframe: pd.DataFrame
     ):
-        # Cannot keep instantiating new objects all the time as the daily object needs to update its dataset not overwrite.
-        # Need to figure out a way to add more data if the ChargebackDataframe already exists.
-        pass
+        self.read_dataset_into_cache(datetime_value=time_slice)
+        d_key, t_key = self.__determine_key_names(key=time_slice)
+        d, t = self.__is_key_present_in_cache(time_slice)
+        if d:
+            self.daily_dataset[d_key].compute_output(
+                force_data_add=True, addl_billing_dataframe=billing_dataframe, addl_metrics_dataframe=metrics_dataframe
+            )
+        else:
+            self.add_dataset(
+                datetime_value=time_slice,
+                is_hourly_data=False,
+                df=ChargebackDataframe(
+                    cc_objects=self.cc_objects,
+                    is_hourly_bucket=False,
+                    _metrics_dataframe=metrics_dataframe,
+                    _billing_dataframe=billing_dataframe,
+                ),
+            )
+        if t:
+            self.hourly_dataset[t_key].compute_output(
+                force_data_add=True, addl_billing_dataframe=billing_dataframe, addl_metrics_dataframe=metrics_dataframe
+            )
+        else:
+            self.add_dataset(
+                datetime_value=time_slice,
+                is_hourly_data=True,
+                df=ChargebackDataframe(
+                    cc_objects=self.cc_objects,
+                    is_hourly_bucket=True,
+                    _metrics_dataframe=metrics_dataframe,
+                    _billing_dataframe=billing_dataframe,
+                ),
+            )
 
-    def read_dataset_into_cache(self, datetime_value: datetime.datetime) -> bool:
+    def read_dataset_into_cache(self, datetime_value: datetime.datetime):
         d, t = self.__is_key_present_in_cache(key=datetime_value)
         if not d:
             _, _, file_path = self.get_filepath(time_slice=datetime_value, is_hourly_bucket=False)
@@ -66,29 +94,66 @@ class ChargebackDataset:
         self,
         time_slice: datetime.datetime,
         is_hourly_bucket: bool,
-        basepath=STORAGE_PATH(DirType.OutputData),
+        basepath=STORAGE_PATH[DirType.OutputData],
     ):
         date_folder_path = os.path.join(basepath, f"{str(time_slice.date())}")
         ensure_path(path=date_folder_path)
 
         if is_hourly_bucket:
-            file_name = (f"{time_slice.strftime('%H_%M_%S')}__" + f"chargeback.csv",)
+            file_name = f"{time_slice.strftime('%H_%M_%S')}__chargeback.csv"
         else:
-            file_name = (f"DailyAggregate" + f"Chargeback.csv",)
-        file_path = os.path.join(basepath, file_name)
+            file_name = f"DailyAggregate__Chargeback.csv"
+        file_path = os.path.join(basepath, f"{str(time_slice.date())}", file_name)
         return date_folder_path, file_name, file_path
 
-    def __is_key_present_in_cache(self, key: datetime.datetime) -> Tuple(bool, bool):
+    def __is_key_present_in_cache(self, key: datetime.datetime) -> Tuple[bool, bool]:
         d, t = self.__determine_key_names(key=key)
         return d in self.daily_dataset.keys(), t in self.hourly_dataset.keys()
 
     def __is_file_present(self, file_path: str) -> bool:
         return os.path.exists(file_path) and os.path.isfile(file_path)
 
-    def __determine_key_names(self, key: datetime.datetime) -> Tuple(str, str):
+    def __determine_key_names(self, key: datetime.datetime) -> Tuple[str, str]:
         date_key = key.date().strftime("%Y_%m_%d")
         time_key = key.strftime("%Y_%m_%d_%H_%M_%S")
         return date_key, time_key
+
+    def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.OutputData]):
+        for k, v in self.daily_dataset.items():
+            df = v.cb_unit.get_dataframe()
+            _, file_name, file_path = self.get_filepath(
+                time_slice=datetime.datetime.fromisoformat(k),
+                is_hourly_bucket=False,
+                basepath=basepath,
+            )
+            df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
+            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=k, metric_name=file_name)
+        for k, v in self.hourly_dataset.items():
+            df = v.cb_unit.get_dataframe()
+            _, file_name, file_path = self.get_filepath(
+                time_slice=datetime.datetime.fromisoformat(k),
+                is_hourly_bucket=True,
+                basepath=basepath,
+            )
+            df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
+            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=k, metric_name=file_name)
+
+    def find_datasets_to_evict(self) -> Tuple[List[str], List[str]]:
+        out_daily_feed = list(self.daily_dataset.keys()).sort(reverse=True)[self.days_in_memory - 1 :]
+
+        temp_dates = list(
+            set().update(
+                str(datetime.datetime.strptime(x, "%Y_%m_%d_%H_%M_%S").date()) for x in self.hourly_dataset.keys()
+            )
+        ).sort(reverse=True)[self.days_in_memory - 1 :]
+
+        out_hourly_feed = [
+            x
+            for x in self.hourly_dataset.keys()
+            if str(datetime.datetime.strptime(x, "%Y_%m_%d_%H_%M_%S").date()) in temp_dates
+        ]
+
+        return (out_daily_feed, out_hourly_feed)
 
     # def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
     #     able_to_read = self.read_dataset_into_cache(datetime_value=datetime_slice_iso_format)
@@ -124,8 +189,3 @@ class ChargebackDataset:
     #             METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
     #         ],
     #     )
-
-    # def find_datasets_to_evict(self) -> List[str]:
-    #     temp = list(self.metrics_dataframes.keys())
-    #     temp.sort(reverse=True)
-    #     return temp[self.days_in_memory - 1 :]
