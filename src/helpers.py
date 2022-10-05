@@ -69,9 +69,9 @@ def printline():
 def logged_method(func):
     @wraps(func)
     def add_entry_exit_logs(*args, **kwargs):
-        print(f"Begin executing method:\t\t{str(func.__name__)}")
+        print(f"Begin method execution:\t\t{str(func.__name__)}")
         ret = func(*args, **kwargs)
-        print(f"End executing method:\t\t{str(func.__name__)}")
+        print(f"End method execution:\t\t{str(func.__name__)}")
         return ret
 
     return add_entry_exit_logs
@@ -87,6 +87,12 @@ def timed_method(func):
         return ret
 
     return add_timer
+
+
+BILLING_METRICS_SCOPE = {
+    "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
+    "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
+}
 
 
 if __name__ == "__main__":
