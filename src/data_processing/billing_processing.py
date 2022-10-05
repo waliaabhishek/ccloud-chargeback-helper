@@ -1,5 +1,4 @@
 import datetime
-import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
@@ -98,18 +97,6 @@ class BillingDataframe:
             yield pd.DataFrame.from_records(temp_dict, index=BILLING_CSV_COLUMNS.c_ts)
 
     def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
-        # start_date, end_date = str(self.hourly_date_range[0]), str(
-        #     self.hourly_date_range[len(self.hourly_date_range) - 1]
-        # )
-        # inclusive_dates = self.__generate_date_range_per_row(
-        #     item=None, override_start_date=start_date, override_end_date=end_date, freq="1D"
-        # )
-        # for dataset_date in inclusive_dates:
-        # per_hour_range = self.__generate_date_range_per_row(
-        #     item=None,
-        #     override_start_date=str(dataset_date),
-        #     override_end_date=str(dataset_date + timedelta(days=1)),
-        # )
         out = []
         for row_val in self.data.itertuples(index=False, name="BillingCSVRow"):
             row_range = self.__generate_date_range_per_row(item=row_val)

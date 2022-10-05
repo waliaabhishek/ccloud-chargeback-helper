@@ -1,21 +1,11 @@
 import pprint
-import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from json import loads
-from operator import itemgetter
-from typing import Dict, List
+from typing import Dict
 from urllib import parse
 import requests
-import ccloud.core_api.service_accounts as service_account
-
-from ccloud.core_api.api_keys import CCloudAPIKeyList
-from ccloud.core_api.clusters import CCloudCluster, CCloudClusterList
 
 from ccloud.connections import CCloudBase
 from ccloud.core_api.environments import CCloudEnvironmentList
-from ccloud.core_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
-from ccloud.core_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
 
 pp = pprint.PrettyPrinter(indent=2)
 

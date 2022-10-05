@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from helpers import mandatory_check
 from requests.auth import HTTPBasicAuth
 
 

@@ -1,13 +1,8 @@
 import pprint
-import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from json import loads
-from operator import itemgetter
 from typing import Dict, List
 from urllib import parse
 import requests
-import ccloud.core_api.service_accounts as service_account
 from ccloud.connections import CCloudBase
 
 pp = pprint.PrettyPrinter(indent=2)

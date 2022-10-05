@@ -1,13 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Dict
-from urllib import parse
 
 import requests
 from ccloud.core_api.api_keys import CCloudAPIKeyList
 from ccloud.core_api.clusters import CCloudCluster, CCloudClusterList
 
 from ccloud.connections import CCloudBase
-from ccloud.core_api.environments import CCloudEnvironmentList
 from ccloud.core_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
 from ccloud.core_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
 
