@@ -31,7 +31,10 @@ class ChargebackManager:
         d, t = self.__is_key_present_in_cache(time_slice)
         if d:
             self.daily_dataset[d_key].compute_output(
-                force_data_add=True, addl_billing_dataframe=billing_dataframe, addl_metrics_dataframe=metrics_dataframe
+                force_data_add=True,
+                time_slice=time_slice,
+                addl_billing_dataframe=billing_dataframe,
+                addl_metrics_dataframe=metrics_dataframe,
             )
         else:
             self.add_dataset(
@@ -39,6 +42,7 @@ class ChargebackManager:
                 is_hourly_data=False,
                 df=ChargebackDataframe(
                     cc_objects=self.cc_objects,
+                    time_slice=time_slice,
                     is_hourly_bucket=False,
                     _metrics_dataframe=metrics_dataframe,
                     _billing_dataframe=billing_dataframe,
@@ -46,7 +50,10 @@ class ChargebackManager:
             )
         if t:
             self.hourly_dataset[t_key].compute_output(
-                force_data_add=True, addl_billing_dataframe=billing_dataframe, addl_metrics_dataframe=metrics_dataframe
+                force_data_add=True,
+                time_slice=time_slice,
+                addl_billing_dataframe=billing_dataframe,
+                addl_metrics_dataframe=metrics_dataframe,
             )
         else:
             self.add_dataset(
@@ -54,6 +61,7 @@ class ChargebackManager:
                 is_hourly_data=True,
                 df=ChargebackDataframe(
                     cc_objects=self.cc_objects,
+                    time_slice=time_slice,
                     is_hourly_bucket=True,
                     _metrics_dataframe=metrics_dataframe,
                     _billing_dataframe=billing_dataframe,
@@ -70,7 +78,12 @@ class ChargebackManager:
                 self.add_dataset(
                     datetime_value=datetime_value,
                     is_hourly_data=False,
-                    df=ChargebackDataframe(cc_objects=self.cc_objects, is_hourly_bucket=False, file_path=file_path),
+                    df=ChargebackDataframe(
+                        cc_objects=self.cc_objects,
+                        time_slice=datetime_value,
+                        is_hourly_bucket=False,
+                        file_path=file_path,
+                    ),
                 )
         if not t:
             _, _, file_path = self.get_filepath(time_slice=datetime_value, is_hourly_bucket=True)
@@ -80,7 +93,12 @@ class ChargebackManager:
                 self.add_dataset(
                     datetime_value=datetime_value,
                     is_hourly_data=True,
-                    df=ChargebackDataframe(cc_objects=self.cc_objects, is_hourly_bucket=False, file_path=file_path),
+                    df=ChargebackDataframe(
+                        cc_objects=self.cc_objects,
+                        time_slice=datetime_value,
+                        is_hourly_bucket=False,
+                        file_path=file_path,
+                    ),
                 )
 
     def add_dataset(self, datetime_value: datetime.datetime, is_hourly_data: bool, df: ChargebackDataframe):
@@ -122,7 +140,7 @@ class ChargebackManager:
         for k, v in self.daily_dataset.items():
             df = v.cb_unit.get_dataframe()
             _, file_name, file_path = self.get_filepath(
-                time_slice=datetime.datetime.fromisoformat(k),
+                time_slice=v.time_slice,
                 is_hourly_bucket=False,
                 basepath=basepath,
             )
@@ -131,7 +149,7 @@ class ChargebackManager:
         for k, v in self.hourly_dataset.items():
             df = v.cb_unit.get_dataframe()
             _, file_name, file_path = self.get_filepath(
-                time_slice=datetime.datetime.fromisoformat(k),
+                time_slice=v.time_slice,
                 is_hourly_bucket=True,
                 basepath=basepath,
             )

@@ -91,6 +91,7 @@ class ChargebackUnit:
 class ChargebackDataframe:
     cc_objects: object = field(init=True, repr=False)
     is_hourly_bucket: bool = field(init=True, default=True)
+    time_slice: datetime.datetime = field(init=True)
     cb_unit: ChargebackUnit = field(init=False, repr=False)
     # METRICS_CSV_COLUMNS.OUT_TS: presence_ts, -- Index1
     # METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER: row_val["resource.kafka.id"], -- Index2
@@ -124,7 +125,7 @@ class ChargebackDataframe:
         if self.file_path is not None:
             self.read_from_file()
         else:
-            self.compute_output()
+            self.compute_output(time_slice=self.time_slice)
 
     def read_from_file(self):
         self.cb_unit.read_from_file(self.file_path)
@@ -158,6 +159,8 @@ class ChargebackDataframe:
             else:
                 row_ts = row_ts.strftime("%Y_%m_%d_%H_%M_%S")
 
+            df_time_slice = pd.Timestamp(time_slice, tz="UTC")
+
             row_cname = getattr(bill_row, BILLING_CSV_COLUMNS.cluster_name)
             row_cost = getattr(bill_row, BILLING_CSV_COLUMNS.c_split_total)
             if row_ptype == "KafkaBase":
@@ -171,49 +174,57 @@ class ChargebackDataframe:
             elif row_ptype == "KafkaNetworkRead":
                 # GOAL: Split cost across all the consumers to that cluster as a ratio of consumption performed.
                 # Read Depends in the Response_Bytes Metric Only
-                col_name = BILLING_METRICS_SCOPE[1]
+                col_name = BILLING_METRICS_SCOPE["response_bytes"]
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = metrics_data[metrics_data[col_name] > 0][
-                    [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
-                ].loc[[row_ts, row_cid]]
-                # Find the total consumption during that time slice
-                agg_data = metric_rows[[col_name]].agg(["sum"])
-                # add the Ratio consumption column by dividing every row by total consuption.
-                metric_rows[f"{col_name}_ratio"] = metric_rows[col_name].transform(
-                    lambda x: x / agg_data.loc[["sum"]][col_name]
-                )
-                # for every filtered Row , add consumption
-                for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
-                    self.cb_unit.add_cost(
-                        getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
-                        row_ts,
-                        row_ptype,
-                        additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
+                try:
+                    metric_rows = metrics_data[metrics_data[col_name] > 0][
+                        [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
+                    ].loc[[df_time_slice, row_cid]]
+                except KeyError:
+                    metric_rows = pd.DataFrame()
+                if not metric_rows.empty:
+                    # Find the total consumption during that time slice
+                    agg_data = metric_rows[[col_name]].agg(["sum"])
+                    # add the Ratio consumption column by dividing every row by total consuption.
+                    metric_rows[f"{col_name}_ratio"] = metric_rows[col_name].transform(
+                        lambda x: x / agg_data.loc[["sum"]][col_name]
                     )
+                    # for every filtered Row , add consumption
+                    for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
+                        self.cb_unit.add_cost(
+                            getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
+                            row_ts,
+                            row_ptype,
+                            additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
+                        )
             elif row_ptype == "KafkaNetworkWrite":
                 # GOAL: Split cost across all the producers to that cluster as a ratio of production performed.
                 # Read Depends in the Response_Bytes Metric Only
                 col_name = BILLING_METRICS_SCOPE["request_bytes"]
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = metrics_data[metrics_data[col_name] > 0][
-                    [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
-                ].loc[[row_ts, row_cid]]
-                # Find the total consumption during that time slice
-                agg_data = metric_rows[[col_name]].agg(["sum"])
-                # add the Ratio consumption column by dividing every row by total consuption.
-                metric_rows[f"{col_name}_ratio"] = metric_rows[col_name].transform(
-                    lambda x: x / agg_data.loc[["sum"]][col_name]
-                )
-                # for every filtered Row , add consumption
-                for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
-                    self.cb_unit.add_cost(
-                        getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
-                        row_ts,
-                        row_ptype,
-                        additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
+                try:
+                    metric_rows = metrics_data[metrics_data[col_name] > 0][
+                        [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
+                    ].loc[[df_time_slice, row_cid]]
+                except KeyError:
+                    metric_rows = pd.DataFrame()
+                if not metric_rows.empty:
+                    # Find the total consumption during that time slice
+                    agg_data = metric_rows[[col_name]].agg(["sum"])
+                    # add the Ratio consumption column by dividing every row by total consuption.
+                    metric_rows[f"{col_name}_ratio"] = metric_rows[col_name].transform(
+                        lambda x: x / agg_data.loc[["sum"]][col_name]
                     )
+                    # for every filtered Row , add consumption
+                    for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
+                        self.cb_unit.add_cost(
+                            getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
+                            row_ts,
+                            row_ptype,
+                            additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
+                        )
             elif row_ptype == "KafkaNumCKUs":
                 # GOAL: Split into 2 Categories --
                 #       Common Charge -- Flat 20% of the cost Divided across all clients active in that duration.
@@ -224,36 +235,40 @@ class ChargebackDataframe:
                 # col_name = BILLING_METRICS_SCOPE['request_bytes']
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
-                metric_rows = metrics_data.loc[[row_ts, row_cid]]
-                # Find the total consumption during that time slice
-                agg_data = metric_rows[[list(BILLING_METRICS_SCOPE.values())]].agg(["sum"])
-                # add the Ratio consumption column by dividing every row by total consuption.
-                for metric_item in BILLING_METRICS_SCOPE.values():
-                    metric_rows[f"{metric_item}_ratio"] = metric_rows[metric_item].transform(
-                        lambda x: x / agg_data.loc[["sum"]][metric_item]
-                    )
-                # for every filtered Row , add consumption
-                for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
-                    self.cb_unit.add_cost(
-                        getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
-                        row_ts,
-                        row_ptype,
-                        additional_shared_cost=(common_charge_ratio * row_cost) / metric_rows.size,
-                        additional_usage_cost=usage_charge_ratio
-                        * (
-                            (
+                try:
+                    metric_rows = metrics_data.loc[[df_time_slice, row_cid]]
+                except KeyError:
+                    metric_rows = pd.DataFrame()
+                if not metric_rows.empty:
+                    # Find the total consumption during that time slice
+                    agg_data = metric_rows[[list(BILLING_METRICS_SCOPE.values())]].agg(["sum"])
+                    # add the Ratio consumption column by dividing every row by total consuption.
+                    for metric_item in BILLING_METRICS_SCOPE.values():
+                        metric_rows[f"{metric_item}_ratio"] = metric_rows[metric_item].transform(
+                            lambda x: x / agg_data.loc[["sum"]][metric_item]
+                        )
+                    # for every filtered Row , add consumption
+                    for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
+                        self.cb_unit.add_cost(
+                            getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
+                            row_ts,
+                            row_ptype,
+                            additional_shared_cost=(common_charge_ratio * row_cost) / metric_rows.size,
+                            additional_usage_cost=usage_charge_ratio
+                            * (
                                 (
-                                    row_cost
-                                    / len(BILLING_METRICS_SCOPE)
-                                    * getattr(metric_row, f"{BILLING_METRICS_SCOPE['request_bytes']}_ratio")
-                                )
-                                + (
-                                    (row_cost / len(BILLING_METRICS_SCOPE))
-                                    * getattr(metric_row, f"{BILLING_METRICS_SCOPE['response_bytes']}_ratio")
-                                )
+                                    (
+                                        row_cost
+                                        / len(BILLING_METRICS_SCOPE)
+                                        * getattr(metric_row, f"{BILLING_METRICS_SCOPE['request_bytes']}_ratio")
+                                    )
+                                    + (
+                                        (row_cost / len(BILLING_METRICS_SCOPE))
+                                        * getattr(metric_row, f"{BILLING_METRICS_SCOPE['response_bytes']}_ratio")
+                                    )
+                                ),
                             ),
-                        ),
-                    )
+                        )
             elif row_ptype in ["KafkaPartition", "KafkaStorage"]:
                 # GOAL: Split cost across all the API Key holders for the specific Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
