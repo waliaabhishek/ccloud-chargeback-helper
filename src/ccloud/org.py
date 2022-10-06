@@ -45,7 +45,8 @@ class CCloudBillingHandler:
         out = pd.DataFrame()
         for filename, billing_dataframe in self.billing_manager.billing_dataframes.items():
             file_level_df = billing_dataframe.get_hourly_dataset(datetime_slice_iso_format=time_slice)
-            out = pd.concat([out, file_level_df])
+            if not file_level_df.empty:
+                out = pd.concat([out, file_level_df])
         return out
 
 

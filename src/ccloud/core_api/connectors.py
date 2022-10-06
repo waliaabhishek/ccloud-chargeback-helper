@@ -36,6 +36,7 @@ class CCloudConnectorList(CCloudBase):
         self.url_get_connector_config = self._ccloud_connection.get_endpoint_url(
             key=self._ccloud_connection.uri.get_connector_config
         )
+        self.read_all()
 
     def __str__(self):
         for v in self.cluster.values():
@@ -67,6 +68,10 @@ class CCloudConnectorList(CCloudBase):
             if out_json is not None and out_json["data"] is not None:
                 for item in out_json:
                     yield item
+        elif resp.status_code >= 400:
+            print(
+                f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
+            )
 
     def read_connector_config(self, kafka_cluster: CCloudCluster, call_url: str, params={}):
         resp = requests.get(url=call_url, auth=self.http_connection, params=params)

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import datetime
+from enum import Enum, auto
 import pandas as pd
 from typing import Dict, List
 
@@ -40,7 +41,7 @@ class ChargebackUnit:
         if (principal, time_slice) in self.cb_dict:
             u, s, detailed_split = self.cb_dict[(principal, time_slice)]
             detailed_split[product_type_name] = (
-                detailed_split.get(product_type_name, float(0)) + additional_usage_cost + additional_usage_cost
+                detailed_split.get(product_type_name, float(0)) + additional_shared_cost + additional_usage_cost
             )
             self.cb_dict[(principal, time_slice)] = (
                 u + additional_usage_cost,
@@ -87,10 +88,25 @@ class ChargebackUnit:
         return pd.DataFrame.from_records(temp_records, index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS])
 
 
+class ChargebackTimeSliceType:
+    HOURLY = "HOURLY"
+    DAILY = "DAILY"
+    MONTHLY = "MONTHLY"
+
+
+def get_date_format(value: str):
+    if value == ChargebackTimeSliceType.HOURLY:
+        return "%Y_%m_%d_%H_%M_%S"
+    elif value == ChargebackTimeSliceType.DAILY:
+        return "%Y_%m_%d"
+    elif value == ChargebackTimeSliceType.MONTHLY:
+        return "%Y_%m"
+
+
 @dataclass(kw_only=True)
 class ChargebackDataframe:
     cc_objects: object = field(init=True, repr=False)
-    is_hourly_bucket: bool = field(init=True, default=True)
+    bucket_type: ChargebackTimeSliceType = field(init=True, default=ChargebackTimeSliceType.HOURLY)
     time_slice: datetime.datetime = field(init=True)
     cb_unit: ChargebackUnit = field(init=False, repr=False)
     # METRICS_CSV_COLUMNS.OUT_TS: presence_ts, -- Index1
@@ -154,10 +170,11 @@ class ChargebackDataframe:
                 bill_row.Index[4],
             )
             # remove the hour date from ts for daily aggregations
-            if not self.is_hourly_bucket:
-                row_ts = str(row_ts.date())
-            else:
-                row_ts = row_ts.strftime("%Y_%m_%d_%H_%M_%S")
+            # if not self.bucket_type:
+            #     row_ts = str(row_ts.date())
+            # else:
+            #     row_ts = row_ts.strftime("%Y_%m_%d_%H_%M_%S")
+            row_ts = row_ts.strftime(get_date_format(self.bucket_type))
 
             df_time_slice = pd.Timestamp(time_slice, tz="UTC")
 
@@ -167,10 +184,16 @@ class ChargebackDataframe:
                 # GOAL: Split Cost equally across all the SA/Users that have API Keys for that Kafka Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
                 sa_count = self.cc_objects.cc_api_keys.find_sa_count_for_clusters(cluster_id=row_cid)
-                splitter = len(sa_count)
-                # Add Shared Cost for all active SA/Users in the cluster and split it equally
-                for sa_name, sa_api_key_count in sa_count.items():
-                    self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
+                if len(sa_count) > 0:
+                    splitter = len(sa_count)
+                    # Add Shared Cost for all active SA/Users in the cluster and split it equally
+                    for sa_name, sa_api_key_count in sa_count.items():
+                        self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
+                else:
+                    print(
+                        f"No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
+                    )
+                    self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "KafkaNetworkRead":
                 # GOAL: Split cost across all the consumers to that cluster as a ratio of consumption performed.
                 # Read Depends in the Response_Bytes Metric Only
@@ -178,9 +201,18 @@ class ChargebackDataframe:
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
                 try:
-                    metric_rows = metrics_data[metrics_data[col_name] > 0][
-                        [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
-                    ].loc[[df_time_slice, row_cid]]
+                    subset = metrics_data[metrics_data[col_name] > 0][
+                        [
+                            METRICS_CSV_COLUMNS.OUT_TS,
+                            METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
+                            METRICS_CSV_COLUMNS.OUT_PRINCIPAL,
+                            col_name,
+                        ]
+                    ]
+                    metric_rows = subset[
+                        (subset[METRICS_CSV_COLUMNS.OUT_TS] == df_time_slice)
+                        & (subset[METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER] == row_cid)
+                    ]
                 except KeyError:
                     metric_rows = pd.DataFrame()
                 if not metric_rows.empty:
@@ -198,6 +230,16 @@ class ChargebackDataframe:
                             row_ptype,
                             additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
                         )
+                else:
+                    print(
+                        f"Could not map {row_ptype} for {row_cid} during timeslice {str(time_slice)}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                    )
+                    self.cb_unit.add_cost(
+                        row_cid,
+                        row_ts,
+                        row_ptype,
+                        additional_shared_cost=row_cost,
+                    )
             elif row_ptype == "KafkaNetworkWrite":
                 # GOAL: Split cost across all the producers to that cluster as a ratio of production performed.
                 # Read Depends in the Response_Bytes Metric Only
@@ -205,9 +247,18 @@ class ChargebackDataframe:
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
                 try:
-                    metric_rows = metrics_data[metrics_data[col_name] > 0][
-                        [METRICS_CSV_COLUMNS.OUT_PRINCIPAL, col_name]
-                    ].loc[[df_time_slice, row_cid]]
+                    subset = metrics_data[metrics_data[col_name] > 0][
+                        [
+                            METRICS_CSV_COLUMNS.OUT_TS,
+                            METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
+                            METRICS_CSV_COLUMNS.OUT_PRINCIPAL,
+                            col_name,
+                        ]
+                    ]
+                    metric_rows = subset[
+                        (subset[METRICS_CSV_COLUMNS.OUT_TS] == df_time_slice)
+                        & (subset[METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER] == row_cid)
+                    ]
                 except KeyError:
                     metric_rows = pd.DataFrame()
                 if not metric_rows.empty:
@@ -225,20 +276,56 @@ class ChargebackDataframe:
                             row_ptype,
                             additional_usage_cost=row_cost * getattr(metric_row, f"{col_name}_ratio"),
                         )
+                else:
+                    print(
+                        f"Could not map {row_ptype} for {row_cid} during timeslice {str(time_slice)}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                    )
+                    self.cb_unit.add_cost(
+                        row_cid,
+                        row_ts,
+                        row_ptype,
+                        additional_shared_cost=row_cost,
+                    )
             elif row_ptype == "KafkaNumCKUs":
                 # GOAL: Split into 2 Categories --
-                #       Common Charge -- Flat 20% of the cost Divided across all clients active in that duration.
-                #       Usage Charge  -- 80% of the cost split variably by the amount of data produced + consumed by the SA/User
-                common_charge_ratio = 0.20
-                usage_charge_ratio = 0.80
-                # Read Depends in the Response_Bytes Metric Only
-                # col_name = BILLING_METRICS_SCOPE['request_bytes']
+                #       Common Charge -- Flat 50% of the cost Divided across all clients active in that duration.
+                #       Usage Charge  -- 50% of the cost split variably by the amount of data produced + consumed by the SA/User
+                common_charge_ratio = 0.30
+                usage_charge_ratio = 0.70
+                # Common Charge will be added as a ratio of the count of API Keys created for each service account.
+                sa_count = self.cc_objects.cc_api_keys.find_sa_count_for_clusters(cluster_id=row_cid)
+                if len(sa_count) > 0:
+                    splitter = len(sa_count)
+                    # total_api_key_count = len(
+                    #     [x for x in self.cc_objects.cc_api_keys.api_keys.values() if x.cluster_id != "cloud"]
+                    # )
+                    for sa_name, sa_api_key_count in sa_count.items():
+                        self.cb_unit.add_cost(
+                            sa_name,
+                            row_ts,
+                            row_ptype,
+                            additional_shared_cost=(row_cost * common_charge_ratio) / splitter,
+                        )
+                else:
+                    print(
+                        f"No API Keys were found for cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                    )
+                    self.cb_unit.add_cost(
+                        row_cid,
+                        row_ts,
+                        row_ptype,
+                        additional_shared_cost=row_cost * common_charge_ratio,
+                    )
                 # filter metrics for data that has some consumption > 0 , and then find all rows with index
                 # with that timestamp and that specific kafka cluster.
                 try:
-                    metric_rows = metrics_data.loc[[df_time_slice, row_cid]]
+                    metric_rows = metrics_data[
+                        (metrics_data[METRICS_CSV_COLUMNS.OUT_TS] == df_time_slice)
+                        & (metrics_data[METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER] == row_cid)
+                    ]
                 except KeyError:
                     metric_rows = pd.DataFrame()
+                # Usage Charge
                 if not metric_rows.empty:
                     # Find the total consumption during that time slice
                     agg_data = metric_rows[[list(BILLING_METRICS_SCOPE.values())]].agg(["sum"])
@@ -253,13 +340,12 @@ class ChargebackDataframe:
                             getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
                             row_ts,
                             row_ptype,
-                            additional_shared_cost=(common_charge_ratio * row_cost) / metric_rows.size,
+                            # additional_shared_cost=(common_charge_ratio * row_cost) / metric_rows.size,
                             additional_usage_cost=usage_charge_ratio
                             * (
                                 (
                                     (
-                                        row_cost
-                                        / len(BILLING_METRICS_SCOPE)
+                                        (row_cost / len(BILLING_METRICS_SCOPE))
                                         * getattr(metric_row, f"{BILLING_METRICS_SCOPE['request_bytes']}_ratio")
                                     )
                                     + (
@@ -269,14 +355,40 @@ class ChargebackDataframe:
                                 ),
                             ),
                         )
+                else:
+                    if len(sa_count) > 0:
+                        print(
+                            f"No Production/Consumption activity for cluster {row_cid} during time slice {str(time_slice)}. Splitting Usage Ratio for {row_ptype} across all Service Accounts as Shared Cost"
+                        )
+                        splitter = len(sa_count)
+                        for sa_name, sa_api_key_count in sa_count.items():
+                            self.cb_unit.add_cost(
+                                sa_name,
+                                row_ts,
+                                row_ptype,
+                                additional_shared_cost=(row_cost * usage_charge_ratio) / splitter,
+                            )
+                    else:
+                        print(
+                            f"No Production/Consumption activity for cluster {row_cid} during time slice {str(time_slice)} and no API Keys found for the cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                        )
+                        self.cb_unit.add_cost(
+                            row_cid, row_ts, row_ptype, additional_shared_cost=row_cost * usage_charge_ratio
+                        )
             elif row_ptype in ["KafkaPartition", "KafkaStorage"]:
                 # GOAL: Split cost across all the API Key holders for the specific Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
                 sa_count = self.cc_objects.cc_api_keys.find_sa_count_for_clusters(cluster_id=row_cid)
-                splitter = len(sa_count)
-                # Add Shared Cost for all active SA/Users in the cluster and split it equally
-                for sa_name, sa_api_key_count in sa_count.items():
-                    self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
+                if len(sa_count) > 0:
+                    splitter = len(sa_count)
+                    # Add Shared Cost for all active SA/Users in the cluster and split it equally
+                    for sa_name, sa_api_key_count in sa_count.items():
+                        self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
+                else:
+                    print(
+                        f"No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
+                    )
+                    self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "EventLogRead":
                 # GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
                 # Find all active Service Accounts/Users in the system.
@@ -294,9 +406,17 @@ class ChargebackDataframe:
                         if y.cluster_id == row_cid
                     ]
                 )
-                splitter = len(active_identities)
-                for identity_item in active_identities:
-                    self.cb_unit.add_cost(identity_item, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
+                if len(active_identities) > 0:
+                    splitter = len(active_identities)
+                    for identity_item in active_identities:
+                        self.cb_unit.add_cost(
+                            identity_item, row_ts, row_ptype, additional_shared_cost=row_cost / splitter
+                        )
+                else:
+                    print(
+                        f"No Connector Details were found (probably due to Connector API Scrape Error). Using the Connector {row_cid} and adding cost as Shared Cost"
+                    )
+                    self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype in ["ConnectNumTasks", "ConnectThroughput"]:
                 # GOAL: Cost will be assumed by the owner of the connector
                 # There will be only one active Identity but we will still loop on the identity for consistency
@@ -308,9 +428,17 @@ class ChargebackDataframe:
                         if y.env_id == row_env and y.connector_name == row_cname
                     ]
                 )
-                splitter = len(active_identities)
-                for identity_item in active_identities:
-                    self.cb_unit.add_cost(identity_item, row_ts, row_ptype, additional_usage_cost=row_cost / splitter)
+                if len(active_identities) > 0:
+                    splitter = len(active_identities)
+                    for identity_item in active_identities:
+                        self.cb_unit.add_cost(
+                            identity_item, row_ts, row_ptype, additional_usage_cost=row_cost / splitter
+                        )
+                else:
+                    print(
+                        f"No Connector Details were found (probably due to Connector API Scrape Error). Using the Connector {row_cid} and adding cost as Shared Cost"
+                    )
+                    self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "ClusterLinkingPerLink":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
@@ -331,6 +459,18 @@ class ChargebackDataframe:
                         if y.cluster_id == row_cid
                     ]
                 )
-                splitter = len(active_identities)
-                for identity_item in active_identities:
-                    self.cb_unit.add_cost(identity_item, row_ts, row_ptype, additional_usage_cost=row_cost / splitter)
+                if len(active_identities) > 0:
+                    splitter = len(active_identities)
+                    for identity_item in active_identities:
+                        self.cb_unit.add_cost(
+                            identity_item, row_ts, row_ptype, additional_usage_cost=row_cost / splitter
+                        )
+                else:
+                    print(
+                        f"No KSQL Cluster Details were found (probably due to KSQLDB API Scrape Error or the cluster is already deleted). Using the ksqlDB cluster ID {row_cid} and adding cost as Shared Cost"
+                    )
+                    self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
+            else:
+                print("=" * 80)
+                print(f"No Chargeback calculation available for {row_ptype}. Please request for it to be added.")
+                print("=" * 80)

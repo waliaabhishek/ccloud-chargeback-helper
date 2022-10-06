@@ -125,16 +125,19 @@ class BillingDataframe:
                     if bool(presence_flag) is True
                 ]
             )
-        return pd.DataFrame.from_records(
-            out,
-            index=[
-                BILLING_CSV_COLUMNS.c_ts,
-                BILLING_CSV_COLUMNS.env_id,
-                BILLING_CSV_COLUMNS.cluster_id,
-                BILLING_CSV_COLUMNS.product_name,
-                BILLING_CSV_COLUMNS.product_type,
-            ],
-        )
+        if len(out) > 0:
+            return pd.DataFrame.from_records(
+                out,
+                index=[
+                    BILLING_CSV_COLUMNS.c_ts,
+                    BILLING_CSV_COLUMNS.env_id,
+                    BILLING_CSV_COLUMNS.cluster_id,
+                    BILLING_CSV_COLUMNS.product_name,
+                    BILLING_CSV_COLUMNS.product_type,
+                ],
+            )
+        else:
+            return pd.DataFrame()
 
 
 # if __name__ == "__main__":
