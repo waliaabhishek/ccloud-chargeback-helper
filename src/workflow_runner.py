@@ -42,6 +42,8 @@ def run_gather_cycle(ccloud_orgs: CCloudOrgList):
         org.metrics_handler.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
 
 
+@timed_method
+@logged_method
 def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
     ccloud_orgs.run_calculations()
 

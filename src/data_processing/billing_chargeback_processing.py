@@ -8,6 +8,8 @@ from data_processing.billing_processing import BILLING_CSV_COLUMNS
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
 from helpers import BILLING_METRICS_SCOPE
 
+pd.set_option("mode.chained_assignment", None)
+
 
 class ChargebackColumnNames:
     TS = "Timestamp"
@@ -262,11 +264,12 @@ class ChargebackDataframe:
                 except KeyError:
                     metric_rows = pd.DataFrame()
                 if not metric_rows.empty:
+                    # print(metric_rows.info())
                     # Find the total consumption during that time slice
-                    agg_data = metric_rows[[col_name]].agg(["sum"])
+                    agg_value = metric_rows[[col_name]].agg(["sum"]).loc["sum", col_name]
                     # add the Ratio consumption column by dividing every row by total consuption.
-                    metric_rows[f"{col_name}_ratio"] = metric_rows[col_name].transform(
-                        lambda x: x / agg_data.loc[["sum"]][col_name]
+                    metric_rows[f"{col_name}_ratio"] = (
+                        metric_rows[col_name].transform(lambda x: x / agg_value).to_list()
                     )
                     # for every filtered Row , add consumption
                     for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
@@ -328,7 +331,9 @@ class ChargebackDataframe:
                 # Usage Charge
                 if not metric_rows.empty:
                     # Find the total consumption during that time slice
-                    agg_data = metric_rows[[list(BILLING_METRICS_SCOPE.values())]].agg(["sum"])
+                    agg_data = metric_rows[
+                        [BILLING_METRICS_SCOPE["request_bytes"], BILLING_METRICS_SCOPE["response_bytes"]]
+                    ].agg(["sum"])
                     # add the Ratio consumption column by dividing every row by total consuption.
                     for metric_item in BILLING_METRICS_SCOPE.values():
                         metric_rows[f"{metric_item}_ratio"] = metric_rows[metric_item].transform(
@@ -336,24 +341,22 @@ class ChargebackDataframe:
                         )
                     # for every filtered Row , add consumption
                     for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
+                        req_cost = (
+                            row_cost
+                            / len(BILLING_METRICS_SCOPE)
+                            * getattr(metric_row, f"{BILLING_METRICS_SCOPE['request_bytes']}_ratio")
+                        )
+                        res_cost = (
+                            row_cost
+                            / len(BILLING_METRICS_SCOPE)
+                            * getattr(metric_row, f"{BILLING_METRICS_SCOPE['response_bytes']}_ratio")
+                        )
                         self.cb_unit.add_cost(
                             getattr(metric_row, METRICS_CSV_COLUMNS.OUT_PRINCIPAL),
                             row_ts,
                             row_ptype,
                             # additional_shared_cost=(common_charge_ratio * row_cost) / metric_rows.size,
-                            additional_usage_cost=usage_charge_ratio
-                            * (
-                                (
-                                    (
-                                        (row_cost / len(BILLING_METRICS_SCOPE))
-                                        * getattr(metric_row, f"{BILLING_METRICS_SCOPE['request_bytes']}_ratio")
-                                    )
-                                    + (
-                                        (row_cost / len(BILLING_METRICS_SCOPE))
-                                        * getattr(metric_row, f"{BILLING_METRICS_SCOPE['response_bytes']}_ratio")
-                                    )
-                                ),
-                            ),
+                            additional_usage_cost=usage_charge_ratio * (req_cost + res_cost),
                         )
                 else:
                     if len(sa_count) > 0:

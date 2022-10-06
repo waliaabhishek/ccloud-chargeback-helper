@@ -16,6 +16,7 @@ from storage_mgmt import STORAGE_PATH, DirType
 @dataclass(kw_only=True)
 class CCloudMetricsManager:
     _base_payload: Dict
+    cc_objects: object = field(init=True, repr=False)
     ccloud_url: str = field(default=None)
     days_in_memory: int = field(default=7)
 
@@ -43,7 +44,7 @@ class CCloudMetricsManager:
             if "ALL_CLUSTERS" in cluster_list:
                 # TODO: Add logic to get cluster list and create a compound filter.
                 # currently using a list
-                cluster_list = ["lkc-pg5gx2", "lkc-pg5gx2"]
+                cluster_list = list(self.cc_objects.cc_clusters.cluster.keys())
             if len(cluster_list) == 1:
                 return {"field": filter["field"], "op": filter["op"], "value": cluster_list[0]}
             if len(cluster_list) >= 1:

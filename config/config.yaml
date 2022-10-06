@@ -26,7 +26,7 @@ config:
             field: resource.kafka.id
             op: EQ
             value:
-              - env::CCLOUD_BILLING_CLUSTER_ID_1
+              - ALL_CLUSTERS
         - id: Fetch Response Bytes
           aggregations:
             - metric: io.confluent.kafka.server/response_bytes
@@ -39,4 +39,4 @@ config:
             field: resource.kafka.id
             op: EQ
             value:
-              - env::CCLOUD_BILLING_CLUSTER_ID_1
+              - ALL_CLUSTERS

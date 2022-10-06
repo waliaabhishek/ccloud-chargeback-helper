@@ -53,6 +53,7 @@ class CCloudBillingHandler:
 @dataclass
 class CCloudMetricsHandler(CCloudBase):
     _requests: List
+    cc_objects: object = field(init=True, repr=False)
     days_in_memory: int = field(default=7)
 
     metrics_manager: Dict[str, CCloudMetricsManager] = field(init=False, default_factory=dict)
@@ -68,9 +69,7 @@ class CCloudMetricsHandler(CCloudBase):
     def read_all(self):
         for req in self._requests:
             http_req = CCloudMetricsManager(
-                _base_payload=req,
-                ccloud_url=self.url,
-                days_in_memory=self.days_in_memory,
+                _base_payload=req, ccloud_url=self.url, days_in_memory=self.days_in_memory, cc_objects=self.cc_objects
             )
             self.__add_to_cache(http_req=http_req)
 
@@ -232,6 +231,14 @@ class CCloudOrg:
     def __post_init__(self) -> None:
         self.org_id = sanitize_id(self._org_details["id"])
 
+        # Initialize the CCloud Objects Handler
+        temp_conn = CCloudConnection(
+            api_key=self._org_details["ccloud_details"]["metrics"]["api_key"],
+            api_secret=self._org_details["ccloud_details"]["metrics"]["api_secret"],
+            base_url=EndpointURL.API_URL,
+        )
+        self.objects_handler = CCloudObjectsHandler(_ccloud_connection=temp_conn)
+
         # Initialize the Metrics Handler
         temp_conn = CCloudConnection(
             api_key=self._org_details["ccloud_details"]["telemetry"]["api_key"],
@@ -242,15 +249,8 @@ class CCloudOrg:
             _ccloud_connection=temp_conn,
             _requests=self._org_details["requests"],
             days_in_memory=self._days_in_memory,
+            cc_objects=self.objects_handler,
         )
-
-        # Initialize the CCloud Objects Handler
-        temp_conn = CCloudConnection(
-            api_key=self._org_details["ccloud_details"]["metrics"]["api_key"],
-            api_secret=self._org_details["ccloud_details"]["metrics"]["api_secret"],
-            base_url=EndpointURL.API_URL,
-        )
-        self.objects_handler = CCloudObjectsHandler(_ccloud_connection=temp_conn)
 
         # Initialize the Billing CSV Handler
         self.billing_handler = CCloudBillingHandler()
@@ -262,10 +262,10 @@ class CCloudOrg:
         self._requests = None
 
     def execute_requests(self):
-        print(f"Gathering Telemetry Data")
-        self.metrics_handler.execute_requests(output_basepath=STORAGE_PATH[DirType.MetricsData])
         print(f"Gathering CCloud Existing Objects Data")
         self.objects_handler.execute_requests()
+        print(f"Gathering Telemetry Data")
+        self.metrics_handler.execute_requests(output_basepath=STORAGE_PATH[DirType.MetricsData])
         print(f"Checking for new Billing CSV Files")
         self.billing_handler.execute_requests()
 
