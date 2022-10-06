@@ -79,7 +79,7 @@ class CCloudConnectorList(CCloudBase):
             print("Found connector config for connector " + item["name"])
             owner_id = None
             if "kafka.api.key" in item.keys():
-                owner_id = self.locate_api_key_owner(api_key=item["config"]["kafka.api.key"]).resource_id
+                owner_id = item["kafka.api.key"]
             elif "kafka.service.account.id" in item.keys():
                 owner_id = item["kafka.service.account.id"]
             self.__add_to_cache(
