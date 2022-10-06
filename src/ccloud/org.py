@@ -67,6 +67,24 @@ class CCloudMetricsHandler(CCloudBase):
         self._requests = None
 
     def read_all(self):
+        cb_val = "CHARGEBACK_REQUESTS"
+        if cb_val in self._requests:
+            temp = [
+                {
+                    "id": k,
+                    "aggregations": [{"metric": v}],
+                    "granularity": "PT1H",
+                    "group_by": ["resource.kafka.id", "metric.principal.id"],
+                    "limit": 100,
+                    "filter": {"field": "resource.kafka.id", "op": "EQ", "value": ["ALL_CLUSTERS"]},
+                }
+                for k, v in {
+                    "Fetch Request Bytes": "io.confluent.kafka.server/request_bytes",
+                    "Fetch Response Bytes": "io.confluent.kafka.server/response_bytes",
+                }.items()
+            ]
+            self._requests = temp + self._requests
+            self._requests.remove(cb_val)
         for req in self._requests:
             http_req = CCloudMetricsManager(
                 _base_payload=req, ccloud_url=self.url, days_in_memory=self.days_in_memory, cc_objects=self.cc_objects

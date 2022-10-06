@@ -14,6 +14,7 @@ config:
         metrics:
         billing_csv:
       requests:
+        - CHARGEBACK_REQUESTS
         - id: Fetch Request Bytes
           aggregations:
             - metric: io.confluent.kafka.server/request_bytes
@@ -22,19 +23,6 @@ config:
             - resource.kafka.id
             - metric.principal_id
           limit: 1000
-          filter:
-            field: resource.kafka.id
-            op: EQ
-            value:
-              - ALL_CLUSTERS
-        - id: Fetch Response Bytes
-          aggregations:
-            - metric: io.confluent.kafka.server/response_bytes
-          granularity: PT1H
-          group_by:
-            - resource.kafka.id
-            - metric.principal_id
-          limit: 100
           filter:
             field: resource.kafka.id
             op: EQ
