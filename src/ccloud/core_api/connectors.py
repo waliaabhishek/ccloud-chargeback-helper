@@ -16,8 +16,7 @@ class CCloudConnector:
     cluster_id: str
     connector_name: str
     connector_class: str
-    connector_type: str
-    owner_id: CCloudServiceAccount | CCloudUserAccount
+    owner_id: str
 
 
 @dataclass
@@ -62,12 +61,12 @@ class CCloudConnectorList(CCloudBase):
 
     def read_all_connector_names(self, kafka_cluster: CCloudCluster, params={}):
         temp_url = self.url.format(environment_id=kafka_cluster.env_id, kafka_cluster_id=kafka_cluster.cluster_id)
-        resp = requests.get(url=temp_url)
+        resp = requests.get(url=temp_url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
-            if out_json is not None and out_json["data"] is not None:
-                for item in out_json:
-                    yield item
+            # if out_json is not None and out_json["data"] is not None:
+            for item in out_json:
+                yield item
         elif resp.status_code >= 400:
             print(
                 f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
@@ -79,15 +78,16 @@ class CCloudConnectorList(CCloudBase):
             item = resp.json()
             print("Found connector config for connector " + item["name"])
             owner_id = None
-            if "kafka.api.key" in item["config"]:
+            if "kafka.api.key" in item.keys():
                 owner_id = self.locate_api_key_owner(api_key=item["config"]["kafka.api.key"]).resource_id
+            elif "kafka.service.account.id" in item.keys():
+                owner_id = item["kafka.service.account.id"]
             self.__add_to_cache(
                 CCloudConnector(
                     env_id=kafka_cluster.env_id,
                     cluster_id=kafka_cluster.cluster_id,
                     connector_name=str(item["name"]).strip().replace(" ", ""),
-                    connector_class=item["config"]["connector.class"],
-                    connector_type=item["type"],
+                    connector_class=item["connector.class"],
                     owner_id=owner_id,
                 )
             )
@@ -95,15 +95,14 @@ class CCloudConnectorList(CCloudBase):
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
     def __add_to_cache(self, connector: CCloudConnector) -> None:
+        self.connectors[f"{connector.cluster_id}__{connector.connector_name}"] = connector
 
-        self.cluster[f"{connector.cluster_id}__{connector.connector_name}"] = connector
-
-    def locate_api_key_owner(self, api_key: str) -> CCloudUserAccount | CCloudServiceAccount:
-        key = self.ccloud_api_keys.api_keys[api_key]
-        if key.owner_id in self.ccloud_service_accounts.sa.keys():
-            return self.ccloud_service_accounts.sa[key.owner_id]
-        elif key.owner_id in self.ccloud_users.users.keys():
-            return self.ccloud_users.users[key.owner_id]
+    # def locate_api_key_owner(self, api_key: str) -> CCloudUserAccount | CCloudServiceAccount:
+    #     key = self.ccloud_api_keys.api_keys[api_key]
+    #     if key.owner_id in self.ccloud_service_accounts.sa.keys():
+    #         return self.ccloud_service_accounts.sa[key.owner_id]
+    #     elif key.owner_id in self.ccloud_users.users.keys():
+    #         return self.ccloud_users.users[key.owner_id]
 
     # Read/Find one Cluster from the cache
     def find_cluster(self, cluster_id):

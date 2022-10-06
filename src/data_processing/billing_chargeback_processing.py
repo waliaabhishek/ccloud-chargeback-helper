@@ -401,7 +401,7 @@ class ChargebackDataframe:
                 # GOAL: Split the Connect Cost across all the connect Service Accounts active in the cluster
                 active_identities = set(
                     [
-                        y.owner_id.resource_id
+                        y.owner_id
                         for x, y in self.cc_objects.cc_connectors.connectors.items()
                         if y.cluster_id == row_cid
                     ]
