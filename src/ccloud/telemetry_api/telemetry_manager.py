@@ -42,8 +42,6 @@ class CCloudMetricsManager:
         cluster_list = filter["value"]
         if filter["op"] in [member.name for member in CCMEReq_CompareOp]:
             if "ALL_CLUSTERS" in cluster_list:
-                # TODO: Add logic to get cluster list and create a compound filter.
-                # currently using a list
                 cluster_list = list(self.cc_objects.cc_clusters.cluster.keys())
             if len(cluster_list) == 1:
                 return {"field": filter["field"], "op": filter["op"], "value": cluster_list[0]}
