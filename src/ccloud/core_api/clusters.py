@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Dict
 from urllib import parse
 
@@ -63,6 +64,10 @@ class CCloudClusterList(CCloudBase):
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])
                 self.read_all(env_id, params)
+        elif resp.status_code == 429:
+            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            sleep(45)
+            print("Timer up. Resuming CCloud API scrape.")
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 

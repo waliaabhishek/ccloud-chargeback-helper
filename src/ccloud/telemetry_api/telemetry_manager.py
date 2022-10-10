@@ -2,6 +2,7 @@ import datetime
 from copy import deepcopy
 from dataclasses import dataclass, field
 import os
+from time import sleep
 from typing import Dict, List, Tuple
 import pandas as pd
 import requests
@@ -81,6 +82,13 @@ class CCloudMetricsManager:
             ):
                 params["page_token"] = str(out_json["meta"]["pagination"]["next_page_token"])
                 self.execute_request(http_connection=http_connection, date_range=date_range, params=params)
+        elif resp.status_code == 429:
+            sleep_duration = 45
+            print(
+                f"CCloud Metrics API Per-Minute Limit exceeded. Sleeping for {sleep_duration} seconds. Error stack: {resp.text}"
+            )
+            sleep(sleep_duration)
+            print("Timer up. Resuming CCloud Metrics API scrape.")
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 

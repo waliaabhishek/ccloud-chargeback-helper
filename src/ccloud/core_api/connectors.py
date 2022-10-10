@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Dict
 
 import requests
@@ -67,6 +68,10 @@ class CCloudConnectorList(CCloudBase):
             # if out_json is not None and out_json["data"] is not None:
             for item in out_json:
                 yield item
+        elif resp.status_code == 429:
+            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            sleep(45)
+            print("Timer up. Resuming CCloud API scrape.")
         elif resp.status_code >= 400:
             print(
                 f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
