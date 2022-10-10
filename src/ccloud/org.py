@@ -74,8 +74,8 @@ class CCloudMetricsHandler(CCloudBase):
                     "id": k,
                     "aggregations": [{"metric": v}],
                     "granularity": "PT1H",
-                    "group_by": ["resource.kafka.id", "metric.principal.id"],
-                    "limit": 100,
+                    "group_by": ["resource.kafka.id", "metric.principal_id"],
+                    "limit": 1000,
                     "filter": {"field": "resource.kafka.id", "op": "EQ", "value": ["ALL_CLUSTERS"]},
                 }
                 for k, v in {

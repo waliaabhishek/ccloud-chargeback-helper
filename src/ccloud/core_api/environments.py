@@ -28,7 +28,7 @@ class CCloudEnvironmentList(CCloudBase):
         for v in self.env.values():
             print("{:<15} {:<40}".format(v.env_id, v.display_name))
 
-    def read_all(self, params={"page_size": 50}):
+    def read_all(self, params={"page_size": 100}):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()

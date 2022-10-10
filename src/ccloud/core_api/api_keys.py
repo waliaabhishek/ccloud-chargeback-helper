@@ -35,7 +35,7 @@ class CCloudAPIKeyList(CCloudBase):
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
-    def read_all(self, params={"page_size": 25}):
+    def read_all(self, params={"page_size": 100}):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()

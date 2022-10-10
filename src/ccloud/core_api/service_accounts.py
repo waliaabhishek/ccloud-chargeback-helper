@@ -30,7 +30,7 @@ class CCloudServiceAccountList(CCloudBase):
             print("{:<15} {:<40} {:<50}".format(item.resource_id, item.name, item.description))
 
     # Read ALL Service Account details from Confluent Cloud
-    def read_all(self, params={"page_size": 50}):
+    def read_all(self, params={"page_size": 100}):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()

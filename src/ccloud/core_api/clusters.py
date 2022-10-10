@@ -40,7 +40,7 @@ class CCloudClusterList(CCloudBase):
                 )
             )
 
-    def read_all(self, env_id: str, params={"page_size": 50}):
+    def read_all(self, env_id: str, params={"page_size": 100}):
         params["environment"] = env_id
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
