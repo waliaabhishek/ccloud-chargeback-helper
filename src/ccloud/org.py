@@ -21,11 +21,16 @@ from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 @dataclass
 class CCloudBillingHandler:
+    org_id: str = field(init=True)
     billing_manager: CCloudBillingManager = field(init=False)
     available_hour_slices_in_dataset: List[str] = field(init=False, default_factory=list)
 
     def __post_init__(self) -> None:
-        self.billing_manager = CCloudBillingManager()
+        self.billing_manager = CCloudBillingManager(
+            path_to_monitor=STORAGE_PATH.get_path(
+                org_id=self.org_id, dir_type=DirType.BillingsData, ensure_exists=True
+            )
+        )
         self.read_all()
 
     def read_all(self):
@@ -53,9 +58,11 @@ class CCloudBillingHandler:
 @dataclass
 class CCloudMetricsHandler(CCloudBase):
     _requests: List
+    org_id: str
     cc_objects: object = field(init=True, repr=False)
     days_in_memory: int = field(default=7)
 
+    metrics_basepath: str = field(init=False, repr=False)
     metrics_manager: Dict[str, CCloudMetricsManager] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -63,6 +70,7 @@ class CCloudMetricsHandler(CCloudBase):
         self.url = self._ccloud_connection.get_endpoint_url(
             key=self._ccloud_connection.uri.telemetry_query_metrics
         ).format(dataset="cloud")
+        self.metrics_basepath = STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
         self.read_all()
         self._requests = None
 
@@ -87,7 +95,12 @@ class CCloudMetricsHandler(CCloudBase):
             self._requests.remove(cb_val)
         for req in self._requests:
             http_req = CCloudMetricsManager(
-                _base_payload=req, ccloud_url=self.url, days_in_memory=self.days_in_memory, cc_objects=self.cc_objects
+                org_id=self.org_id,
+                _base_payload=req,
+                ccloud_url=self.url,
+                days_in_memory=self.days_in_memory,
+                cc_objects=self.cc_objects,
+                metrics_basepath=self.metrics_basepath,
             )
             self.__add_to_cache(http_req=http_req)
 
@@ -114,7 +127,9 @@ class CCloudMetricsHandler(CCloudBase):
         for _ in range(intervals):
             curr_date = curr_date - datetime.timedelta(days=1)
             curr = (curr_date, curr_date.date(), curr_date.isoformat() + "/" + granularity)
-            if not METRICS_PERSISTENCE_STORE.is_dataset_present(date_value=str(curr[1]), metric_name=metric_name):
+            if not METRICS_PERSISTENCE_STORE.is_dataset_present(
+                org_id=self.org_id, key=(str(curr[1]),), value=metric_name
+            ):
                 yield curr
             else:
                 print(f"Dataset already available for metric {metric_name} on {curr[1]}")
@@ -195,13 +210,16 @@ class CCloudObjectsHandler:
         self.read_all()
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CCloudChargebackHandler:
+    org_id: str
     cc_objects: CCloudObjectsHandler = field(init=True)
+    chargeback_basepath: str = field(init=False, repr=False)
     cb_manager: ChargebackManager = field(init=False)
 
     def __post_init__(self) -> None:
-        self.cb_manager = ChargebackManager(cc_objects=self.cc_objects, days_in_memory=3)
+        self.chargeback_basepath = STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.OutputData)
+        self.cb_manager = ChargebackManager(org_id=self.org_id, cc_objects=self.cc_objects, days_in_memory=3)
 
     def export_metrics_to_csv(self, output_basepath: str):
         self.cb_manager.output_to_csv(basepath=output_basepath)
@@ -248,6 +266,10 @@ class CCloudOrg:
 
     def __post_init__(self) -> None:
         self.org_id = sanitize_id(self._org_details["id"])
+        STORAGE_PATH.ensure_path(
+            org_id=self.org_id,
+            dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats],
+        )
 
         # Initialize the CCloud Objects Handler
         temp_conn = CCloudConnection(
@@ -264,6 +286,7 @@ class CCloudOrg:
             base_url=EndpointURL.TELEMETRY_URL,
         )
         self.metrics_handler = CCloudMetricsHandler(
+            org_id=self.org_id,
             _ccloud_connection=temp_conn,
             _requests=self._org_details["requests"],
             days_in_memory=self._days_in_memory,
@@ -271,10 +294,10 @@ class CCloudOrg:
         )
 
         # Initialize the Billing CSV Handler
-        self.billing_handler = CCloudBillingHandler()
+        self.billing_handler = CCloudBillingHandler(org_id=self.org_id)
 
         # Initialize the Chargeback Object Handler
-        self.chargeback_handler = CCloudChargebackHandler(cc_objects=self.objects_handler)
+        self.chargeback_handler = CCloudChargebackHandler(org_id=self.org_id, cc_objects=self.objects_handler)
 
         # Once every initialization step completes, get rid of the requests Dict to save memory.
         self._requests = None
@@ -283,7 +306,9 @@ class CCloudOrg:
         print(f"Gathering CCloud Existing Objects Data")
         self.objects_handler.execute_requests()
         print(f"Gathering Telemetry Data")
-        self.metrics_handler.execute_requests(output_basepath=STORAGE_PATH[DirType.MetricsData])
+        self.metrics_handler.execute_requests(
+            output_basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
+        )
         print(f"Checking for new Billing CSV Files")
         self.billing_handler.execute_requests()
 
@@ -305,7 +330,9 @@ class CCloudOrg:
                 )
             # TODO: Need to add more status for when data is missing, cannot silently ignore.
             # Bad user experience otherwise.
-        self.chargeback_handler.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.OutputData])
+        self.chargeback_handler.export_metrics_to_csv(
+            output_basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.OutputData, ensure_exists=True)
+        )
 
 
 @dataclass(kw_only=True)

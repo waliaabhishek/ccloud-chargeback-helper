@@ -14,7 +14,7 @@ import pandas as pd
 
 @dataclass(kw_only=True)
 class CCloudBillingManager:
-    path_to_monitor: str = field(default=STORAGE_PATH[DirType.BillingsData])
+    path_to_monitor: str = field(init=True)
     flush_to_disk_interval_sec: int = field(default=3)
 
     sync_needed: bool = field(default=False, init=False)

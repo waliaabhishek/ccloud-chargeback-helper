@@ -8,7 +8,14 @@ import yaml
 
 from ccloud.org import CCloudOrgList
 from helpers import logged_method, sanitize_metric_name, timed_method, env_parse_replace
-from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType, current_memory_usage, sync_to_file
+from storage_mgmt import (
+    COMMON_THREAD_RUNNER,
+    METRICS_PERSISTENCE_STORE,
+    STORAGE_PATH,
+    DirType,
+    current_memory_usage,
+    sync_to_file,
+)
 
 
 class WorkflowStage(Enum):
@@ -39,7 +46,9 @@ def run_gather_cycle(ccloud_orgs: CCloudOrgList):
 
     #  Invoke write to Disk.
     for org in ccloud_orgs.orgs.values():
-        org.metrics_handler.export_metrics_to_csv(output_basepath=STORAGE_PATH[DirType.MetricsData])
+        org.metrics_handler.export_metrics_to_csv(
+            output_basepath=STORAGE_PATH.get_path(org_id=org.org_id, dir_type=DirType.MetricsData, ensure_exists=True)
+        )
 
 
 @timed_method
@@ -53,25 +62,29 @@ def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
 def execute_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
     days_in_memory = core_config["config"]["system"]["days_in_memory"]
-    thread1 = threading.Thread(target=sync_to_file, args=(METRICS_PERSISTENCE_STORE, 3))
-    thread2 = threading.Thread(target=current_memory_usage, args=(METRICS_PERSISTENCE_STORE, 5))
-    thread1.start()
-    thread2.start()
-
-    # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
-    # Those will include the first run for all the data gather step as well.
-    # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
-    ccloud_orgs = CCloudOrgList(
-        _orgs=core_config["config"]["org_details"],
-        _days_in_memory=days_in_memory,
+    thread1 = COMMON_THREAD_RUNNER.get_new_thread(target_func=current_memory_usage, tick_duration_secs=5)
+    thread2 = METRICS_PERSISTENCE_STORE.get_new_thread(
+        target_func=sync_to_file, tick_duration_secs=METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec
     )
+    try:
+        thread1.start()
+        thread2.start()
 
-    run_gather_cycle(ccloud_orgs=ccloud_orgs)
+        # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
+        # Those will include the first run for all the data gather step as well.
+        # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
+        ccloud_orgs = CCloudOrgList(
+            _orgs=core_config["config"]["org_details"],
+            _days_in_memory=days_in_memory,
+        )
 
-    run_calculate_cycle(ccloud_orgs=ccloud_orgs)
+        run_gather_cycle(ccloud_orgs=ccloud_orgs)
 
-    # Begin shutdown process.
-    METRICS_PERSISTENCE_STORE.stop_sync()
-    print("Waiting for State Sync ticker for Final sync before exit")
-    thread1.join()
-    thread2.join()
+        run_calculate_cycle(ccloud_orgs=ccloud_orgs)
+    finally:
+        # Begin shutdown process.
+        METRICS_PERSISTENCE_STORE.stop_sync()
+        COMMON_THREAD_RUNNER.stop_sync()
+        print("Waiting for State Sync ticker for Final sync before exit")
+        thread1.join()
+        thread2.join()

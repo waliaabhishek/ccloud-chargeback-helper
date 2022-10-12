@@ -13,11 +13,12 @@ from storage_mgmt import CHARGEBACK_PERSISTENCE_STORE, STORAGE_PATH, DirType
 
 @dataclass(kw_only=True)
 class ChargebackManager:
+    org_id: str
     cc_objects: object = field(init=True, repr=False)
-    hourly_dataset: Dict[str, ChargebackDataframe] = field(init=True, default_factory=dict)
-    daily_dataset: Dict[str, ChargebackDataframe] = field(init=True, default_factory=dict)
-    monthly_dataset: Dict[str, ChargebackDataframe] = field(init=True, default_factory=dict)
     days_in_memory: int = field(default=3)
+    hourly_dataset: Dict[str, ChargebackDataframe] = field(init=True, repr=False, default_factory=dict)
+    daily_dataset: Dict[str, ChargebackDataframe] = field(init=True, repr=False, default_factory=dict)
+    monthly_dataset: Dict[str, ChargebackDataframe] = field(init=True, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         # self.daily_dataset = dict()
@@ -90,8 +91,11 @@ class ChargebackManager:
 
     def read_dataset_into_cache(self, datetime_value: datetime.datetime):
         m, d, t = self.__is_key_present_in_cache(key=datetime_value)
+        basepath = STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.OutputData)
         if not m:
-            _, _, file_path = self.get_filepath(time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.MONTHLY)
+            _, _, file_path = self.get_filepath(
+                time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.MONTHLY, basepath=basepath
+            )
             if not self.__is_file_present(file_path):
                 print(f"Monthly Chargeback Cache Re-hydration requested. File not found for re-hydration: {file_path}")
             else:
@@ -106,7 +110,9 @@ class ChargebackManager:
                     ),
                 )
         if not d:
-            _, _, file_path = self.get_filepath(time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.DAILY)
+            _, _, file_path = self.get_filepath(
+                time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.DAILY, basepath=basepath
+            )
             if not self.__is_file_present(file_path):
                 print(f"Daily Chargeback Cache Re-hydration requested. File not found for re-hydration: {file_path}")
             else:
@@ -121,7 +127,9 @@ class ChargebackManager:
                     ),
                 )
         if not t:
-            _, _, file_path = self.get_filepath(time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.HOURLY)
+            _, _, file_path = self.get_filepath(
+                time_slice=datetime_value, data_bucket=ChargebackTimeSliceType.HOURLY, basepath=basepath
+            )
             if not self.__is_file_present(file_path):
                 print(f"Hourly Chargeback Cache Re-hydration requested. File not found for re-hydration: {file_path}")
             else:
@@ -149,7 +157,7 @@ class ChargebackManager:
         self,
         time_slice: datetime.datetime,
         data_bucket: str,
-        basepath=STORAGE_PATH[DirType.OutputData],
+        basepath: str,
     ):
         date_folder_path = os.path.join(basepath, f"{str(time_slice.date())}")
         ensure_path(path=date_folder_path)
@@ -175,7 +183,8 @@ class ChargebackManager:
         time_key = key.strftime(get_date_format(ChargebackTimeSliceType.HOURLY))
         return monthly_key, date_key, time_key
 
-    def output_to_csv(self, basepath: str = STORAGE_PATH[DirType.OutputData]):
+    def output_to_csv(self, basepath: str):
+        basepath = STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.OutputData)
         for k, v in self.monthly_dataset.items():
             df = v.cb_unit.get_dataframe()
             _, file_name, file_path = self.get_filepath(
@@ -184,7 +193,10 @@ class ChargebackManager:
                 basepath=basepath,
             )
             df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
-            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=k, metric_name=file_name)
+            CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(
+                org_id=self.org_id, key=(k, ChargebackTimeSliceType.MONTHLY), value=file_name
+            )
+            # CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(date_value=k, metric_name=file_name)
         for k, v in self.daily_dataset.items():
             df = v.cb_unit.get_dataframe()
             _, file_name, file_path = self.get_filepath(
@@ -193,7 +205,10 @@ class ChargebackManager:
                 basepath=basepath,
             )
             df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
-            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=k, metric_name=file_name)
+            CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(
+                org_id=self.org_id, key=(k, ChargebackTimeSliceType.DAILY), value=file_name
+            )
+            # CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(date_value=k, metric_name=file_name)
         for k, v in self.hourly_dataset.items():
             df = v.cb_unit.get_dataframe()
             _, file_name, file_path = self.get_filepath(
@@ -202,7 +217,10 @@ class ChargebackManager:
                 basepath=basepath,
             )
             df.to_csv(file_path, quoting=QUOTE_NONNUMERIC)
-            CHARGEBACK_PERSISTENCE_STORE.add_to_persistence(date_value=k, metric_name=file_name)
+            CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(
+                org_id=self.org_id, key=(k, ChargebackTimeSliceType.HOURLY), value=file_name
+            )
+            # CHARGEBACK_PERSISTENCE_STORE.add_data_to_persistence_store(date_value=k, metric_name=file_name)
 
     def find_datasets_to_evict(self) -> Tuple[List[str], List[str]]:
         out_daily_feed = list(self.daily_dataset.keys()).sort(reverse=True)[self.days_in_memory - 1 :]

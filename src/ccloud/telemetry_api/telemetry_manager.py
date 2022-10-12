@@ -16,7 +16,9 @@ from storage_mgmt import STORAGE_PATH, DirType
 
 @dataclass(kw_only=True)
 class CCloudMetricsManager:
+    org_id: str = field(init=True)
     _base_payload: Dict
+    metrics_basepath: str
     cc_objects: object = field(init=True, repr=False)
     ccloud_url: str = field(default=None)
     days_in_memory: int = field(default=7)
@@ -95,7 +97,7 @@ class CCloudMetricsManager:
     def get_filepath(
         self,
         date_value: datetime.date,
-        basepath=STORAGE_PATH[DirType.MetricsData],
+        basepath: str,
         metric_dataset_name: MetricsDatasetNames = MetricsDatasetNames.metricsapi_representation,
     ):
         date_folder_path = os.path.join(basepath, f"{str(date_value)}")
@@ -113,9 +115,12 @@ class CCloudMetricsManager:
     def read_dataset_into_cache(self, datetime_value: datetime.datetime) -> bool:
         date_value = str(datetime_value.date())
         if date_value not in self.metrics_dataframes.keys():
-            _, out_file_path = self.get_filepath(date_value=date_value)
+            _, out_file_path = self.get_filepath(
+                date_value=date_value, basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
+            )
             if self.is_file_present(file_path=out_file_path):
                 self.metrics_dataframes[str(date_value)] = MetricsDataframe(
+                    org_id=self.org_id,
                     aggregation_metric_name=self.aggregation_metric,
                     _metrics_output={},
                     filename_for_read_in=out_file_path,
@@ -179,6 +184,6 @@ class CCloudMetricsManager:
         for dataset in self.find_datasets_to_evict():
             self.metrics_dataframes.pop(dataset).output_to_csv(basepath=output_basepath)
         self.metrics_dataframes[str(date_range[1])] = MetricsDataframe(
-            aggregation_metric_name=self.aggregation_metric, _metrics_output=self.http_response
+            org_id=self.org_id, aggregation_metric_name=self.aggregation_metric, _metrics_output=self.http_response
         )
         self.http_response["data"] = []
