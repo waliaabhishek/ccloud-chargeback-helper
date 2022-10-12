@@ -41,10 +41,13 @@ def env_parse_replace(input):
 def ensure_path(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
+        print(f"Directory Created: {path}")
+    else:
+        print(f"Path already present: {path}")
 
 
 def sanitize_id(input: str) -> str:
-    return input.strip().replace(" ", "_")
+    return input.strip().replace(" ", "_").lower()
 
 
 def sanitize_metric_name(input: str) -> str:
