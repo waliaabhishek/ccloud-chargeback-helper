@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from dataclasses_json import dataclass_json
 from enum import Enum, auto
 from typing import List
 
@@ -79,7 +78,6 @@ class CCMEReq_Aggregations:
     agg: str = field(default="SUM")
 
 
-@dataclass_json
 @dataclass(kw_only=True)
 class CCMERequest:
     aggregations: List[CCMEReq_Aggregations]
