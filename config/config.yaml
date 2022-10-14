@@ -15,6 +15,8 @@ config:
         billing_csv:
       requests:
         - CHARGEBACK_REQUESTS
+        # The below request is part of the CHARGEBACK_REQUESTS dataset , but can be used to override any specific attribute like below.
+        # This is also a sample, if you wish to gather any other non exportable metric from Metrics API.
         - id: Fetch Request Bytes
           aggregations:
             - metric: io.confluent.kafka.server/request_bytes
