@@ -1,4 +1,5 @@
 import os
+import shutil
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -27,6 +28,11 @@ class StoragePathManagement:
     def ensure_path(self, org_id: str, dir_type: List[DirType]):
         for item in dir_type:
             ensure_path(self.__generate_path(org_id=org_id, dir_type=item))
+
+    def delete_path(self, org_id: str, dir_type: DirType):
+        full_path = self.__generate_path(org_id=org_id, dir_type=dir_type)
+        if os.path.exists(full_path) and full_path.startswith(os.path.join(self.basepath, self.base_dir)):
+            shutil.rmtree(full_path)
 
     def get_path(self, org_id: str, dir_type=DirType, ensure_exists: bool = False):
         if ensure_exists:

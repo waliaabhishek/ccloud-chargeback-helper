@@ -266,6 +266,10 @@ class CCloudOrg:
 
     def __post_init__(self) -> None:
         self.org_id = sanitize_id(self._org_details["id"])
+        # Delete the Output Directory for now as the Calculations are not tracked.
+        # They need to be re-calculated and set-up again.
+        # This will go away in future release when time window and billing CSV based tracking is added.
+        STORAGE_PATH.delete_path(org_id=self.org_id, dir_type=DirType.OutputData)
         STORAGE_PATH.ensure_path(
             org_id=self.org_id,
             dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats],

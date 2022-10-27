@@ -84,7 +84,15 @@ class CCloudConnectorList(CCloudBase):
             print("Found connector config for connector " + item["name"])
             owner_id = None
             if "kafka.api.key" in item.keys():
-                owner_id = item["kafka.api.key"]
+                api_key = item["kafka.api.key"]
+                if not all([ch == "*" for ch in api_key]):
+                    owner_id = api_key
+                else:
+                    print(f"Connector API Key Masked. Found API Key {api_key} for Connector {item['name']}.")
+                    print(
+                        f"API Key is unavailable for Mapping Connector {item['name']} to its corresponding Service Account. Connector Ownership will default to the Kafka Cluster {kafka_cluster} instead."
+                    )
+                    owner_id = kafka_cluster.cluster_id
             elif "kafka.service.account.id" in item.keys():
                 owner_id = item["kafka.service.account.id"]
             self.__add_to_cache(
