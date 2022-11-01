@@ -193,7 +193,7 @@ class ChargebackDataframe:
                         self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
                 else:
                     print(
-                        f"No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
+                        f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype} for {row_cid} as Cluster Shared Cost"
                     )
                     self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "KafkaNetworkRead":
@@ -234,7 +234,7 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"Could not map {row_ptype} for {row_cid} during timeslice {str(time_slice)}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                        f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
                     )
                     self.cb_unit.add_cost(
                         row_cid,
@@ -281,7 +281,7 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"Could not map {row_ptype} for {row_cid} during timeslice {str(time_slice)}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                        f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
                     )
                     self.cb_unit.add_cost(
                         row_cid,
@@ -311,7 +311,7 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"No API Keys were found for cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                        f"Row TS: {str(row_ts)} -- No API Keys were found for cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
                     )
                     self.cb_unit.add_cost(
                         row_cid,
@@ -361,7 +361,7 @@ class ChargebackDataframe:
                 else:
                     if len(sa_count) > 0:
                         print(
-                            f"No Production/Consumption activity for cluster {row_cid} during time slice {str(time_slice)}. Splitting Usage Ratio for {row_ptype} across all Service Accounts as Shared Cost"
+                            f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid}. Splitting Usage Ratio for {row_ptype} across all Service Accounts as Shared Cost"
                         )
                         splitter = len(sa_count)
                         for sa_name, sa_api_key_count in sa_count.items():
@@ -373,7 +373,7 @@ class ChargebackDataframe:
                             )
                     else:
                         print(
-                            f"No Production/Consumption activity for cluster {row_cid} during time slice {str(time_slice)} and no API Keys found for the cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                            f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid} and no API Keys found for the cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
                         )
                         self.cb_unit.add_cost(
                             row_cid, row_ts, row_ptype, additional_shared_cost=row_cost * usage_charge_ratio
@@ -389,7 +389,7 @@ class ChargebackDataframe:
                         self.cb_unit.add_cost(sa_name, row_ts, row_ptype, additional_shared_cost=row_cost / splitter)
                 else:
                     print(
-                        f"No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
+                        f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
                     )
                     self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "EventLogRead":
@@ -417,7 +417,7 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"No Connector Details were found (probably due to Connector API Scrape Error). Using the Connector {row_cid} and adding cost as Shared Cost"
+                        f"Row TS: {str(row_ts)} -- No Connector Details were found. Attributing as Shared Cost for Kafka Cluster {row_cid}"
                     )
                     self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype in ["ConnectNumTasks", "ConnectThroughput"]:
@@ -439,7 +439,7 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"No Connector Details were found (probably due to Connector API Scrape Error). Using the Connector {row_cid} and adding cost as Shared Cost"
+                        f"Row TS: {str(row_ts)} -- No Connector Details were found. Using the Connector {row_cid} and adding cost as Shared Cost"
                     )
                     self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "ClusterLinkingPerLink":
@@ -451,6 +451,22 @@ class ChargebackDataframe:
             elif row_ptype == "ClusterLinkingWrite":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
+            elif row_ptype == "GovernanceBase":
+                # GOAL: Cost will be equally spread across all the Kafka Clusters existing in this CCloud Environment
+                active_identities = set(
+                    [y.cluster_id for x, y in self.cc_objects.cc_clusters.cluster.items() if y.env_id == row_env]
+                )
+                if len(active_identities) > 0:
+                    splitter = len(active_identities)
+                    for identity_item in active_identities:
+                        self.cb_unit.add_cost(
+                            identity_item, row_ts, row_ptype, additional_usage_cost=row_cost / splitter
+                        )
+                else:
+                    print(
+                        f"Row TS: {str(row_ts)} -- No Kafka Clusters present within the environment. Attributing as Shared Cost to {row_env}"
+                    )
+                    self.cb_unit.add_cost(row_env, row_ts, row_ptype, additional_shared_cost=row_cost)
             elif row_ptype == "KSQLNumCSUs":
                 # GOAL: Cost will be assumed by the ksql Service Account/User being used by the ksqldb cluster
                 # There will be only one active Identity but we will still loop on the identity for consistency
@@ -470,10 +486,12 @@ class ChargebackDataframe:
                         )
                 else:
                     print(
-                        f"No KSQL Cluster Details were found (probably due to KSQLDB API Scrape Error or the cluster is already deleted). Using the ksqlDB cluster ID {row_cid} and adding cost as Shared Cost"
+                        f"Row TS: {str(row_ts)} -- No KSQL Cluster Details were found. Attributing as Shared Cost for ksqlDB cluster ID {row_cid}"
                     )
                     self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
             else:
                 print("=" * 80)
-                print(f"No Chargeback calculation available for {row_ptype}. Please request for it to be added.")
+                print(
+                    f"Row TS: {str(row_ts)} -- No Chargeback calculation available for {row_ptype}. Please request for it to be added."
+                )
                 print("=" * 80)
