@@ -339,7 +339,11 @@ class CCloudOrg:
             yield datetime.datetime.fromisoformat(item)
 
     def run_calculations(self):
+        curr_date = datetime.datetime.now(tz=None).replace(hour=0, minute=0, second=0, microsecond=0)
         for hour_slice in self.find_available_hour_slices_in_billing_datasets():
+            if hour_slice >= curr_date:
+                print(f"Skipping Billing Row TS - {hour_slice} as the Metrics are fetched with 1 day delay")
+                continue
             billing_data = self.billing_handler.get_hourly_dataset(time_slice=hour_slice)
             if billing_data:
                 metrics_found, metrics_data = self.metrics_handler.get_hourly_dataset(
