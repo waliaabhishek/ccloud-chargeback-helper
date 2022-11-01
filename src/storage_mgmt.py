@@ -46,10 +46,12 @@ STORAGE_PATH.ensure_path(org_id="common", dir_type=[])
 
 @dataclass
 class ThreadableRunner:
+    object_lock: threading.Lock = field(init=False)
     sync_runner_status: threading.Event = field(init=False)
 
     def __post_init__(self):
         self.sync_runner_status = threading.Event()
+        self.object_lock = threading.Lock()
         self.start_sync()
 
     def start_sync(self):
@@ -85,7 +87,7 @@ class PersistenceStore(ThreadableRunner):
         self.write_file(force_write=True)
 
     def __encode_key(self, key: Tuple) -> str:
-        return "___".join(str(x) for x in key)
+        return "___".join(str(x).replace(" ", "_") for x in key)
 
     def __decode_key(self, key: str) -> str:
         return tuple([x for x in key.split("___")])
@@ -94,13 +96,16 @@ class PersistenceStore(ThreadableRunner):
         temp = self.persistence_path.get(org_id, {})
         # temp = self.persistence_path.get(org_id, dict())
         if not temp:
-            temp["path"] = os.path.join(
-                STORAGE_PATH.get_path(org_id=org_id, dir_type=DirType.PersistenceStats, ensure_exists=ensure_exists),
-                f"{self.data_type}_{DirType.PersistenceStats.name}.json",
-            )
-            temp["sync_needed"] = False
-            temp["data"] = dict()
-            self.persistence_path[org_id] = temp
+            with self.object_lock:
+                temp["path"] = os.path.join(
+                    STORAGE_PATH.get_path(
+                        org_id=org_id, dir_type=DirType.PersistenceStats, ensure_exists=ensure_exists
+                    ),
+                    f"{self.data_type}_{DirType.PersistenceStats.name}.json",
+                )
+                temp["sync_needed"] = False
+                temp["data"] = dict()
+                self.persistence_path[org_id] = temp
             self.rehydrate_persistence_status(org_id=org_id)
 
     def rehydrate_persistence_status(self, org_id: str = "common"):
@@ -111,7 +116,7 @@ class PersistenceStore(ThreadableRunner):
                 org_details["data"] = load(f)
         for item in self.__find_datasets_to_evict(org_id=org_id):
             org_details["data"].pop(item)
-        print(org_details["data"])
+        # print(org_details["data"])
 
     def add_data_to_persistence_store(self, org_id: str, key: Tuple, value: str):
         if not org_id in self.persistence_path.keys():
@@ -122,12 +127,17 @@ class PersistenceStore(ThreadableRunner):
         if temp_key in org_data.keys():
             temp_val = org_data[temp_key]
             if value not in temp_val:
-                temp_val.append(value)
-                org_data[temp_key] = temp_val
-                self.persistence_path[org_id]["sync_needed"] = True
+                with self.object_lock:
+                    temp_val.append(value)
+                    org_data[temp_key] = temp_val
+                    self.persistence_path[org_id]["sync_needed"] = True
         else:
-            org_data[temp_key] = [value]
-            self.persistence_path[org_id]["sync_needed"] = True
+            with self.object_lock:
+                org_data[temp_key] = [value]
+                self.persistence_path[org_id]["sync_needed"] = True
+        # if sync_needed_flag:
+        #     with self.object_lock:
+        #         self.persistence_path[org_id]["sync_needed"] = True
 
     def is_dataset_present(self, org_id: str, key: Tuple, value: dict) -> bool:
         temp_key = self.__encode_key(key=key)
@@ -139,13 +149,11 @@ class PersistenceStore(ThreadableRunner):
         return False
 
     def write_file(self, force_write: bool = False):
-        for org_id, v in self.persistence_path.items():
-            if v["sync_needed"] and force_write:
-                with open(v["path"], "w") as f:
-                    f.write(dumps(v["data"], indent=1))
-
-        # with open(self.out_path, "w") as f:
-        #     f.write(dumps(self.__status, indent=1))
+        with self.object_lock:
+            for org_id, v in self.persistence_path.items():
+                if org_id not in ["common"] and (v["sync_needed"] or force_write):
+                    with open(v["path"], "w") as f:
+                        f.write(dumps(v["data"], indent=1))
 
     def __find_datasets_to_evict(self, org_id: str) -> List[str]:
         if self.historical_data_to_maintain == -1:
@@ -182,4 +190,6 @@ METRICS_PERSISTENCE_STORE = PersistenceStore(data_type="Metrics")
 #     historical_data_to_maintain=-1,
 # )
 # This will be use to store status for writing chargeback datasets to disk.
-CHARGEBACK_PERSISTENCE_STORE = PersistenceStore(data_type="Chargeback")
+CHARGEBACK_PERSISTENCE_STORE = PersistenceStore(data_type="Chargeback", historical_data_to_maintain=-1)
+# This will be use to store status for writing chargeback datasets to disk.
+BILLING_PERSISTENCE_STORE = PersistenceStore(data_type="Billing", historical_data_to_maintain=-1)
