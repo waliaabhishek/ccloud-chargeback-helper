@@ -352,9 +352,9 @@ class CCloudOrg:
                             billing_dataframe=data_set,
                             metrics_dataframe=metrics_data,
                         )
-                    BILLING_PERSISTENCE_STORE.add_data_to_persistence_store(
-                        org_id=self.org_id, key=(hour_slice,), value=filename
-                    )
+                        BILLING_PERSISTENCE_STORE.add_data_to_persistence_store(
+                            org_id=self.org_id, key=(hour_slice,), value=filename
+                        )
             # TODO: Need to add more status for when data is missing, cannot silently ignore.
             # Bad user experience otherwise.
         self.chargeback_handler.export_metrics_to_csv(
