@@ -42,8 +42,8 @@ def ensure_path(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
         print(f"Directory Created: {path}")
-    else:
-        print(f"Path already present: {path}")
+    # else:
+    #     print(f"Path already present: {path}")
 
 
 def sanitize_id(input: str) -> str:
