@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import datetime
-from typing import Dict, List, Set
+import os
+from typing import Dict, List, Set, Tuple
 import pandas as pd
 from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
 from ccloud.core_api.api_keys import CCloudAPIKeyList
@@ -16,7 +17,13 @@ from ccloud.telemetry_api.telemetry_manager import CCloudMetricsManager
 from ccloud.model import CCMEReq_Granularity
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
 from helpers import sanitize_id, BILLING_METRICS_SCOPE
-from storage_mgmt import METRICS_PERSISTENCE_STORE, STORAGE_PATH, DirType
+from storage_mgmt import (
+    BILLING_PERSISTENCE_STORE,
+    CHARGEBACK_PERSISTENCE_STORE,
+    METRICS_PERSISTENCE_STORE,
+    STORAGE_PATH,
+    DirType,
+)
 
 
 @dataclass
@@ -46,13 +53,21 @@ class CCloudBillingHandler:
             out = out.union(billing_dataframe.hourly_date_range)
         return out
 
-    def get_hourly_dataset(self, time_slice: datetime.datetime) -> pd.DataFrame:
-        out = pd.DataFrame()
+    # def get_hourly_dataset(self, time_slice: datetime.datetime) -> Tuple[pd.DataFrame, Set[str]]:
+    def get_hourly_dataset(self, time_slice: datetime.datetime) -> Dict[str, pd.DataFrame]:
+        out_data = dict()
         for filename, billing_dataframe in self.billing_manager.billing_dataframes.items():
-            file_level_df = billing_dataframe.get_hourly_dataset(datetime_slice_iso_format=time_slice)
-            if not file_level_df.empty:
-                out = pd.concat([out, file_level_df])
-        return out
+            filename_token = os.path.basename(filename)
+            if not BILLING_PERSISTENCE_STORE.is_dataset_present(
+                org_id=self.org_id, key=(time_slice,), value=filename_token
+            ):
+                file_level_df = billing_dataframe.get_hourly_dataset(datetime_slice_iso_format=time_slice)
+                out_data[filename_token] = file_level_df
+            else:
+                print(
+                    f"Data already captured and processed for file {filename_token} for timeslice {time_slice}. Skipping."
+                )
+        return out_data
 
 
 @dataclass
@@ -269,11 +284,14 @@ class CCloudOrg:
         # Delete the Output Directory for now as the Calculations are not tracked.
         # They need to be re-calculated and set-up again.
         # This will go away in future release when time window and billing CSV based tracking is added.
-        STORAGE_PATH.delete_path(org_id=self.org_id, dir_type=DirType.OutputData)
+        # STORAGE_PATH.delete_path(org_id=self.org_id, dir_type=DirType.OutputData)
         STORAGE_PATH.ensure_path(
             org_id=self.org_id,
             dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats],
         )
+        METRICS_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
+        BILLING_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
+        CHARGEBACK_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
 
         # Initialize the CCloud Objects Handler
         temp_conn = CCloudConnection(
@@ -323,15 +341,20 @@ class CCloudOrg:
     def run_calculations(self):
         for hour_slice in self.find_available_hour_slices_in_billing_datasets():
             billing_data = self.billing_handler.get_hourly_dataset(time_slice=hour_slice)
-            metrics_found, metrics_data = self.metrics_handler.get_hourly_dataset(
-                time_slice=hour_slice, billing_mgmt=True
-            )
-            if not billing_data.empty and not metrics_data.empty:
-                self.chargeback_handler.run_calculations(
-                    time_slice=hour_slice,
-                    billing_dataframe=billing_data,
-                    metrics_dataframe=metrics_data,
+            if billing_data:
+                metrics_found, metrics_data = self.metrics_handler.get_hourly_dataset(
+                    time_slice=hour_slice, billing_mgmt=True
                 )
+                for filename, data_set in billing_data.items():
+                    if not data_set.empty and not metrics_data.empty:
+                        self.chargeback_handler.run_calculations(
+                            time_slice=hour_slice,
+                            billing_dataframe=data_set,
+                            metrics_dataframe=metrics_data,
+                        )
+                    BILLING_PERSISTENCE_STORE.add_data_to_persistence_store(
+                        org_id=self.org_id, key=(hour_slice,), value=filename
+                    )
             # TODO: Need to add more status for when data is missing, cannot silently ignore.
             # Bad user experience otherwise.
         self.chargeback_handler.export_metrics_to_csv(
