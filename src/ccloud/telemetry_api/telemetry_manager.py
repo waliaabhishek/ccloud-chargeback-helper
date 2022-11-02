@@ -134,9 +134,9 @@ class CCloudMetricsManager:
     def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
         able_to_read = self.read_dataset_into_cache(datetime_value=datetime_slice_iso_format)
         if not able_to_read:
-            print(
-                f"The data calculations might be skewed. Telemetry Dataset not available on Disk for Metric: {self.aggregation_metric} for Date: {str(datetime_slice_iso_format)}"
-            )
+            # print(
+            #     f"The data calculations might be skewed. Telemetry Dataset not available on Disk for Metric: {self.aggregation_metric} for Date: {str(datetime_slice_iso_format)}"
+            # )
             return (self.aggregation_metric, None)
         target_df = self.metrics_dataframes.get(str(datetime_slice_iso_format.date()))
         target_df = target_df.get_dataset(ds_name=MetricsDatasetNames.metricsapi_representation.name).data
