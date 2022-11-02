@@ -83,21 +83,20 @@ def execute_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
     get_app_props(core_config["config"])
 
-    thread1 = COMMON_THREAD_RUNNER.get_new_thread(target_func=current_memory_usage, tick_duration_secs=5)
-    thread2 = METRICS_PERSISTENCE_STORE.get_new_thread(
-        target_func=sync_to_file, tick_duration_secs=METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec
-    )
-    thread3 = CHARGEBACK_PERSISTENCE_STORE.get_new_thread(
-        target_func=sync_to_file, tick_duration_secs=CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec
-    )
-    thread4 = BILLING_PERSISTENCE_STORE.get_new_thread(
-        target_func=sync_to_file, tick_duration_secs=BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec
-    )
+    thread_configs = [
+        [COMMON_THREAD_RUNNER, current_memory_usage, 5],
+        [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+    ]
+
+    threads_list = list()
+    for seq, item in enumerate(thread_configs):
+        threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
+
     try:
-        thread1.start()
-        thread2.start()
-        thread3.start()
-        thread4.start()
+        for item in threads_list:
+            item.start()
 
         # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
         # Those will include the first run for all the data gather step as well.
@@ -112,12 +111,8 @@ def execute_workflow(arg_flags: Namespace):
         run_calculate_cycle(ccloud_orgs=ccloud_orgs)
     finally:
         # Begin shutdown process.
-        METRICS_PERSISTENCE_STORE.stop_sync()
-        CHARGEBACK_PERSISTENCE_STORE.stop_sync()
-        BILLING_PERSISTENCE_STORE.stop_sync()
-        COMMON_THREAD_RUNNER.stop_sync()
+        for item in thread_configs:
+            item[0].stop_sync()
         print("Waiting for State Sync ticker for Final sync before exit")
-        thread1.join()
-        thread2.join()
-        thread3.join()
-        thread4.join()
+        for item in threads_list:
+            item.join()
