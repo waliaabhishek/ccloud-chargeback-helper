@@ -350,7 +350,7 @@ class CCloudOrg:
                     time_slice=hour_slice, billing_mgmt=True
                 )
                 for filename, data_set in billing_data.items():
-                    if not data_set.empty and not metrics_data.empty:
+                    if not data_set.empty:
                         self.chargeback_handler.run_calculations(
                             time_slice=hour_slice,
                             billing_dataframe=data_set,
