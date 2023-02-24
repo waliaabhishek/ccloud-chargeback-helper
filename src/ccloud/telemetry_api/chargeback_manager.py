@@ -107,6 +107,8 @@ class ChargebackManager:
                         time_slice=datetime_value,
                         bucket_type=ChargebackTimeSliceType.MONTHLY,
                         file_path=file_path,
+                        _metrics_dataframe=None,
+                        _billing_dataframe=None,
                     ),
                 )
         if not d:
@@ -124,6 +126,8 @@ class ChargebackManager:
                         time_slice=datetime_value,
                         bucket_type=ChargebackTimeSliceType.DAILY,
                         file_path=file_path,
+                        _metrics_dataframe=None,
+                        _billing_dataframe=None,
                     ),
                 )
         if not t:
@@ -141,6 +145,8 @@ class ChargebackManager:
                         time_slice=datetime_value,
                         bucket_type=ChargebackTimeSliceType.HOURLY,
                         file_path=file_path,
+                        _metrics_dataframe=None,
+                        _billing_dataframe=None,
                     ),
                 )
 
@@ -238,38 +244,3 @@ class ChargebackManager:
         ]
 
         return (out_daily_feed, out_hourly_feed)
-
-    # def get_hourly_dataset(self, datetime_slice_iso_format: datetime.datetime):
-    #     able_to_read = self.read_dataset_into_cache(datetime_value=datetime_slice_iso_format)
-    #     if not able_to_read:
-    #         print(
-    #             f"Telemetry Dataset not available on Disk for Metric: {self.aggregation_metric} for Date: {str(datetime_slice_iso_format.date())}"
-    #         )
-    #         print(f"The data calculations might be skewed.")
-    #         return None
-    #     target_df = self.metrics_dataframes.get(str(datetime_slice_iso_format.date()))
-    #     target_df = target_df.get_dataset(ds_name=MetricsDatasetNames.metricsapi_representation.name)
-    #     row_range = target_df[METRICS_CSV_COLUMNS.IN_TS]
-    #     row_switcher = row_range.isin([str(datetime_slice_iso_format)])
-
-    #     out = []
-    #     for row_val in self.data.itertuples(index=False, name="TelemetryData"):
-    #         out.extend(
-    #             [
-    #                 {
-    #                     METRICS_CSV_COLUMNS.OUT_TS: presence_ts,
-    #                     METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER: row_val["resource.kafka.id"],
-    #                     METRICS_CSV_COLUMNS.OUT_PRINCIPAL: row_val.metric.principal_id,
-    #                     self.aggregation_metric: row_val.value,
-    #                 }
-    #                 for presence_flag, presence_ts in zip(row_switcher, row_range)
-    #                 if bool(presence_flag) is True
-    #             ]
-    #         )
-    #     return self.aggregation_metric, pd.DataFrame.from_records(
-    #         out,
-    #         index=[
-    #             METRICS_CSV_COLUMNS.OUT_TS,
-    #             METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER,
-    #         ],
-    #     )

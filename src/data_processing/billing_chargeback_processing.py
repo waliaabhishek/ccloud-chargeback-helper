@@ -58,9 +58,9 @@ class ChargebackUnit:
     def read_from_file(self, file_path: str):
         temp = pd.read_csv(
             file_path,
-            parse_dates=[CHARGEBACK_COLUMNS.TS],
-            infer_datetime_format=True,
-            index_col=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS],
+            # parse_dates=[CHARGEBACK_COLUMNS.TS],
+            # infer_datetime_format=True,
+            # index_col=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS],
         )
         for cb_row in temp.itertuples(index=True, name="ChargebackRow"):
             detailed_split = {}
@@ -451,7 +451,7 @@ class ChargebackDataframe:
             elif row_ptype == "ClusterLinkingWrite":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.cb_unit.add_cost(row_cid, row_ts, row_ptype, additional_shared_cost=row_cost)
-            elif row_ptype == "GovernanceBase":
+            elif row_ptype in ["GovernanceBase", "SchemaRegistry"]:
                 # GOAL: Cost will be equally spread across all the Kafka Clusters existing in this CCloud Environment
                 active_identities = set(
                     [y.cluster_id for x, y in self.cc_objects.cc_clusters.cluster.items() if y.env_id == row_env]
