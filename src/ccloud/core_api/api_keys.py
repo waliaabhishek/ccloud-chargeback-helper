@@ -1,10 +1,12 @@
 import pprint
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict, List
 from urllib import parse
 import requests
 from ccloud.connections import CCloudBase
+from prometheus_processing.metrics_server import TimestampedGauge
+from dateutil import parser
 
 pp = pprint.PrettyPrinter(indent=2)
 
@@ -17,6 +19,20 @@ class CCloudAPIKey:
     owner_id: str
     cluster_id: str
     created_at: str
+
+
+api_key_prom_metrics = TimestampedGauge(
+    "confluent_cloud_api_key",
+    "API Key details for every API Key created within CCloud",
+    ["api_key", "owner_id", "cluster_id", "created_at"],
+    timestamp=time(),
+)
+api_key_prom_agg_count = TimestampedGauge(
+    "confluent_cloud_api_key_count",
+    "API Key details for every API Key created within CCloud",
+    ["owner_id", "cluster_id"],
+    timestamp=time(),
+)
 
 
 @dataclass
@@ -32,6 +48,11 @@ class CCloudAPIKeyList(CCloudBase):
         self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.api_keys)
         print("Gathering list of all API Key(s) for all Service Account(s) in CCloud.")
         self.read_all()
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.api_keys.items():
+            api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id, v.created_at).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
@@ -50,7 +71,7 @@ class CCloudAPIKeyList(CCloudBase):
                             api_key_description=item["spec"]["description"],
                             owner_id=item["spec"]["owner"]["id"],
                             cluster_id=item["spec"]["resource"]["id"],
-                            created_at=item["metadata"]["created_at"],
+                            created_at=parser.isoparse(item["metadata"]["created_at"]),
                         )
                     )
             if "next" in out_json["metadata"]:

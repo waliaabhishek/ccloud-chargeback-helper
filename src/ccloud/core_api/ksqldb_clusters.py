@@ -1,12 +1,14 @@
 import pprint
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict
 from urllib import parse
 import requests
 
+from dateutil import parser
 from ccloud.connections import CCloudBase
 from ccloud.core_api.environments import CCloudEnvironmentList
+from prometheus_processing.metrics_server import TimestampedGauge
 
 pp = pprint.PrettyPrinter(indent=2)
 
@@ -20,6 +22,14 @@ class CCloudKsqldbCluster:
     kafka_cluster_id: str
     owner_id: str
     created_at: str
+
+
+ksqldb_prom_metrics = TimestampedGauge(
+    "confluent_cloud_ksqldb_cluster",
+    "Environment Details for every Environment created within CCloud",
+    ["cluster_id", "env_id", "kafka_cluster_id", "created_at"],
+    timestamp=time(),
+)
 
 
 @dataclass
@@ -36,6 +46,11 @@ class CCloudKsqldbClusterList(CCloudBase):
         self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.list_ksql_clusters)
         print("Gathering list of all ksqlDB Clusters for all Service Account(s) in CCloud.")
         self.read_all()
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.ksqldb_clusters.items():
+            ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id, v.created_at).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
@@ -58,7 +73,7 @@ class CCloudKsqldbClusterList(CCloudBase):
                                 env_id=item["spec"]["environment"]["id"],
                                 kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
                                 owner_id=item["spec"]["credential_identity"]["id"],
-                                created_at=item["metadata"]["created_at"],
+                                created_at=parser.isoparse(item["metadata"]["created_at"]),
                             )
                         )
                 if "next" in out_json["metadata"]:

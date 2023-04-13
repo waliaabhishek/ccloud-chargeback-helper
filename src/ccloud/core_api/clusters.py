@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict
 from urllib import parse
 
@@ -7,6 +7,7 @@ import requests
 
 from ccloud.connections import CCloudBase
 from ccloud.core_api.environments import CCloudEnvironmentList
+from prometheus_processing.metrics_server import TimestampedGauge
 
 
 @dataclass
@@ -18,6 +19,14 @@ class CCloudCluster:
     availability: str
     region: str
     bootstrap_url: str
+
+
+kafka_cluster_prom_metrics = TimestampedGauge(
+    "confluent_cloud_kafka_cluster",
+    "Cluster Details for every Kafka Cluster created within CCloud",
+    ["cluster_id", "env_id"],
+    timestamp=time(),
+)
 
 
 @dataclass
@@ -32,6 +41,11 @@ class CCloudClusterList(CCloudBase):
         for item in self.ccloud_env.env.values():
             print("Checking Environment " + item.env_id + " for any provisioned clusters.")
             self.read_all(env_id=item.env_id, params={"page_size": 50})
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.cluster.items():
+            kafka_cluster_prom_metrics.labels(v.cluster_id, v.env_id).set(1)
 
     def __str__(self):
         for v in self.cluster.values():

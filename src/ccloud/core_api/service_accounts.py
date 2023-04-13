@@ -1,11 +1,13 @@
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict
 from urllib import parse
 
 import requests
 
+from dateutil import parser
 from ccloud.connections import CCloudBase
+from prometheus_processing.metrics_server import TimestampedGauge
 
 
 @dataclass
@@ -17,6 +19,14 @@ class CCloudServiceAccount:
     updated_at: str
 
 
+sa_prom_metrics = TimestampedGauge(
+    "confluent_cloud_sa",
+    "Environment Details for every Environment created within CCloud",
+    ["sa_id", "created_at"],
+    timestamp=time(),
+)
+
+
 @dataclass(kw_only=True)
 class CCloudServiceAccountList(CCloudBase):
     sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict, init=False)
@@ -25,6 +35,11 @@ class CCloudServiceAccountList(CCloudBase):
         super().__post_init__()
         self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.service_accounts)
         self.read_all()
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.sa.items():
+            sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
 
     def __str__(self) -> str:
         for item in self.sa.values():
@@ -42,8 +57,8 @@ class CCloudServiceAccountList(CCloudBase):
                             resource_id=item["id"],
                             name=item["display_name"],
                             description=item["description"],
-                            created_at=item["metadata"]["created_at"],
-                            updated_at=item["metadata"]["updated_at"],
+                            created_at=parser.isoparse(item["metadata"]["created_at"]),
+                            updated_at=parser.isoparse(item["metadata"]["updated_at"]),
                         )
                     )
                     print(f"Found SA: {item['id']}; Name {item['display_name']}")

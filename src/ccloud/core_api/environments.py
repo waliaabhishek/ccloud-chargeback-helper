@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict
 from urllib import parse
 
 import requests
-
+from dateutil import parser
 from ccloud.connections import CCloudBase
+from prometheus_processing.metrics_server import TimestampedGauge
 
 
 @dataclass
@@ -13,6 +14,14 @@ class CCloudEnvironment:
     env_id: str
     display_name: str
     created_at: str
+
+
+env_prom_metrics = TimestampedGauge(
+    "confluent_cloud_environment",
+    "Environment Details for every Environment created within CCloud",
+    ["env_id", "created_at"],
+    timestamp=time(),
+)
 
 
 @dataclass(kw_only=True)
@@ -23,6 +32,11 @@ class CCloudEnvironmentList(CCloudBase):
         super().__post_init__()
         self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.environments)
         self.read_all()
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.env.items():
+            env_prom_metrics.labels(v.env_id, v.created_at).set(1)
 
     def __str__(self):
         print("Found " + str(len(self.env)) + " environments.")
@@ -40,7 +54,7 @@ class CCloudEnvironmentList(CCloudBase):
                         CCloudEnvironment(
                             env_id=item["id"],
                             display_name=item["display_name"],
-                            created_at=item["metadata"]["created_at"],
+                            created_at=parser.isoparse(item["metadata"]["created_at"]),
                         )
                     )
             if "next" in out_json["metadata"]:
