@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from time import sleep
+from time import sleep, time
 from typing import Dict
 
 import requests
@@ -9,6 +9,7 @@ from ccloud.core_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.connections import CCloudBase
 from ccloud.core_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
 from ccloud.core_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
+from prometheus_processing.metrics_server import TimestampedGauge
 
 
 @dataclass
@@ -18,6 +19,14 @@ class CCloudConnector:
     connector_name: str
     connector_class: str
     owner_id: str
+
+
+kafka_connectors_prom_metrics = TimestampedGauge(
+    "confluent_cloud_connector",
+    "Connector Details for every Fully Managed Connector created within CCloud",
+    ["connector_id", "cluster_id", "env_id"],
+    timestamp=time(),
+)
 
 
 @dataclass
@@ -37,6 +46,11 @@ class CCloudConnectorList(CCloudBase):
             key=self._ccloud_connection.uri.get_connector_config
         )
         self.read_all()
+        self.expose_prometheus_metrics()
+
+    def expose_prometheus_metrics(self):
+        for _, v in self.connectors.items():
+            kafka_connectors_prom_metrics.labels(v.connector_name, v.cluster_id, v.env_id).set(1)
 
     def __str__(self):
         for v in self.cluster.values():
