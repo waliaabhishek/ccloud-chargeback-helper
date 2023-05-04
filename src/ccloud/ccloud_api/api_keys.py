@@ -45,7 +45,7 @@ class CCloudAPIKeyList(CCloudBase):
     # the added to a cache.
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.api_keys)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.api_keys)
         print("Gathering list of all API Key(s) for all Service Account(s) in CCloud.")
         self.read_all()
         self.expose_prometheus_metrics()
@@ -109,31 +109,3 @@ class CCloudAPIKeyList(CCloudBase):
             if cluster_id == item.cluster_id and sa_id == item.owner_id:
                 output.append(item)
         return output
-
-    # def print_api_keys(self, ccloud_sa: service_account.CCloudServiceAccountList, api_keys: List[CCloudAPIKey] = None):
-    #     print(
-    #         "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
-    #             "API Key",
-    #             "API Key Cluster ID",
-    #             "Created",
-    #             "API Key Owner ID",
-    #             "API Key Owner Name",
-    #             "API Key Description",
-    #         )
-    #     )
-    #     if api_keys:
-    #         iter_data = api_keys
-    #     else:
-    #         iter_data = [v for v in self.api_keys.values()]
-    #     for item in iter_data:
-    #         sa_details = ccloud_sa.sa[item.owner_id]
-    #         print(
-    #             "{:<20} {:<25} {:<25} {:<20} {:<20} {:<50}".format(
-    #                 item.api_key,
-    #                 item.cluster_id,
-    #                 item.created_at,
-    #                 item.owner_id,
-    #                 sa_details.name,
-    #                 item.api_key_description,
-    #             )
-    #         )

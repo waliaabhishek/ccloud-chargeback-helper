@@ -43,7 +43,7 @@ class CCloudKsqldbClusterList(CCloudBase):
     # the added to a cache.
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.list_ksql_clusters)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_ksql_clusters)
         print("Gathering list of all ksqlDB Clusters for all Service Account(s) in CCloud.")
         self.read_all()
         self.expose_prometheus_metrics()

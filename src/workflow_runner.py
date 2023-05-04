@@ -58,9 +58,9 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
 @timed_method
 def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # This will try to refresh and read all the data that might be new from the last gather phase.
-    # Org Object has built in safeguard to prevent repetitive gathering. for the same datasets.
-    # for Cloud Objects --> 1 hour is the minimum.
-    # for telemetry objects --> persistence store knows what all has been cached and written to disk and will not be gathered again.
+    # Org Object has built in safeguard to prevent repetitive gathering for the same datasets.
+    # for Cloud Objects --> 30 minutes is the minimum.
+    # for Metrics API objects --> persistence store knows what all has been cached and written to disk and will not be gathered again.
     # for billing CSV files --> if the data is already read in memory, it wont be read in again.
     ccloud_orgs.execute_requests()
 
@@ -85,13 +85,13 @@ def execute_workflow(arg_flags: Namespace):
 
     thread_configs = [
         [COMMON_THREAD_RUNNER, current_memory_usage, 5],
-        [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
-        [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
-        [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        # [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        # [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        # [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
     ]
 
     threads_list = list()
-    for seq, item in enumerate(thread_configs):
+    for _, item in enumerate(thread_configs):
         threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
 
     try:
@@ -102,8 +102,8 @@ def execute_workflow(arg_flags: Namespace):
         # Those will include the first run for all the data gather step as well.
         # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
         ccloud_orgs = CCloudOrgList(
-            _orgs=core_config["config"]["org_details"],
-            _days_in_memory=APP_PROPS.days_in_memory,
+            in_orgs=core_config["config"]["org_details"],
+            in_days_in_memory=APP_PROPS.days_in_memory,
         )
 
         run_gather_cycle(ccloud_orgs=ccloud_orgs)

@@ -1,19 +1,19 @@
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 import datetime
 import os
 from typing import Dict, List, Set, Tuple
 import pandas as pd
 from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
-from ccloud.core_api.api_keys import CCloudAPIKeyList
-from ccloud.core_api.clusters import CCloudClusterList
-from ccloud.core_api.connectors import CCloudConnectorList
-from ccloud.core_api.environments import CCloudEnvironmentList
-from ccloud.core_api.ksqldb_clusters import CCloudKsqldbClusterList
-from ccloud.core_api.service_accounts import CCloudServiceAccountList
-from ccloud.core_api.user_accounts import CCloudUserAccountList
-from ccloud.telemetry_api.billings_csv_manager import CCloudBillingManager
-from ccloud.telemetry_api.chargeback_manager import ChargebackManager
-from ccloud.telemetry_api.telemetry_manager import CCloudMetricsManager
+from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
+from ccloud.ccloud_api.clusters import CCloudClusterList
+from ccloud.ccloud_api.connectors import CCloudConnectorList
+from ccloud.ccloud_api.environments import CCloudEnvironmentList
+from ccloud.ccloud_api.ksqldb_clusters import CCloudKsqldbClusterList
+from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
+from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
+from ccloud.metrics_api.billings_api_manager import CCloudBillingManager
+from ccloud.metrics_api.chargeback_manager import ChargebackManager
+from ccloud.metrics_api.telemetry_manager import CCloudMetricsManager
 from ccloud.model import CCMEReq_Granularity
 from data_processing.metrics_processing import METRICS_CSV_COLUMNS
 from helpers import sanitize_id, BILLING_METRICS_SCOPE
@@ -29,15 +29,12 @@ from storage_mgmt import (
 @dataclass
 class CCloudBillingHandler:
     org_id: str = field(init=True)
+    in_ccloud_api_connection = InitVar[CCloudConnection | None] = None
     billing_manager: CCloudBillingManager = field(init=False)
     available_hour_slices_in_dataset: List[str] = field(init=False, default_factory=list)
 
-    def __post_init__(self) -> None:
-        self.billing_manager = CCloudBillingManager(
-            path_to_monitor=STORAGE_PATH.get_path(
-                org_id=self.org_id, dir_type=DirType.BillingsData, ensure_exists=True
-            )
-        )
+    def __post_init__(self, in_ccloud_api_connection) -> None:
+        self.billing_manager = CCloudBillingManager(in_ccloud_connection=in_ccloud_api_connection)
         self.read_all()
 
     def read_all(self):
@@ -72,26 +69,26 @@ class CCloudBillingHandler:
 
 @dataclass
 class CCloudMetricsHandler(CCloudBase):
-    _requests: List
     org_id: str
     cc_objects: object = field(init=True, repr=False)
+    in_requests: InitVar[List | None] = None
     days_in_memory: int = field(default=7)
 
     metrics_basepath: str = field(init=False, repr=False)
     metrics_manager: Dict[str, CCloudMetricsManager] = field(init=False, default_factory=dict)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, in_requests) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(
-            key=self._ccloud_connection.uri.telemetry_query_metrics
+        self.url = self.in_ccloud_connection.get_endpoint_url(
+            key=self.in_ccloud_connection.uri.telemetry_query_metrics
         ).format(dataset="cloud")
         self.metrics_basepath = STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
-        self.read_all()
-        self._requests = None
+        self.read_all(in_requests)
 
-    def read_all(self):
+    def read_all(self, **kwargs):
         cb_val = "CHARGEBACK_REQUESTS"
-        if cb_val in self._requests:
+        in_req = kwargs.get("in_requests", None)
+        if cb_val in in_req:
             temp = [
                 {
                     "id": k,
@@ -106,9 +103,9 @@ class CCloudMetricsHandler(CCloudBase):
                     "Fetch Response Bytes": "io.confluent.kafka.server/response_bytes",
                 }.items()
             ]
-            self._requests = temp + self._requests
-            self._requests.remove(cb_val)
-        for req in self._requests:
+            in_req = temp + in_req
+            in_req.remove(cb_val)
+        for req in in_req:
             http_req = CCloudMetricsManager(
                 org_id=self.org_id,
                 _base_payload=req,
@@ -129,7 +126,7 @@ class CCloudMetricsHandler(CCloudBase):
             for req_interval in self.generate_iso8601_dt_intervals(
                 granularity=CCMEReq_Granularity.P1D.name, metric_name=request.aggregation_metric, intervals=7
             ):
-                request.execute_request(http_connection=self._ccloud_connection, date_range=req_interval)
+                request.execute_request(http_connection=self.in_ccloud_connection, date_range=req_interval)
                 request.add_dataframes(date_range=req_interval, output_basepath=output_basepath)
 
     def export_metrics_to_csv(self, output_basepath: str):
@@ -180,10 +177,10 @@ class CCloudMetricsHandler(CCloudBase):
 
 @dataclass
 class CCloudObjectsHandler:
-    _ccloud_connection: CCloudConnection
+    in_ccloud_connection: CCloudConnection
 
     last_refresh: datetime = field(init=False, default=None)
-    min_refresh_gap: datetime.timedelta = field(init=False, default=datetime.timedelta(minutes=60))
+    min_refresh_gap: datetime.timedelta = field(init=False, default=datetime.timedelta(minutes=30))
     cc_sa: CCloudServiceAccountList = field(init=False)
     cc_users: CCloudUserAccountList = field(init=False)
     cc_api_keys: CCloudAPIKeyList = field(init=False)
@@ -200,22 +197,22 @@ class CCloudObjectsHandler:
         if self.min_refresh_gap > datetime.datetime.now() - self.last_refresh:
             print(f"Not refreshing the CCloud Object state  -- TimeDelta is not enough. {self.min_refresh_gap}")
         else:
-            self.cc_sa = CCloudServiceAccountList(_ccloud_connection=self._ccloud_connection)
-            self.cc_users = CCloudUserAccountList(_ccloud_connection=self._ccloud_connection)
-            self.cc_api_keys = CCloudAPIKeyList(_ccloud_connection=self._ccloud_connection)
-            self.cc_environments = CCloudEnvironmentList(_ccloud_connection=self._ccloud_connection)
+            self.cc_sa = CCloudServiceAccountList(in_ccloud_connection=self.in_ccloud_connection)
+            self.cc_users = CCloudUserAccountList(in_ccloud_connection=self.in_ccloud_connection)
+            self.cc_api_keys = CCloudAPIKeyList(in_ccloud_connection=self.in_ccloud_connection)
+            self.cc_environments = CCloudEnvironmentList(in_ccloud_connection=self.in_ccloud_connection)
             self.cc_clusters = CCloudClusterList(
-                _ccloud_connection=self._ccloud_connection, ccloud_env=self.cc_environments
+                in_ccloud_connection=self.in_ccloud_connection, ccloud_env=self.cc_environments
             )
             self.cc_connectors = CCloudConnectorList(
-                _ccloud_connection=self._ccloud_connection,
+                in_ccloud_connection=self.in_ccloud_connection,
                 ccloud_kafka_clusters=self.cc_clusters,
                 ccloud_service_accounts=self.cc_sa,
                 ccloud_users=self.cc_users,
                 ccloud_api_keys=self.cc_api_keys,
             )
             self.cc_ksqldb_clusters = CCloudKsqldbClusterList(
-                _ccloud_connection=self._ccloud_connection,
+                in_ccloud_connection=self.in_ccloud_connection,
                 ccloud_envs=self.cc_environments,
             )
             self.last_refresh = datetime.datetime.now()
@@ -270,8 +267,8 @@ class CCloudChargebackHandler:
 
 @dataclass(kw_only=True)
 class CCloudOrg:
-    _org_details: List
-    _days_in_memory: int = field(default=7)
+    in_org_details: InitVar[List | None] = None
+    in_days_in_memory: InitVar[int] = field(default=7)
     org_id: str
 
     metrics_handler: CCloudMetricsHandler = field(init=False)
@@ -279,40 +276,44 @@ class CCloudOrg:
     billing_handler: CCloudBillingHandler = field(init=False)
     chargeback_handler: CCloudChargebackHandler = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.org_id = sanitize_id(self._org_details["id"])
+    def __post_init__(self, in_org_details, in_days_in_memory) -> None:
+        self.org_id = sanitize_id(in_org_details["id"])
         # Delete the Output Directory for now as the Calculations are not tracked.
         # They need to be re-calculated and set-up again.
         # This will go away in future release when time window and billing CSV based tracking is added.
         # STORAGE_PATH.delete_path(org_id=self.org_id, dir_type=DirType.OutputData)
         STORAGE_PATH.ensure_path(
             org_id=self.org_id,
-            dir_type=[DirType.MetricsData, DirType.BillingsData, DirType.OutputData, DirType.PersistenceStats],
+            dir_type=[
+                # DirType.MetricsData,
+                # DirType.BillingsData,
+                # DirType.OutputData,
+                DirType.PersistenceStats,
+            ],
         )
-        METRICS_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
-        BILLING_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
-        CHARGEBACK_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
-
-        # Initialize the CCloud Objects Handler
-        temp_conn = CCloudConnection(
-            api_key=self._org_details["ccloud_details"]["metrics"]["api_key"],
-            api_secret=self._org_details["ccloud_details"]["metrics"]["api_secret"],
+        # METRICS_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
+        # BILLING_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
+        # CHARGEBACK_PERSISTENCE_STORE.add_persistence_path(org_id=self.org_id)
+        ccloud_api_http_conn = CCloudConnection(
+            api_key=in_org_details["ccloud_details"]["ccloud_api"]["api_key"],
+            api_secret=in_org_details["ccloud_details"]["ccloud_api"]["api_secret"],
             base_url=EndpointURL.API_URL,
         )
-        self.objects_handler = CCloudObjectsHandler(_ccloud_connection=temp_conn)
+
+        # Initialize the CCloud Objects Handler
+        self.objects_handler = CCloudObjectsHandler(in_ccloud_connection=ccloud_api_http_conn)
 
         # Initialize the Metrics Handler
-        temp_conn = CCloudConnection(
-            api_key=self._org_details["ccloud_details"]["telemetry"]["api_key"],
-            api_secret=self._org_details["ccloud_details"]["telemetry"]["api_secret"],
-            base_url=EndpointURL.TELEMETRY_URL,
-        )
         self.metrics_handler = CCloudMetricsHandler(
             org_id=self.org_id,
-            _ccloud_connection=temp_conn,
-            _requests=self._org_details["requests"],
-            days_in_memory=self._days_in_memory,
+            in_requests=in_org_details["requests"],
+            days_in_memory=in_days_in_memory,
             cc_objects=self.objects_handler,
+            in_ccloud_connection=CCloudConnection(
+                api_key=in_org_details["ccloud_details"]["metrics_api"]["api_key"],
+                api_secret=in_org_details["ccloud_details"]["metrics_api"]["api_secret"],
+                base_url=EndpointURL.TELEMETRY_URL,
+            ),
         )
 
         # Initialize the Billing CSV Handler
@@ -322,12 +323,12 @@ class CCloudOrg:
         self.chargeback_handler = CCloudChargebackHandler(org_id=self.org_id, cc_objects=self.objects_handler)
 
         # Once every initialization step completes, get rid of the requests Dict to save memory.
-        self._requests = None
+        # self._requests = None
 
     def execute_requests(self):
         print(f"Gathering CCloud Existing Objects Data")
         self.objects_handler.execute_requests()
-        print(f"Gathering Telemetry Data")
+        print(f"Gathering Metrics API Data")
         self.metrics_handler.execute_requests(
             output_basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
         )
@@ -368,21 +369,20 @@ class CCloudOrg:
 
 @dataclass(kw_only=True)
 class CCloudOrgList:
-    _orgs: List
-    _days_in_memory: int = field(default=7)
+    in_orgs: InitVar[List | None] = None
+    in_days_in_memory: InitVar[int] = field(default=7)
 
     orgs: Dict[str, CCloudOrg] = field(default_factory=dict, init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, in_orgs, in_days_in_memory) -> None:
         req_count = 0
-        for org_item in self._orgs:
+        for org_item in in_orgs:
             temp = CCloudOrg(
-                _org_details=org_item,
-                _days_in_memory=self._days_in_memory,
+                in_org_details=org_item,
+                in_days_in_memory=in_days_in_memory,
                 org_id=org_item["id"] if org_item["id"] else req_count,
             )
             self.__add_org_to_cache(ccloud_org=temp)
-        self._orgs = None
 
     def __add_org_to_cache(self, ccloud_org: CCloudOrg) -> None:
         self.orgs[ccloud_org.org_id] = ccloud_org

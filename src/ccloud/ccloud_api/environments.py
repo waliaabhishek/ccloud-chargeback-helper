@@ -30,7 +30,7 @@ class CCloudEnvironmentList(CCloudBase):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.environments)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.environments)
         self.read_all()
         self.expose_prometheus_metrics()
 

@@ -11,16 +11,15 @@ from prometheus_processing.metrics_server import TimestampedGauge
 
 
 @dataclass
-class CCloudServiceAccount:
+class CCloudUserAccount:
     resource_id: str
     name: str
-    description: str
     created_at: str
     updated_at: str
 
 
-sa_prom_metrics = TimestampedGauge(
-    "confluent_cloud_sa",
+users_prom_metrics = TimestampedGauge(
+    "confluent_cloud_user",
     "Environment Details for every Environment created within CCloud",
     ["sa_id", "created_at"],
     timestamp=time(),
@@ -28,21 +27,21 @@ sa_prom_metrics = TimestampedGauge(
 
 
 @dataclass(kw_only=True)
-class CCloudServiceAccountList(CCloudBase):
-    sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict, init=False)
+class CCloudUserAccountList(CCloudBase):
+    users: Dict[str, CCloudUserAccount] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.service_accounts)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.user_accounts)
         self.read_all()
         self.expose_prometheus_metrics()
 
     def expose_prometheus_metrics(self):
-        for _, v in self.sa.items():
-            sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+        for _, v in self.users.items():
+            users_prom_metrics.labels(v.resource_id, v.created_at).set(1)
 
     def __str__(self) -> str:
-        for item in self.sa.values():
+        for item in self.users.values():
             print("{:<15} {:<40} {:<50}".format(item.resource_id, item.name, item.description))
 
     # Read ALL Service Account details from Confluent Cloud
@@ -53,15 +52,14 @@ class CCloudServiceAccountList(CCloudBase):
             if out_json is not None and out_json["data"] is not None:
                 for item in out_json["data"]:
                     self.__add_to_cache(
-                        CCloudServiceAccount(
+                        CCloudUserAccount(
                             resource_id=item["id"],
-                            name=item["display_name"],
-                            description=item["description"],
+                            name=item["full_name"],
                             created_at=parser.isoparse(item["metadata"]["created_at"]),
                             updated_at=parser.isoparse(item["metadata"]["updated_at"]),
                         )
                     )
-                    print(f"Found SA: {item['id']}; Name {item['display_name']}")
+                    print(f"Found User: {item['id']}; Name {item['full_name']}")
             if "next" in out_json["metadata"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])
@@ -73,30 +71,27 @@ class CCloudServiceAccountList(CCloudBase):
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
-    def __add_to_cache(self, ccloud_sa: CCloudServiceAccount) -> None:
-        self.sa[ccloud_sa.resource_id] = ccloud_sa
+    def __add_to_cache(self, ccloud_user: CCloudUserAccount) -> None:
+        self.users[ccloud_user.resource_id] = ccloud_user
 
     # Read/Find one SA from the cache
-    def find_sa(self, sa_name):
-        for item in self.sa.values():
-            if sa_name == item.name:
+    def find_user(self, ccloud_user):
+        for item in self.users.values():
+            if ccloud_user == item.name:
                 return item
         return None
 
     # def __delete_from_cache(self, res_id):
-    #     self.sa.pop(res_id, None)
+    #     self.users.pop(res_id, None)
 
     # Create/Find one SA and add it to the cache, so that we do not have to refresh the cache manually
-    # def create_sa(self, sa_name, description=None) -> Tuple[CCloudServiceAccount, bool]:
-    #     temp = self.find_sa(sa_name)
+    # def create_user(self, ccloud_user) -> Tuple[CCloudUserAccount, bool]:
+    #     temp = self.find_user(ccloud_user)
     #     if temp:
     #         return temp, False
     #     # print("Creating a new Service Account with name: " + sa_name)
     #     payload = {
-    #         "display_name": sa_name,
-    #         "description": str("Account for " + sa_name + " created by CI/CD framework")
-    #         if not description
-    #         else description,
+    #         "display_name": ccloud_user,
     #     }
     #     resp = requests.post(
     #         url=self.url,
@@ -104,24 +99,23 @@ class CCloudServiceAccountList(CCloudBase):
     #         json=payload,
     #     )
     #     if resp.status_code == 201:
-    #         sa_details = resp.json()
-    #         sa_value = CCloudServiceAccount(
-    #             resource_id=sa_details["id"],
-    #             name=sa_details["display_name"],
-    #             description=sa_details["description"],
-    #             created_at=sa_details["metadata"]["created_at"],
-    #             updated_at=sa_details["metadata"]["updated_at"],
+    #         user_details = resp.json()
+    #         user_value = CCloudUserAccount(
+    #             resource_id=user_details["id"],
+    #             name=user_details["full_name"],
+    #             created_at=user_details["metadata"]["created_at"],
+    #             updated_at=user_details["metadata"]["updated_at"],
     #             is_ignored=False,
     #         )
-    #         self.__add_to_cache(ccloud_sa=sa_value)
-    #         return (sa_value, True)
+    #         self.__add_to_cache(ccloud_user=user_value)
+    #         return (user_value, True)
     #     else:
     #         raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
-    # def delete_sa(self, sa_name) -> bool:
-    #     temp = self.find_sa(sa_name)
+    # def delete_sa(self, ccloud_user) -> bool:
+    #     temp = self.find_user(ccloud_user)
     #     if not temp:
-    #         print("Did not find Service Account with name '" + sa_name + "'. Not deleting anything.")
+    #         print("Did not find CCloud user with name '" + ccloud_user + "'. Not deleting anything.")
     #         return False
     #     else:
     #         resp = requests.delete(url=str(self.url + "/" + temp.resource_id), auth=self.http_connection)
@@ -130,9 +124,3 @@ class CCloudServiceAccountList(CCloudBase):
     #             return True
     #         else:
     #             raise Exception("Could not perform the DELETE operation. Please check your settings. " + resp.text)
-
-    # def __try_detect_internal_service_accounts(self, sa_name: str) -> bool:
-    #     if sa_name.startswith(("Connect.lcc-", "KSQL.lksqlc-")):
-    #         return True
-    #     else:
-    #         return False

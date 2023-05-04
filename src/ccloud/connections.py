@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
 
 from requests.auth import HTTPBasicAuth
@@ -21,6 +21,7 @@ class URIDetails:
         "/connect/v1/environments/{environment_id}/clusters/{kafka_cluster_id}/connectors/{connector_name}/config"
     )
     list_ksql_clusters = "/ksqldbcm/v2/clusters"
+    get_billing_costs = "/billing/v1/costs"
 
     TELEMETRY_URL = "https://api.telemetry.confluent.cloud"
     telemetry_query_metrics = "/v2/metrics/{dataset}/query"
@@ -31,17 +32,15 @@ class URIDetails:
     kw_only=True,
 )
 class CCloudConnection:
-    api_key: str
-    api_secret: str
-    base_url: EndpointURL = field(default=EndpointURL.API_URL)
+    api_key: InitVar[str] = None
+    api_secret: InitVar[str] = None
 
+    base_url: EndpointURL = field(default=EndpointURL.API_URL)
     uri: URIDetails = field(default=URIDetails(), init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "http_connection", HTTPBasicAuth(self.api_key, self.api_secret))
-        object.__setattr__(self, "api_key", None)
-        object.__setattr__(self, "api_secret", None)
+    def __post_init__(self, api_key, api_secret) -> None:
+        object.__setattr__(self, "http_connection", HTTPBasicAuth(api_key, api_secret))
 
     def get_endpoint_url(self, key="/") -> str:
         if self.base_url is EndpointURL.API_URL:
@@ -52,10 +51,10 @@ class CCloudConnection:
 
 @dataclass
 class CCloudBase:
-    _ccloud_connection: CCloudConnection
+    in_ccloud_connection: CCloudConnection
 
     url: str = field(init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 
     def __post_init__(self) -> None:
-        self.http_connection = self._ccloud_connection.http_connection
+        self.http_connection = self.in_ccloud_connection.http_connection

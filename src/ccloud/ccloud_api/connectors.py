@@ -41,9 +41,9 @@ class CCloudConnectorList(CCloudBase):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.list_connector_names)
-        self.url_get_connector_config = self._ccloud_connection.get_endpoint_url(
-            key=self._ccloud_connection.uri.get_connector_config
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_connector_names)
+        self.url_get_connector_config = self.in_ccloud_connection.get_endpoint_url(
+            key=self.in_ccloud_connection.uri.get_connector_config
         )
         self.read_all()
         self.expose_prometheus_metrics()
