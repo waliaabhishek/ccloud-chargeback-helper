@@ -26,21 +26,25 @@ class URIDetails:
     TELEMETRY_URL = "https://api.telemetry.confluent.cloud"
     telemetry_query_metrics = "/v2/metrics/{dataset}/query"
 
+    prometheus_query_range = "/api/v1/query_range"
+
+    def override_column_names(self, key, value):
+        object.__setattr__(self, key, value)
+
 
 @dataclass(
-    frozen=True,
-    kw_only=True,
+    frozen=True, kw_only=True,
 )
 class CCloudConnection:
-    api_key: InitVar[str] = None
-    api_secret: InitVar[str] = None
+    in_api_key: InitVar[str] = None
+    in_api_secret: InitVar[str] = None
 
     base_url: EndpointURL = field(default=EndpointURL.API_URL)
     uri: URIDetails = field(default=URIDetails(), init=False)
     http_connection: HTTPBasicAuth = field(init=False)
 
-    def __post_init__(self, api_key, api_secret) -> None:
-        object.__setattr__(self, "http_connection", HTTPBasicAuth(api_key, api_secret))
+    def __post_init__(self, in_api_key, in_api_secret) -> None:
+        object.__setattr__(self, "http_connection", HTTPBasicAuth(in_api_key, in_api_secret))
 
     def get_endpoint_url(self, key="/") -> str:
         if self.base_url is EndpointURL.API_URL:
