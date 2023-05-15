@@ -3,12 +3,12 @@ from time import sleep, time
 from typing import Dict
 
 import requests
-from ccloud.core_api.api_keys import CCloudAPIKeyList
-from ccloud.core_api.clusters import CCloudCluster, CCloudClusterList
+from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
+from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 
 from ccloud.connections import CCloudBase
-from ccloud.core_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
-from ccloud.core_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
+from ccloud.ccloud_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
+from ccloud.ccloud_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
 from prometheus_processing.metrics_server import TimestampedGauge
 
 

@@ -17,6 +17,7 @@
     "mgmt",
     "pname",
     "psutil",
-    "ptype"
+    "ptype",
+    "timeslot"
   ]
 }

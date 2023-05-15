@@ -7,7 +7,7 @@ import requests
 
 from dateutil import parser
 from ccloud.connections import CCloudBase
-from ccloud.core_api.environments import CCloudEnvironmentList
+from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from prometheus_processing.metrics_server import TimestampedGauge
 
 pp = pprint.PrettyPrinter(indent=2)
