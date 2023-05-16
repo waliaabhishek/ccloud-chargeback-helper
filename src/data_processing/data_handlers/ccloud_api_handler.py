@@ -8,7 +8,7 @@ from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.ccloud_api.ksqldb_clusters import CCloudKsqldbClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
-from ccloud.data_handlers.types import AbstractDataHandler
+from data_processing.data_handlers.types import AbstractDataHandler
 
 
 @dataclass
@@ -42,7 +42,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
             self.cc_api_keys = CCloudAPIKeyList(in_ccloud_connection=self.ccloud_connection)
             self.cc_environments = CCloudEnvironmentList(in_ccloud_connection=self.ccloud_connection)
             self.cc_clusters = CCloudClusterList(
-                in_ccloud_connection=self.ccloud_connection, ccloud_env=self.cc_environments
+                in_ccloud_connection=self.ccloud_connection, ccloud_envs=self.cc_environments
             )
             self.cc_connectors = CCloudConnectorList(
                 in_ccloud_connection=self.ccloud_connection,
@@ -60,5 +60,6 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
     def read_next_dataset(self):
         self.read_all()
 
-    def get_dataset_for_timeslot(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
+    def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
+        # TODO: Do we want to narrow down the active dataset for the timelines ?
         pass

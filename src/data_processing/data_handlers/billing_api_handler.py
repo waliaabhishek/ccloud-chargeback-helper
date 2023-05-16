@@ -7,7 +7,7 @@ from urllib import parse
 from typing import Dict, List
 import pandas as pd
 from ccloud.connections import CCloudBase
-from ccloud.data_handlers.types import AbstractDataHandler
+from data_processing.data_handlers.types import AbstractDataHandler
 
 
 class BillingAPIColumnNames:
@@ -125,9 +125,9 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         self.read_all(start_date=self.start_date, end_date=end_date)
         self.last_available_date = end_date
         in_mem_date_cutoff = self.last_available_date - datetime.timedelta(days=self.max_days_in_memory)
-        self.billing_dataset = self.get_dataset_for_timeslot(start_datetime=in_mem_date_cutoff, end_datetime=end_date)
+        self.billing_dataset = self.get_dataset_for_timerange(start_datetime=in_mem_date_cutoff, end_datetime=end_date)
 
-    def get_dataset_for_timeslot(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
+    def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         start_date = pd.to_datetime(str(start_datetime.date()))
         end_date = pd.to_datetime(str(end_datetime.date()))
         return self.billing_dataset.loc[
