@@ -46,30 +46,40 @@ class CCloudUserAccountList(CCloudBase):
 
     # Read ALL Service Account details from Confluent Cloud
     def read_all(self, params={"page_size": 100}):
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
-        if resp.status_code == 200:
-            out_json = resp.json()
-            if out_json is not None and out_json["data"] is not None:
-                for item in out_json["data"]:
-                    self.__add_to_cache(
-                        CCloudUserAccount(
-                            resource_id=item["id"],
-                            name=item["full_name"],
-                            created_at=parser.isoparse(item["metadata"]["created_at"]),
-                            updated_at=parser.isoparse(item["metadata"]["updated_at"]),
-                        )
-                    )
-                    print(f"Found User: {item['id']}; Name {item['full_name']}")
-            if "next" in out_json["metadata"]:
-                query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
-                params["page_token"] = str(query_params["page_token"][0])
-                self.read_all(params)
-        elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
-            sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
-        else:
-            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+        for item in self.read_from_api(params=params):
+            self.__add_to_cache(
+                CCloudUserAccount(
+                    resource_id=item["id"],
+                    name=item["full_name"],
+                    created_at=parser.isoparse(item["metadata"]["created_at"]),
+                    updated_at=parser.isoparse(item["metadata"]["updated_at"]),
+                )
+            )
+            print(f"Found User: {item['id']}; Name {item['full_name']}")
+        # resp = requests.get(url=self.url, auth=self.http_connection, params=params)
+        # if resp.status_code == 200:
+        #     out_json = resp.json()
+        #     if out_json is not None and out_json["data"] is not None:
+        #         for item in out_json["data"]:
+        #             self.__add_to_cache(
+        #                 CCloudUserAccount(
+        #                     resource_id=item["id"],
+        #                     name=item["full_name"],
+        #                     created_at=parser.isoparse(item["metadata"]["created_at"]),
+        #                     updated_at=parser.isoparse(item["metadata"]["updated_at"]),
+        #                 )
+        #             )
+        #             print(f"Found User: {item['id']}; Name {item['full_name']}")
+        #     if "next" in out_json["metadata"]:
+        #         query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
+        #         params["page_token"] = str(query_params["page_token"][0])
+        #         self.read_all(params)
+        # elif resp.status_code == 429:
+        #     print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+        #     sleep(45)
+        #     print("Timer up. Resuming CCloud API scrape.")
+        # else:
+        #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
     def __add_to_cache(self, ccloud_user: CCloudUserAccount) -> None:
         self.users[ccloud_user.resource_id] = ccloud_user

@@ -1,7 +1,9 @@
 from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
-
+from urllib import parse
 from requests.auth import HTTPBasicAuth
+import requests
+from time import sleep, time
 
 
 class EndpointURL(Enum):
@@ -62,3 +64,23 @@ class CCloudBase:
 
     def __post_init__(self) -> None:
         self.http_connection = self.in_ccloud_connection.http_connection
+
+    def read_from_api(self, params={"page_size": 500}, **kwagrs):
+        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
+        if resp.status_code == 200:
+            out_json = resp.json()
+            if out_json is not None and out_json["data"] is not None:
+                for item in out_json["data"]:
+                    yield item
+            if "next" in out_json["metadata"]:
+                query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
+                params["page_token"] = str(query_params["page_token"][0])
+                yield self.read_all(params)
+        elif resp.status_code == 429:
+            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            sleep(45)
+            print("Timer up. Resuming CCloud API scrape.")
+            yield self.read_all(params)
+        else:
+            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+

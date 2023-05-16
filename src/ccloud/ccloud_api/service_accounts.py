@@ -47,31 +47,17 @@ class CCloudServiceAccountList(CCloudBase):
 
     # Read ALL Service Account details from Confluent Cloud
     def read_all(self, params={"page_size": 100}):
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
-        if resp.status_code == 200:
-            out_json = resp.json()
-            if out_json is not None and out_json["data"] is not None:
-                for item in out_json["data"]:
-                    self.__add_to_cache(
-                        CCloudServiceAccount(
-                            resource_id=item["id"],
-                            name=item["display_name"],
-                            description=item["description"],
-                            created_at=parser.isoparse(item["metadata"]["created_at"]),
-                            updated_at=parser.isoparse(item["metadata"]["updated_at"]),
-                        )
-                    )
-                    print(f"Found SA: {item['id']}; Name {item['display_name']}")
-            if "next" in out_json["metadata"]:
-                query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
-                params["page_token"] = str(query_params["page_token"][0])
-                self.read_all(params)
-        elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
-            sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
-        else:
-            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+        for item in self.read_from_api(params=params):
+            self.__add_to_cache(
+                CCloudServiceAccount(
+                    resource_id=item["id"],
+                    name=item["display_name"],
+                    description=item["description"],
+                    created_at=parser.isoparse(item["metadata"]["created_at"]),
+                    updated_at=parser.isoparse(item["metadata"]["updated_at"]),
+                )
+            )
+            print(f"Found SA: {item['id']}; Name {item['display_name']}")
 
     def __add_to_cache(self, ccloud_sa: CCloudServiceAccount) -> None:
         self.sa[ccloud_sa.resource_id] = ccloud_sa
