@@ -10,14 +10,19 @@
     "dateutil",
     "inplace",
     "isin",
+    "isoparse",
     "itertuples",
     "Ksqldb",
     "ksqldbcm",
+    "kwagrs",
     "metricsapi",
     "mgmt",
     "pname",
     "psutil",
     "ptype",
+    "pydatetime",
+    "Threadable",
+    "timerange",
     "timeslot"
   ]
 }

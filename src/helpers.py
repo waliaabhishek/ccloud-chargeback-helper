@@ -92,10 +92,10 @@ def timed_method(func):
     return add_timer
 
 
-BILLING_METRICS_SCOPE = {
-    "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
-    "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
-}
+# BILLING_METRICS_SCOPE = {
+#     "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
+#     "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
+# }
 
 
 if __name__ == "__main__":
