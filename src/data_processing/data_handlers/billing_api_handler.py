@@ -40,8 +40,10 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
 
     def __post_init__(self) -> None:
         # Initialize the super classes to set the internal attributes
-        super(AbstractDataHandler, self).__post_init__()
-        super(CCloudBase, self).__post_init__()
+        AbstractDataHandler.__init__(self)
+        CCloudBase.__post_init__(self)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.get_billing_costs)
+
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
@@ -53,50 +55,32 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
     ):
         params["start_date"] = str(start_date.date())
         params["end_date"] = str(end_date.date())
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
-        if resp.status_code == 200:
-            out_json = resp.json()
-            if out_json is not None and out_json["data"] is not None:
-                for item in out_json["data"]:
-                    temp_date_range = self.__generate_date_range_per_row(start_date=start_date, end_date=end_date)
-                    temp_data = [
-                        {
-                            BILLING_API_COLUMNS.calc_timestamp: x,
-                            BILLING_API_COLUMNS.env_id: item["resource"]["environment"]["id"],
-                            BILLING_API_COLUMNS.cluster_id: item["resource"]["id"],
-                            BILLING_API_COLUMNS.cluster_name: item["resource"]["display_name"],
-                            BILLING_API_COLUMNS.product_name: item["product"],
-                            BILLING_API_COLUMNS.product_type: item["line_type"],
-                            BILLING_API_COLUMNS.quantity: item["quantity"],
-                            BILLING_API_COLUMNS.orig_amt: item["original_amount"],
-                            BILLING_API_COLUMNS.total: item["amount"],
-                            BILLING_API_COLUMNS.price: item["price"],
-                            BILLING_API_COLUMNS.calc_split_quantity: Decimal(item["quantity"]) / temp_date_range.size,
-                            BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"])
-                            / temp_date_range.size,
-                            BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / temp_date_range.size,
-                        }
-                        for x in temp_date_range
-                    ]
-                    if temp_data is not None:
-                        if self.billing_dataset is not None:
-                            self.billing_dataset = pd.concat(
-                                [
-                                    self.billing_dataset,
-                                    pd.DataFrame.from_records(
-                                        temp_data,
-                                        index=[
-                                            BILLING_API_COLUMNS.calc_timestamp,
-                                            BILLING_API_COLUMNS.env_id,
-                                            BILLING_API_COLUMNS.cluster_id,
-                                            BILLING_API_COLUMNS.product_name,
-                                            BILLING_API_COLUMNS.product_type,
-                                        ],
-                                    ),
-                                ]
-                            )
-                        else:
-                            self.billing_dataset = pd.DataFrame.from_records(
+        for item in self.read_from_api(params=params):
+            temp_date_range = self._generate_date_range_per_row(start_date=start_date, end_date=end_date)
+            temp_data = [
+                {
+                    BILLING_API_COLUMNS.calc_timestamp: x,
+                    BILLING_API_COLUMNS.env_id: item["resource"]["environment"]["id"],
+                    BILLING_API_COLUMNS.cluster_id: item["resource"]["id"],
+                    BILLING_API_COLUMNS.cluster_name: item["resource"]["display_name"],
+                    BILLING_API_COLUMNS.product_name: item["product"],
+                    BILLING_API_COLUMNS.product_type: item["line_type"],
+                    BILLING_API_COLUMNS.quantity: item["quantity"],
+                    BILLING_API_COLUMNS.orig_amt: item["original_amount"],
+                    BILLING_API_COLUMNS.total: item["amount"],
+                    BILLING_API_COLUMNS.price: item["price"],
+                    BILLING_API_COLUMNS.calc_split_quantity: Decimal(item["quantity"]) / temp_date_range.size,
+                    BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"]) / temp_date_range.size,
+                    BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / temp_date_range.size,
+                }
+                for x in temp_date_range
+            ]
+            if temp_data is not None:
+                if self.billing_dataset is not None:
+                    self.billing_dataset = pd.concat(
+                        [
+                            self.billing_dataset,
+                            pd.DataFrame.from_records(
                                 temp_data,
                                 index=[
                                     BILLING_API_COLUMNS.calc_timestamp,
@@ -105,19 +89,20 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                                     BILLING_API_COLUMNS.product_name,
                                     BILLING_API_COLUMNS.product_type,
                                 ],
-                            )
-            if "next" in out_json["metadata"]:
-                if out_json["metadata"]["next"] is not None:
-                    query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
-                    params["page_token"] = str(query_params["page_token"][0])
-                    self.read_all(start_date=start_date, end_date=end_date, params=params)
-        elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
-            sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
-            self.read_all(start_date=start_date, end_date=end_date, params=params)
-        else:
-            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+                            ),
+                        ]
+                    )
+                else:
+                    self.billing_dataset = pd.DataFrame.from_records(
+                        temp_data,
+                        index=[
+                            BILLING_API_COLUMNS.calc_timestamp,
+                            BILLING_API_COLUMNS.env_id,
+                            BILLING_API_COLUMNS.cluster_id,
+                            BILLING_API_COLUMNS.product_name,
+                            BILLING_API_COLUMNS.product_type,
+                        ],
+                    )
 
     def read_next_dataset(self):
         self.start_date = self.last_available_date

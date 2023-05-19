@@ -36,7 +36,7 @@ chargeback_prom_metrics = TimestampedCollector(
     "confluent_cloud_chargeback_details",
     "Approximate Chargeback Distribution details for costs w.r.t contextual access within CCloud",
     ["principal", "cost_type"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 
@@ -58,7 +58,8 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         * attach this class to the Prom scraper which is also a notifier
         * set the exported datetime in memory for stepping through the data every scrape
         """
-        super().__post_init__()
+        AbstractDataHandler.__init__(self)
+        Observer.__init__(self)
         self.start_date = self.start_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
@@ -104,7 +105,7 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
             start_date (datetime.datetime): Inclusive datetime for the period beginning 
             end_date (datetime.datetime): Exclusive datetime for the period ending 
         """
-        for time_slice_item in self.__generate_date_range_per_row(start_date=start_date, end_date=end_date):
+        for time_slice_item in self._generate_date_range_per_row(start_date=start_date, end_date=end_date):
             self.compute_output(time_slice=time_slice_item)
 
     def cleanup_old_data(self):

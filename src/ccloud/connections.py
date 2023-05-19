@@ -72,15 +72,15 @@ class CCloudBase:
             if out_json is not None and out_json["data"] is not None:
                 for item in out_json["data"]:
                     yield item
-            if "next" in out_json["metadata"]:
+            if "next" in out_json["metadata"] and out_json["metadata"]["next"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])
-                yield self.read_all(params)
+                self.read_from_api(params)
         elif resp.status_code == 429:
             print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
             sleep(45)
             print("Timer up. Resuming CCloud API scrape.")
-            yield self.read_all(params)
+            self.read_from_api(params)
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 

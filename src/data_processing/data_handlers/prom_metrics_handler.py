@@ -46,18 +46,22 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
 
     def __post_init__(self, in_prometheus_url, in_prometheus_query_endpoint) -> None:
         # Initialize the super classes to set the internal attributes
-        super(AbstractDataHandler, self).__post_init__()
-        super(CCloudBase, self).__post_init__()
-        self.start_date = self.start_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
-        # Check if the URL contains the required URI or not
-        temp_url = parse.urlparse(in_prometheus_url)
-        temp_url.path, temp_url.params, temp_url.query, temp_url.fragment = (
-            in_prometheus_query_endpoint,
-            None,
-            None,
-            None,
+        AbstractDataHandler.__init__(self)
+        CCloudBase.__post_init__(self)
+        self.url = parse.urljoin(base=in_prometheus_url, url=in_prometheus_query_endpoint)
+        self.start_date = datetime.datetime.combine(
+            date=self.start_date.date(), time=datetime.time.min, tzinfo=datetime.timezone.utc
         )
-        self.url = parse.urlunparse(temp_url)
+        # Check if the URL contains the required URI or not
+        # temp_url = parse.urlparse(in_prometheus_url)
+        # temp_url._replace(path=in_prometheus_query_endpoint, params=None, query=None, fragment=None)
+        # temp_url.path, temp_url.params, temp_url.query, temp_url.fragment = (
+        #     in_prometheus_query_endpoint,
+        #     None,
+        #     None,
+        #     None,
+        # )
+        # self.url = parse.urlunparse(temp_url)
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
@@ -72,12 +76,16 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         end_date: datetime.datetime,
         query_type: str,
         params={"step": 3600},
-        **kwargs
+        **kwargs,
     ):
-        params["start"] = start_date
-        params["end"] = end_date
-        params["query"] = METRICS_API_PROMETHEUS_QUERIES.__getattribute__(query_type)
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        post_body = {}
+        post_body["start"] = f'{start_date.replace(tzinfo=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}+00:00'
+        post_body["end"] = f'{end_date.replace(tzinfo=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}+00:00'
+        post_body["step"] = params["step"]
+        post_body["query"] = METRICS_API_PROMETHEUS_QUERIES.__getattribute__(query_type)
+        resp = requests.post(url=self.url, auth=self.http_connection, headers=headers, data=post_body)
+        # resp = requests.get(url=self.url, auth=self.http_connection, headers=headers, data=post_body)
         if resp.status_code == 200:
             out_json = resp.json()
             if out_json is not None and out_json["data"] is not None:
@@ -118,6 +126,8 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
                                     METRICS_API_COLUMNS.principal_id,
                                 ],
                             )
+        else:
+            raise Exception("Could not connect to Prometheus Server. Please check your settings. " + resp.text)
 
     def read_next_dataset(self):
         self.start_date = self.last_available_date

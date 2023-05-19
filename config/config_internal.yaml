@@ -5,10 +5,13 @@ config:
   org_details:
     - id: CCloud Org 1
       ccloud_details:
-        metrics:
+        ccloud_api:
           api_key: env::CCLOUD_BILLING_API_KEY
           api_secret: env::CCLOUD_BILLING_API_SECRET
-        telemetry:
+        billing_api:
+          api_key: env::CCLOUD_BILLING_API_KEY
+          api_secret: env::CCLOUD_BILLING_API_SECRET
+        metrics_api:
           api_key: env::CCLOUD_BILLING_API_KEY
           api_secret: env::CCLOUD_BILLING_API_SECRET
       storage:

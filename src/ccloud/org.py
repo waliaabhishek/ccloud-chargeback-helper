@@ -9,11 +9,6 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.prom_metrics_handler import PrometheusMetricsDataHandler
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from helpers import sanitize_id
-from storage_mgmt import (
-    BILLING_PERSISTENCE_STORE,
-    STORAGE_PATH,
-    DirType,
-)
 
 
 @dataclass(kw_only=True)
@@ -41,9 +36,9 @@ class CCloudOrg:
         # This start date is calculated from the now time to rewind back 365 days as that is the
         # time limit of the billing dataset which is available to us. We will need the metrics handler
         # to try and get the data from that far back as well.
-        start_date = datetime.datetime.now(tzinfo=datetime.timezone.utc).combine(
-            time=datetime.time.min
-        ) - datetime.timedelta(days=365)
+        start_date = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) + datetime.timedelta(
+            days=-364
+        )
 
         # Initialize the Billing API Handler
         self.billing_handler = CCloudBillingHandler(

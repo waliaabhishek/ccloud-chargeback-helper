@@ -4,7 +4,7 @@ from typing import Dict
 from urllib import parse
 
 import requests
-
+import datetime
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from prometheus_processing.custom_collector import TimestampedCollector
@@ -25,7 +25,7 @@ kafka_cluster_prom_metrics = TimestampedCollector(
     "confluent_cloud_kafka_cluster",
     "Cluster Details for every Kafka Cluster created within CCloud",
     ["cluster_id", "env_id"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 
@@ -38,9 +38,7 @@ class CCloudClusterList(CCloudBase):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.clusters)
-        for item in self.ccloud_envs.env.values():
-            print("Checking Environment " + item.env_id + " for any provisioned clusters.")
-            self.read_all(env_id=item.env_id, params={"page_size": 50})
+        self.read_all(params={"page_size": 50})
         self.expose_prometheus_metrics()
 
     def expose_prometheus_metrics(self):

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from time import sleep, time
 from typing import Dict
 from urllib import parse
-
+import datetime
 import requests
 
 from dateutil import parser
@@ -20,10 +20,7 @@ class CCloudServiceAccount:
 
 
 sa_prom_metrics = TimestampedCollector(
-    "confluent_cloud_sa",
-    "Environment Details for every Environment created within CCloud",
-    ["sa_id", "created_at"],
-    timestamp=time(),
+    "confluent_cloud_sa", "Environment Details for every Environment created within CCloud", ["sa_id", "created_at"],
 )
 
 

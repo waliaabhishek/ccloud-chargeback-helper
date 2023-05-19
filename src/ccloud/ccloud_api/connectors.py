@@ -5,7 +5,7 @@ from typing import Dict
 import requests
 from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
 from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
-
+import datetime
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
@@ -25,7 +25,7 @@ kafka_connectors_prom_metrics = TimestampedCollector(
     "confluent_cloud_connector",
     "Connector Details for every Fully Managed Connector created within CCloud",
     ["connector_id", "cluster_id", "env_id"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 

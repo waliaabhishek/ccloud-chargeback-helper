@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from time import sleep, time
 from typing import Dict
 from urllib import parse
-
+import datetime
 import requests
 from dateutil import parser
 from ccloud.connections import CCloudBase
@@ -20,7 +20,7 @@ env_prom_metrics = TimestampedCollector(
     "confluent_cloud_environment",
     "Environment Details for every Environment created within CCloud",
     ["env_id", "created_at"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 

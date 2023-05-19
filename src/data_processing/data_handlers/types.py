@@ -19,11 +19,13 @@ class AbstractDataHandler(ABC):
     def read_next_dataset(self):
         pass
 
-    def __generate_date_range_per_row(
+    def _generate_date_range_per_row(
         self, start_date: datetime.datetime, end_date: datetime.datetime, freq: str = "1H",
     ):
-        start_date = start_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
-        end_date = end_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
+        start_date = start_date.replace(tzinfo=datetime.timezone.utc).combine(
+            date=start_date.date(), time=datetime.time.min
+        )
+        end_date = end_date.replace(tzinfo=datetime.timezone.utc).combine(date=end_date.date(), time=datetime.time.min)
         end_date = end_date - datetime.timedelta(minutes=1)
         return pd.date_range(start_date, end_date, freq=freq)
 

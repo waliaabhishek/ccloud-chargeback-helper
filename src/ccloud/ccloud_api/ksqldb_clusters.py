@@ -4,7 +4,7 @@ from time import sleep, time
 from typing import Dict
 from urllib import parse
 import requests
-
+import datetime
 from dateutil import parser
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
@@ -28,7 +28,7 @@ ksqldb_prom_metrics = TimestampedCollector(
     "confluent_cloud_ksqldb_cluster",
     "Environment Details for every Environment created within CCloud",
     ["cluster_id", "env_id", "kafka_cluster_id", "created_at"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 

@@ -7,6 +7,7 @@ import requests
 from ccloud.connections import CCloudBase
 from prometheus_processing.custom_collector import TimestampedCollector
 from dateutil import parser
+import datetime
 
 pp = pprint.PrettyPrinter(indent=2)
 
@@ -25,13 +26,13 @@ api_key_prom_metrics = TimestampedCollector(
     "confluent_cloud_api_key",
     "API Key details for every API Key created within CCloud",
     ["api_key", "owner_id", "cluster_id", "created_at"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 api_key_prom_agg_count = TimestampedCollector(
     "confluent_cloud_api_key_count",
     "API Key details for every API Key created within CCloud",
     ["owner_id", "cluster_id"],
-    timestamp=time(),
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 
