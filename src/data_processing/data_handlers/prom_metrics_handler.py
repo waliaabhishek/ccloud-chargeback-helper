@@ -128,13 +128,31 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         self.metrics_dataset = self.get_dataset_for_timerange(start_datetime=in_mem_date_cutoff, end_datetime=end_date)
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
-        start_date = pd.to_datetime(str(start_datetime.date()))
-        end_date = pd.to_datetime(str(end_datetime.date()))
-        return self.metrics_dataset.loc[
-            (self.metrics_dataset[METRICS_API_COLUMNS.timestamp] >= start_date)
-            & (self.metrics_dataset[METRICS_API_COLUMNS.timestamp] < end_date)
-        ]
+        """Wrapper over the internal method so that cross-imports are not necessary
+
+        Args:
+            start_datetime (datetime.datetime): Inclusive Start datetime
+            end_datetime (datetime.datetime): Exclusive end datetime
+
+        Returns:
+            pd.Dataframe: Returns a pandas dataframe with the filtered data
+        """
+        return self.__get_dataset_for_timerange(
+            dataset=self.metrics_dataset,
+            ts_column_name=METRICS_API_COLUMNS.timestamp,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
     def get_dataset_for_time_slice(self, time_slice: pd.Timestamp, **kwargs):
-        return self.metrics_dataset.loc[(self.metrics_dataset[METRICS_API_COLUMNS.timestamp] == time_slice)]
+        """Wrapper over the internal method so that cross-imports are not necessary
 
+        Args:
+            time_slice (pd.Timestamp): Time slice to be used for fetching the data from datafame for the exact timestamp
+
+        Returns:
+            pd.DataFrame: Returns a pandas Dataframe with the filtered data.
+        """
+        return self.__get_dataset_for_exact_timestamp(
+            dataset=self.metrics_dataset, ts_column_name=METRICS_API_COLUMNS.timestamp, time_slice=time_slice
+        )

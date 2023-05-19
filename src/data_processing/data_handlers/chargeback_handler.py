@@ -3,16 +3,17 @@ import decimal
 from dataclasses import dataclass, field
 from typing import Dict, List
 import pandas as pd
-
+from time import sleep, time
 from data_processing.data_handlers.billing_api_handler import BILLING_API_COLUMNS, CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
-from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_metrics_handler import (
     METRICS_API_COLUMNS,
     METRICS_API_PROMETHEUS_QUERIES,
     PrometheusMetricsDataHandler,
 )
 from data_processing.data_handlers.types import AbstractDataHandler
+from prometheus_processing.custom_collector import TimestampedCollector
+from prometheus_processing.notifier import NotifierAbstract, Observer
 
 
 class ChargebackColumnNames:
@@ -31,9 +32,16 @@ class ChargebackColumnNames:
 
 CHARGEBACK_COLUMNS = ChargebackColumnNames()
 
+chargeback_prom_metrics = TimestampedCollector(
+    "confluent_cloud_chargeback_details",
+    "Approximate Chargeback Distribution details for costs w.r.t contextual access within CCloud",
+    ["principal", "cost_type"],
+    timestamp=time(),
+)
+
 
 @dataclass(kw_only=True)
-class CCloudChargebackHandler(AbstractDataHandler):
+class CCloudChargebackHandler(AbstractDataHandler, Observer):
     billing_dataset: CCloudBillingHandler = field(init=True)
     objects_dataset: CCloudObjectsHandler = field(init=True)
     metrics_dataset: PrometheusMetricsDataHandler = field(init=True)
@@ -41,35 +49,74 @@ class CCloudChargebackHandler(AbstractDataHandler):
     days_per_query: int = field(default=7)
 
     chargeback_dataset: Dict = field(init=False, repr=False, default_factory=dict)
+    curr_export_datetime: datetime.datetime = field(init=False)
 
     def __post_init__(self) -> None:
+        """Initialize the Chargeback handler:
+        * Set the Start Date as UTC zero and time.min to convert the date to midnight of UTC
+        * Calculate the data and save it in memory as a dict
+        * attach this class to the Prom scraper which is also a notifier
+        * set the exported datetime in memory for stepping through the data every scrape
+        """
         super().__post_init__()
         self.start_date = self.start_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         self.read_all(start_date=self.start_date, end_date=end_date)
+        self.attach(chargeback_prom_metrics)
+        self.curr_export_datetime = self.start_date - datetime.timedelta(hours=1)
+        self.update(notifier=chargeback_prom_metrics)
+
+    def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
+        """Set and expose the metrics to the prom collector as a Gauge.
+
+        Args:
+            ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
+            to a specific timestamp and expose it to the prometheus collector
+        """
+        out = self.__get_dataset_for_exact_timestamp(
+            dataset=self.chargeback_dataset, ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
+        )
+        for df_row in out.itertuples(name="ChargeBackData"):
+            principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
+            for k, v in df_row._asdict().items():
+                if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
+                    chargeback_prom_metrics.labels(principal_id, k).set(v)
+
+    def update(self, notifier: NotifierAbstract) -> None:
+        """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
+        The Data for next timestamp is also populated in the Gauge implementation using this method.
+        It also tracks the currently exported timestamp in Observer as well as update it to the Notifier.
+
+        Args:
+            notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on timestamp is complete and the dataset should be refreshed for the next timestamp.
+        """
+        next_ts = self.__generate_next_timestamp(curr_date=self.curr_export_datetime)
+        next_ts_in_dt = next_ts.to_pydatetime(warn=False)
+        notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
+        self.expose_prometheus_metrics(ts_filter=next_ts)
+        self.curr_export_datetime = next_ts_in_dt
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
+        """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
+
+        Args:
+            start_date (datetime.datetime): Inclusive datetime for the period beginning 
+            end_date (datetime.datetime): Exclusive datetime for the period ending 
+        """
         for time_slice_item in self.__generate_date_range_per_row(start_date=start_date, end_date=end_date):
-            self.compute_output(start_datetime=start_date, end_datetime=end_date, time_slice=time_slice_item)
-
-    def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
-        cb_df = self.get_chargeback_dataframe()
-        start_date = pd.to_datetime(start_datetime)
-        end_date = pd.to_datetime(end_datetime)
-        return cb_df.loc[(cb_df[CHARGEBACK_COLUMNS.TS] >= start_date) & (cb_df[CHARGEBACK_COLUMNS.TS] < end_date)]
-
-    def get_dataset_for_time_slice(
-        self, dataset: pd.DataFrame, ts_column_name: str, time_slice: pd.Timestamp, **kwargs
-    ):
-        return dataset.loc[(dataset[ts_column_name] == time_slice)]
+            self.compute_output(time_slice=time_slice_item)
 
     def cleanup_old_data(self):
+        """Cleanup the older dataset from the chargeback object and prevent it from using too much memory
+        """
         for (k1, k2), (_, _, _) in self.chargeback_dataset.copy().items():
             if k2 < self.start_date:
                 del self.chargeback_dataset[(k1, k2)]
 
     def read_next_dataset(self):
+        """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date.
+        """
         self.start_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         self.cleanup_old_data()
@@ -83,6 +130,16 @@ class CCloudChargebackHandler(AbstractDataHandler):
         additional_usage_cost: decimal.Decimal = decimal.Decimal(0),
         additional_shared_cost: decimal.Decimal = decimal.Decimal(0),
     ):
+        """Internal chargeback Data structure to hold all the calculated chargeback data in memory. 
+        As the column names & values were needed to be dynamic, we did not use a dataframe here for ease of use. 
+
+        Args:
+            principal (str): The Principal used for Chargeback Aggregation -- Primary Complex key
+            time_slice (datetime.datetime): datetime of the Hour used for chargeback aggregation -- Primary complex key
+            product_type_name (str): The different product names available in CCloud for aggregation
+            additional_usage_cost (decimal.Decimal, optional): Is the cost Usage cost for that product type and what is the total usage cost for that duration? Defaults to decimal.Decimal(0).
+            additional_shared_cost (decimal.Decimal, optional): Is the cost Shared cost for that product type and what is the total shared cost for that duration. Defaults to decimal.Decimal(0).
+        """
         if (principal, time_slice) in self.chargeback_dataset:
             u, s, detailed_split = self.chargeback_dataset[(principal, time_slice)]
             detailed_split[product_type_name] = (
@@ -116,6 +173,11 @@ class CCloudChargebackHandler(AbstractDataHandler):
             yield temp_dict
 
     def get_chargeback_dataframe(self) -> pd.DataFrame:
+        """Generate pandas Dataframe for the Chargeback data available in memory within attribute chargeback_dataset
+
+        Returns:
+            pd.DataFrame: _description_
+        """
         # TODO: Getting this dataframe is amazingly under optimized albeit uses yield.
         # Uses an intermittent list of dict conversion and then another step to convert to dataframe
         # No clue at the moment on how to improve this.
@@ -124,14 +186,15 @@ class CCloudChargebackHandler(AbstractDataHandler):
         )
 
     def compute_output(
-        self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, time_slice: datetime.datetime,
+        self, time_slice: datetime.datetime,
     ):
-        billing_data = self.billing_dataset.get_dataset_for_timerange(
-            start_datetime=start_datetime, end_datetime=end_datetime
-        )
-        metrics_data = self.metrics_dataset.get_dataset_for_timerange(
-            start_datetime=start_datetime, end_datetime=end_datetime
-        )
+        """The core calculation method. This method aggregates all the costs on a per product type basis for every principal per hour and appends that calculated dataset in chargeback_dataset object attribute
+
+        Args:
+            time_slice (datetime.datetime): The exact timestamp for which the compute will happen
+        """
+        billing_data = self.billing_dataset.get_dataset_for_time_slice(time_slice=time_slice)
+        metrics_data = self.metrics_dataset.get_dataset_for_time_slice(time_slice=time_slice)
         for bill_row in billing_data.itertuples(index=True, name="BillingRow"):
             row_ts, row_env, row_cid, row_pname, row_ptype = (
                 bill_row.Index[0].to_pydatetime(),
@@ -514,32 +577,4 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     f"Row TS: {str(row_ts)} -- No Chargeback calculation available for {row_ptype}. Please request for it to be added."
                 )
                 print("=" * 80)
-
-    ##########################################################################################
-    ##########################################################################################
-    def export_metrics_to_csv(self, output_basepath: str):
-        self.cb_manager.output_to_csv(basepath=output_basepath)
-
-    def get_hourly_dataset(self, date_value: datetime.datetime, billing_mgmt: bool = True):
-        out = pd.DataFrame()
-        data_missing_on_disk = False
-        for _, telemetry_dataset in self.metrics_dataset.items():
-            if billing_mgmt and telemetry_dataset.aggregation_metric not in BILLING_METRICS_SCOPE.values():
-                continue
-            metric_name, file_level_df = telemetry_dataset.get_hourly_dataset(datetime_slice_iso_format=date_value)
-            if file_level_df is not None:
-                out = out.merge(
-                    file_level_df, how="outer", on=[METRICS_CSV_COLUMNS.OUT_TS, METRICS_CSV_COLUMNS.OUT_KAFKA_CLUSTER],
-                )
-            else:
-                data_missing_on_disk = True
-        # TODO: Maybe need to replace NaN items with zero so that maths doesnt fail while calculation.
-        return data_missing_on_disk, out
-
-    def run_calculations(
-        self, time_slice: datetime.datetime, billing_dataframe: pd.DataFrame, metrics_dataframe: pd.DataFrame,
-    ):
-        self.cb_manager.run_calculations(
-            time_slice=time_slice, billing_dataframe=billing_dataframe, metrics_dataframe=metrics_dataframe
-        )
 

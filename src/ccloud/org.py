@@ -25,7 +25,7 @@ class CCloudOrg:
     objects_handler: CCloudObjectsHandler = field(init=False)
     metrics_handler: PrometheusMetricsDataHandler = field(init=False)
     billing_handler: CCloudBillingHandler = field(init=False)
-    # chargeback_handler: CCloudChargebackHandler = field(init=False)
+    chargeback_handler: CCloudChargebackHandler = field(init=False)
 
     def __post_init__(self, in_org_details, in_days_in_memory) -> None:
         self.org_id = sanitize_id(in_org_details["id"])
