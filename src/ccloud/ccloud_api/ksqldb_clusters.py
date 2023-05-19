@@ -8,7 +8,7 @@ import requests
 from dateutil import parser
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
-from prometheus_processing.metrics_server import TimestampedGauge
+from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
 
@@ -24,7 +24,7 @@ class CCloudKsqldbCluster:
     created_at: str
 
 
-ksqldb_prom_metrics = TimestampedGauge(
+ksqldb_prom_metrics = TimestampedCollector(
     "confluent_cloud_ksqldb_cluster",
     "Environment Details for every Environment created within CCloud",
     ["cluster_id", "env_id", "kafka_cluster_id", "created_at"],

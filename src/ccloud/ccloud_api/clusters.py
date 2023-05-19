@@ -7,7 +7,7 @@ import requests
 
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
-from prometheus_processing.metrics_server import TimestampedGauge
+from prometheus_processing.custom_collector import TimestampedCollector
 
 
 @dataclass
@@ -21,7 +21,7 @@ class CCloudCluster:
     bootstrap_url: str
 
 
-kafka_cluster_prom_metrics = TimestampedGauge(
+kafka_cluster_prom_metrics = TimestampedCollector(
     "confluent_cloud_kafka_cluster",
     "Cluster Details for every Kafka Cluster created within CCloud",
     ["cluster_id", "env_id"],
@@ -87,7 +87,7 @@ class CCloudClusterList(CCloudBase):
         #                     cluster_name=item["spec"]["display_name"],
         #                     cloud=item["spec"]["cloud"],
         #                     availability=item["spec"]["availability"],
-        #                     region=item["spec"]["region"],
+        ##                     region=item["spec"]["region"],
         #                     bootstrap_url=item["spec"]["kafka_bootstrap_endpoint"],
         #                 )
         #             )

@@ -9,7 +9,7 @@ from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.connections import CCloudBase
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
-from prometheus_processing.metrics_server import TimestampedGauge
+from prometheus_processing.custom_collector import TimestampedCollector
 
 
 @dataclass
@@ -21,7 +21,7 @@ class CCloudConnector:
     owner_id: str
 
 
-kafka_connectors_prom_metrics = TimestampedGauge(
+kafka_connectors_prom_metrics = TimestampedCollector(
     "confluent_cloud_connector",
     "Connector Details for every Fully Managed Connector created within CCloud",
     ["connector_id", "cluster_id", "env_id"],

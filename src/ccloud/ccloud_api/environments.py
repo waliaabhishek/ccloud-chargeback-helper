@@ -6,7 +6,7 @@ from urllib import parse
 import requests
 from dateutil import parser
 from ccloud.connections import CCloudBase
-from prometheus_processing.metrics_server import TimestampedGauge
+from prometheus_processing.custom_collector import TimestampedCollector
 
 
 @dataclass
@@ -16,7 +16,7 @@ class CCloudEnvironment:
     created_at: str
 
 
-env_prom_metrics = TimestampedGauge(
+env_prom_metrics = TimestampedCollector(
     "confluent_cloud_environment",
     "Environment Details for every Environment created within CCloud",
     ["env_id", "created_at"],

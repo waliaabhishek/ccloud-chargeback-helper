@@ -7,7 +7,7 @@ import requests
 
 from dateutil import parser
 from ccloud.connections import CCloudBase
-from prometheus_processing.metrics_server import TimestampedGauge
+from prometheus_processing.custom_collector import TimestampedCollector
 
 
 @dataclass
@@ -19,7 +19,7 @@ class CCloudServiceAccount:
     updated_at: str
 
 
-sa_prom_metrics = TimestampedGauge(
+sa_prom_metrics = TimestampedCollector(
     "confluent_cloud_sa",
     "Environment Details for every Environment created within CCloud",
     ["sa_id", "created_at"],
