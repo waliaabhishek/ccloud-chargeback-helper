@@ -1,8 +1,8 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from typing import List
 
 import datetime
+from abc import ABC, abstractmethod
+from typing import List
 
 
 class Observer(ABC):

@@ -1,7 +1,6 @@
-from prometheus_client import start_http_server, Gauge
-
 import datetime
 
+from prometheus_client import Gauge
 from prometheus_processing.notifier import NotifierAbstract
 
 

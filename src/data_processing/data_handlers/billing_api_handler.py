@@ -1,11 +1,9 @@
-from dataclasses import dataclass, field
 import datetime
+from dataclasses import dataclass, field
 from decimal import Decimal
-import requests
-from time import sleep
-from urllib import parse
-from typing import Dict, List
+
 import pandas as pd
+
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
 
@@ -122,7 +120,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         Returns:
             pd.Dataframe: Returns a pandas dataframe with the filtered data
         """
-        return self.__get_dataset_for_timerange(
+        return self._get_dataset_for_timerange(
             dataset=self.billing_dataset,
             ts_column_name=BILLING_API_COLUMNS.calc_timestamp,
             start_datetime=start_datetime,
@@ -138,6 +136,19 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         Returns:
             pd.DataFrame: Returns a pandas Dataframe with the filtered data.
         """
-        return self.__get_dataset_for_exact_timestamp(
-            dataset=self.metrics_dataset, ts_column_name=BILLING_API_COLUMNS.calc_timestamp, time_slice=time_slice
+        temp_data, is_none = self._get_dataset_for_exact_timestamp(
+            dataset=self.billing_dataset, ts_column_name=BILLING_API_COLUMNS.calc_timestamp, time_slice=time_slice
         )
+        if is_none:
+            return pd.DataFrame(
+                data={},
+                index=[
+                    BILLING_API_COLUMNS.calc_timestamp,
+                    BILLING_API_COLUMNS.env_id,
+                    BILLING_API_COLUMNS.cluster_id,
+                    BILLING_API_COLUMNS.product_name,
+                    BILLING_API_COLUMNS.product_type,
+                ],
+            )
+        else:
+            return temp_data

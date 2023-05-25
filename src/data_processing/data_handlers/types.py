@@ -1,7 +1,9 @@
-from abc import ABC, abstractmethod
 import datetime
-from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from types import NoneType
 from typing import Tuple
+
 import pandas as pd
 
 
@@ -29,11 +31,11 @@ class AbstractDataHandler(ABC):
         end_date = end_date - datetime.timedelta(minutes=1)
         return pd.date_range(start_date, end_date, freq=freq)
 
-    def __generate_next_timestamp(self, curr_date: datetime.datetime, freq: str = "1H",) -> pd.Timestamp:
+    def _generate_next_timestamp(self, curr_date: datetime.datetime, freq: str = "1H",) -> pd.Timestamp:
         start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
         return pd.date_range(start_date, freq=freq, periods=2)[1]
 
-    def __get_dataset_for_timerange(
+    def _get_dataset_for_timerange(
         self,
         dataset: pd.DataFrame,
         ts_column_name: str,
@@ -59,9 +61,9 @@ class AbstractDataHandler(ABC):
             & (dataset.index.get_level_values(ts_column_name) < end_date)
         ]
 
-    def __get_dataset_for_exact_timestamp(
+    def _get_dataset_for_exact_timestamp(
         self, dataset: pd.DataFrame, ts_column_name: str, time_slice: pd.Timestamp, **kwargs
-    ):
+    ) -> Tuple[pd.DataFrame | None, bool]:
         """used to filter down the data in a dataframe to a specific timestamp that is present in a timestamp index
 
         Args:
@@ -72,7 +74,13 @@ class AbstractDataHandler(ABC):
         Returns:
             _type_: _description_
         """
-        return dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)]
+        if not isinstance(dataset, NoneType):
+            if not dataset.empty:
+                return (dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)], False)
+            else:
+                return (dataset, False)
+        else:
+            return (None, True)
 
     def execute_requests(self):
         self.read_next_dataset()

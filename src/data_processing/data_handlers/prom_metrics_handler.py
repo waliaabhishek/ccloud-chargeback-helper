@@ -1,11 +1,11 @@
-from dataclasses import InitVar, dataclass, field
 import datetime
-from decimal import Decimal
-import requests
-from time import sleep
+from dataclasses import InitVar, dataclass, field
+from typing import Tuple
 from urllib import parse
-from typing import Dict, List
+
 import pandas as pd
+import requests
+
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
 
@@ -89,43 +89,44 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         if resp.status_code == 200:
             out_json = resp.json()
             if out_json is not None and out_json["data"] is not None:
-                for item in out_json["data"]["result"]:
-                    temp_data = [
-                        {
-                            METRICS_API_COLUMNS.timestamp: pd.to_datetime(in_item[0], unit="s"),
-                            METRICS_API_COLUMNS.query_type: query_type,
-                            METRICS_API_COLUMNS.cluster_id: item["metric"]["kafka_id"],
-                            METRICS_API_COLUMNS.principal_id: item["metric"]["principal_id"],
-                            METRICS_API_COLUMNS.value: in_item[1],
-                        }
-                        for in_item in item["values"]
-                    ]
-                    if temp_data:
-                        if self.metrics_dataset is not None:
-                            self.metrics_dataset = pd.concat(
-                                [
-                                    self.metrics_dataset,
-                                    pd.DataFrame.from_records(
-                                        temp_data,
-                                        index=[
-                                            METRICS_API_COLUMNS.timestamp,
-                                            METRICS_API_COLUMNS.query_type,
-                                            METRICS_API_COLUMNS.cluster_id,
-                                            METRICS_API_COLUMNS.principal_id,
-                                        ],
-                                    ),
-                                ]
-                            )
-                        else:
-                            self.metrics_dataset = pd.DataFrame.from_records(
-                                temp_data,
-                                index=[
-                                    METRICS_API_COLUMNS.timestamp,
-                                    METRICS_API_COLUMNS.query_type,
-                                    METRICS_API_COLUMNS.cluster_id,
-                                    METRICS_API_COLUMNS.principal_id,
-                                ],
-                            )
+                if out_json["data"]["result"]:
+                    for item in out_json["data"]["result"]:
+                        temp_data = [
+                            {
+                                METRICS_API_COLUMNS.timestamp: pd.to_datetime(in_item[0], unit="s"),
+                                METRICS_API_COLUMNS.query_type: query_type,
+                                METRICS_API_COLUMNS.cluster_id: item["metric"]["kafka_id"],
+                                METRICS_API_COLUMNS.principal_id: item["metric"]["principal_id"],
+                                METRICS_API_COLUMNS.value: in_item[1],
+                            }
+                            for in_item in item["values"]
+                        ]
+                        if temp_data:
+                            if self.metrics_dataset is not None:
+                                self.metrics_dataset = pd.concat(
+                                    [
+                                        self.metrics_dataset,
+                                        pd.DataFrame.from_records(
+                                            temp_data,
+                                            index=[
+                                                METRICS_API_COLUMNS.timestamp,
+                                                METRICS_API_COLUMNS.query_type,
+                                                METRICS_API_COLUMNS.cluster_id,
+                                                METRICS_API_COLUMNS.principal_id,
+                                            ],
+                                        ),
+                                    ]
+                                )
+                            else:
+                                self.metrics_dataset = pd.DataFrame.from_records(
+                                    temp_data,
+                                    index=[
+                                        METRICS_API_COLUMNS.timestamp,
+                                        METRICS_API_COLUMNS.query_type,
+                                        METRICS_API_COLUMNS.cluster_id,
+                                        METRICS_API_COLUMNS.principal_id,
+                                    ],
+                                )
         else:
             raise Exception("Could not connect to Prometheus Server. Please check your settings. " + resp.text)
 
@@ -147,7 +148,7 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         Returns:
             pd.Dataframe: Returns a pandas dataframe with the filtered data
         """
-        return self.__get_dataset_for_timerange(
+        return self._get_dataset_for_timerange(
             dataset=self.metrics_dataset,
             ts_column_name=METRICS_API_COLUMNS.timestamp,
             start_datetime=start_datetime,
@@ -163,6 +164,19 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         Returns:
             pd.DataFrame: Returns a pandas Dataframe with the filtered data.
         """
-        return self.__get_dataset_for_exact_timestamp(
+        temp_data, is_none = self._get_dataset_for_exact_timestamp(
             dataset=self.metrics_dataset, ts_column_name=METRICS_API_COLUMNS.timestamp, time_slice=time_slice
         )
+        if is_none:
+            return pd.DataFrame(
+                {},
+                index=[
+                    METRICS_API_COLUMNS.timestamp,
+                    METRICS_API_COLUMNS.query_type,
+                    METRICS_API_COLUMNS.cluster_id,
+                    METRICS_API_COLUMNS.principal_id,
+                ],
+            )
+        else:
+            return temp_data
+

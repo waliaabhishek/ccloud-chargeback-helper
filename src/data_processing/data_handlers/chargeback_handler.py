@@ -2,8 +2,9 @@ import datetime
 import decimal
 from dataclasses import dataclass, field
 from typing import Dict, List
+
 import pandas as pd
-from time import sleep, time
+
 from data_processing.data_handlers.billing_api_handler import BILLING_API_COLUMNS, CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.prom_metrics_handler import (
@@ -60,7 +61,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         """
         AbstractDataHandler.__init__(self)
         Observer.__init__(self)
-        self.start_date = self.start_date.replace(tzinfo=datetime.timezone.utc).combine(time=datetime.time.min)
+        self.start_date = datetime.datetime.combine(
+            date=self.start_date.date(), time=datetime.time.min, tzinfo=datetime.timezone.utc
+        )
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         self.read_all(start_date=self.start_date, end_date=end_date)
@@ -75,14 +78,15 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
             ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
             to a specific timestamp and expose it to the prometheus collector
         """
-        out = self.__get_dataset_for_exact_timestamp(
-            dataset=self.chargeback_dataset, ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
+        out, is_none = self._get_dataset_for_exact_timestamp(
+            dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
         )
-        for df_row in out.itertuples(name="ChargeBackData"):
-            principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
-            for k, v in df_row._asdict().items():
-                if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
-                    chargeback_prom_metrics.labels(principal_id, k).set(v)
+        if not is_none:
+            for df_row in out.itertuples(name="ChargeBackData"):
+                principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
+                for k, v in df_row._asdict().items():
+                    if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
+                        chargeback_prom_metrics.labels(principal_id, k).set(v)
 
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
@@ -92,7 +96,7 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         Args:
             notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on timestamp is complete and the dataset should be refreshed for the next timestamp.
         """
-        next_ts = self.__generate_next_timestamp(curr_date=self.curr_export_datetime)
+        next_ts = self._generate_next_timestamp(curr_date=self.curr_export_datetime)
         next_ts_in_dt = next_ts.to_pydatetime(warn=False)
         notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
         self.expose_prometheus_metrics(ts_filter=next_ts)
@@ -122,6 +126,23 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         self.cleanup_old_data()
         self.read_all(start_date=self.start_date, end_date=end_date)
+
+    def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
+        """Wrapper over the internal method so that cross-imports are not necessary
+
+        Args:
+            start_datetime (datetime.datetime): Inclusive Start datetime
+            end_datetime (datetime.datetime): Exclusive end datetime
+
+        Returns:
+            pd.Dataframe: Returns a pandas dataframe with the filtered data
+        """
+        return self._get_dataset_for_timerange(
+            dataset=self.get_chargeback_dataframe(),
+            ts_column_name=CHARGEBACK_COLUMNS.TS,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
     def __add_cost_to_chargeback_dataset(
         self,
@@ -224,13 +245,13 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             additional_shared_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype} for {row_cid} as Cluster Shared Cost"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype} for {row_cid} as Cluster Shared Cost"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
-            elif row_ptype == "KafkaNetworkRead":
+            elif row_ptype == "KAFKA_NETWORK_READ":
                 # GOAL: Split cost across all the consumers to that cluster as a ratio of consumption performed.
                 # Read Depends in the Response_Bytes Metric Only
                 col_name = METRICS_API_PROMETHEUS_QUERIES.response_bytes_name
@@ -268,13 +289,13 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             * decimal.Decimal(getattr(metric_row, f"{col_name}_ratio")),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost),
                     )
-            elif row_ptype == "KafkaNetworkWrite":
+            elif row_ptype == "KAFKA_NETWORK_WRITE":
                 # GOAL: Split cost across all the producers to that cluster as a ratio of production performed.
                 # Read Depends in the Response_Bytes Metric Only
                 col_name = METRICS_API_PROMETHEUS_QUERIES.request_bytes_name
@@ -315,13 +336,13 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             * decimal.Decimal(getattr(metric_row, f"{col_name}_ratio")),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost),
                     )
-            elif row_ptype == "KafkaNumCKUs":
+            elif row_ptype == "KAFKA_NUM_CKUS":
                 # GOAL: Split into 2 Categories --
                 #       Common Charge -- Flat 50% of the cost Divided across all clients active in that duration.
                 #       Usage Charge  -- 50% of the cost split variably by the amount of data produced + consumed by the SA/User
@@ -343,9 +364,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No API Keys were found for cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No API Keys were found for cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid,
                         row_ts,
@@ -397,9 +418,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                         )
                 else:
                     if len(sa_count) > 0:
-                        print(
-                            f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid}. Splitting Usage Ratio for {row_ptype} across all Service Accounts as Shared Cost"
-                        )
+                        # print(
+                        #     f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid}. Splitting Usage Ratio for {row_ptype} across all Service Accounts as Shared Cost"
+                        # )
                         splitter = len(sa_count)
                         for sa_name, sa_api_key_count in sa_count.items():
                             self.__add_cost_to_chargeback_dataset(
@@ -412,16 +433,16 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                                 / decimal.Decimal(splitter),
                             )
                     else:
-                        print(
-                            f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid} and no API Keys found for the cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
-                        )
+                        # print(
+                        #     f"Row TS: {str(row_ts)} -- No Production/Consumption activity for cluster {row_cid} and no API Keys found for the cluster {row_cid}. Attributing Common Cost component for {row_ptype} as Cluster Shared Cost for cluster {row_cid}"
+                        # )
                         self.__add_cost_to_chargeback_dataset(
                             row_cid,
                             row_ts,
                             row_ptype,
                             additional_shared_cost=decimal.Decimal(row_cost) * decimal.Decimal(usage_charge_ratio),
                         )
-            elif row_ptype in ["KafkaPartition", "KafkaStorage"]:
+            elif row_ptype in ["KAFKA_PARTITION", "KAFKA_STORAGE"]:
                 # GOAL: Split cost across all the API Key holders for the specific Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
                 sa_count = self.objects_dataset.cc_api_keys.find_sa_count_for_clusters(cluster_id=row_cid)
@@ -436,9 +457,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             additional_shared_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No API Keys available for cluster {row_cid}. Attributing {row_ptype}  for {row_cid} as Cluster Shared Cost"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
@@ -476,13 +497,13 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             additional_shared_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No Connector Details were found. Attributing as Shared Cost for Kafka Cluster {row_cid}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No Connector Details were found. Attributing as Shared Cost for Kafka Cluster {row_cid}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
-            elif row_ptype in ["ConnectNumTasks", "ConnectThroughput"]:
+            elif row_ptype in ["CONNECT_NUM_TASKS", "CONNECT_THROUGHPUT"]:
                 # GOAL: Cost will be assumed by the owner of the connector
                 # There will be only one active Identity but we will still loop on the identity for consistency
                 # The conditions are checking for the specific connector in an environment and trying to find its owner.
@@ -503,23 +524,23 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             additional_usage_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No Connector Details were found. Using the Connector {row_cid} and adding cost as Shared Cost"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No Connector Details were found. Using the Connector {row_cid} and adding cost as Shared Cost"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
-            elif row_ptype == "ClusterLinkingPerLink":
+            elif row_ptype == "CLUSTER_LINKING_PER_LINK":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.__add_cost_to_chargeback_dataset(
                     row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                 )
-            elif row_ptype == "ClusterLinkingRead":
+            elif row_ptype == "CLUSTER_LINKING_READ":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.__add_cost_to_chargeback_dataset(
                     row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                 )
-            elif row_ptype == "ClusterLinkingWrite":
+            elif row_ptype == "CLUSTER_LINKING_WRITE":
                 # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
                 self.__add_cost_to_chargeback_dataset(
                     row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
@@ -539,13 +560,13 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
                             additional_usage_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No Kafka Clusters present within the environment. Attributing as Shared Cost to {row_env}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No Kafka Clusters present within the environment. Attributing as Shared Cost to {row_env}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_env, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
-            elif row_ptype == "KSQLNumCSUs":
+            elif row_ptype == "KSQL_NUM_CSUS":
                 # GOAL: Cost will be assumed by the ksql Service Account/User being used by the ksqldb cluster
                 # There will be only one active Identity but we will still loop on the identity for consistency
                 # The conditions are checking for the specific ksqldb cluster in an environment and trying to find its owner.
