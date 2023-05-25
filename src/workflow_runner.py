@@ -1,11 +1,13 @@
+from argparse import Namespace
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from argparse import Namespace
 from logging import debug
 from typing import Dict
+
 import yaml
+
 from ccloud.org import CCloudOrgList
-from helpers import logged_method, timed_method, env_parse_replace
+from helpers import env_parse_replace, logged_method, timed_method
 
 
 @dataclass(kw_only=True)
@@ -53,13 +55,6 @@ def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # for billing CSV files --> if the data is already read in memory, it wont be read in again.
     ccloud_orgs.execute_requests()
 
-    # Invoke write to Disk.
-    # This wont be needed in the new version as we will fetch metrics from prometheus instead.
-    # for org in ccloud_orgs.orgs.values():
-    # org.metrics_handler.export_metrics_to_csv(
-    #     output_basepath=STORAGE_PATH.get_path(org_id=org.org_id, dir_type=DirType.MetricsData, ensure_exists=True)
-    # )
-
 
 @timed_method
 @logged_method
@@ -95,9 +90,9 @@ def execute_workflow(arg_flags: Namespace):
         in_orgs=core_config["config"]["org_details"], in_days_in_memory=APP_PROPS.days_in_memory,
     )
 
-    run_gather_cycle(ccloud_orgs=ccloud_orgs)
+    # run_gather_cycle(ccloud_orgs=ccloud_orgs)
 
-    run_calculate_cycle(ccloud_orgs=ccloud_orgs)
+    # run_calculate_cycle(ccloud_orgs=ccloud_orgs)
     # finally:
     #     # Begin shutdown process.
     #     for item in thread_configs:

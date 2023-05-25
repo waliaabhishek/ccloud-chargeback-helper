@@ -1,12 +1,9 @@
-from dataclasses import dataclass, field
-from time import sleep, time
-from typing import Dict
-from urllib import parse
-
-import requests
 import datetime
-from ccloud.connections import CCloudBase
+from dataclasses import dataclass, field
+from typing import Dict
+
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
+from ccloud.connections import CCloudBase
 from prometheus_processing.custom_collector import TimestampedCollector
 
 

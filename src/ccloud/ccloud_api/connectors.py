@@ -1,14 +1,15 @@
+import datetime
 from dataclasses import dataclass, field
-from time import sleep, time
+from time import sleep
 from typing import Dict
 
 import requests
+
 from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
 from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
-import datetime
+from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
+from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
-from ccloud.ccloud_api.service_accounts import CCloudServiceAccount, CCloudServiceAccountList
-from ccloud.ccloud_api.user_accounts import CCloudUserAccount, CCloudUserAccountList
 from prometheus_processing.custom_collector import TimestampedCollector
 
 

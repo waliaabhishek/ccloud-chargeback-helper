@@ -1,13 +1,12 @@
+import datetime
 import pprint
 from dataclasses import dataclass, field
-from time import sleep, time
 from typing import Dict, List
-from urllib import parse
-import requests
+
+from dateutil import parser
+
 from ccloud.connections import CCloudBase
 from prometheus_processing.custom_collector import TimestampedCollector
-from dateutil import parser
-import datetime
 
 pp = pprint.PrettyPrinter(indent=2)
 

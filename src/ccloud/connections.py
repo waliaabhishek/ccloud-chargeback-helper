@@ -1,9 +1,10 @@
 from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
+from time import sleep
 from urllib import parse
-from requests.auth import HTTPBasicAuth
+
 import requests
-from time import sleep, time
+from requests.auth import HTTPBasicAuth
 
 
 class EndpointURL(Enum):

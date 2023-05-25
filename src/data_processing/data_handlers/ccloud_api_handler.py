@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
 import datetime
-from ccloud.connections import CCloudBase, CCloudConnection
+from dataclasses import dataclass, field
+
 from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
 from ccloud.ccloud_api.clusters import CCloudClusterList
 from ccloud.ccloud_api.connectors import CCloudConnectorList
@@ -8,6 +8,7 @@ from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.ccloud_api.ksqldb_clusters import CCloudKsqldbClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
+from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
 
 

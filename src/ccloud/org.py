@@ -1,13 +1,13 @@
-from dataclasses import InitVar, dataclass, field
 import datetime
-import os
-from typing import Dict, List, Set, Tuple
-import pandas as pd
-from ccloud.connections import CCloudBase, CCloudConnection, EndpointURL
+from dataclasses import InitVar, dataclass, field
+from typing import Dict, List
+
+
+from ccloud.connections import CCloudConnection, EndpointURL
 from data_processing.data_handlers.billing_api_handler import CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
-from data_processing.data_handlers.prom_metrics_handler import PrometheusMetricsDataHandler
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
+from data_processing.data_handlers.prom_metrics_handler import PrometheusMetricsDataHandler
 from helpers import sanitize_id
 
 
@@ -72,9 +72,7 @@ class CCloudOrg:
         print(f"Gathering CCloud Existing Objects Data")
         self.objects_handler.execute_requests()
         print(f"Gathering Metrics API Data")
-        self.metrics_handler.execute_requests(
-            output_basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.MetricsData)
-        )
+        self.metrics_handler.execute_requests()
         print(f"Checking for new Billing CSV Files")
         self.billing_handler.execute_requests()
         print("Calculating next dataset for chargeback")
