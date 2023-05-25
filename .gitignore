@@ -3,3 +3,5 @@
 output/
 __pycache__/
 .DS_Store
+testing/
+src/to_be_deleted/
