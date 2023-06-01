@@ -34,11 +34,10 @@ METRICS_API_COLUMNS = MetricsAPIColumnNames()
 
 @dataclass
 class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
-    start_date: datetime.datetime = field(init=True)
     in_prometheus_url: InitVar[str | None] = field(default="http://localhost:9090")
     in_prometheus_query_endpoint: InitVar[str] = field(default="/api/v1/query_range")
     days_per_query: int = field(default=7)
-    max_days_in_memory: int = field(default=30)
+    max_days_in_memory: int = field(default=14)
 
     last_available_date: datetime.datetime = field(init=False)
     url: str = field(init=False)
@@ -46,28 +45,16 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
 
     def __post_init__(self, in_prometheus_url, in_prometheus_query_endpoint) -> None:
         # Initialize the super classes to set the internal attributes
-        AbstractDataHandler.__init__(self)
+        AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
         self.url = parse.urljoin(base=in_prometheus_url, url=in_prometheus_query_endpoint)
-        self.start_date = datetime.datetime.combine(
-            date=self.start_date.date(), time=datetime.time.min, tzinfo=datetime.timezone.utc
-        )
-        # Check if the URL contains the required URI or not
-        # temp_url = parse.urlparse(in_prometheus_url)
-        # temp_url._replace(path=in_prometheus_query_endpoint, params=None, query=None, fragment=None)
-        # temp_url.path, temp_url.params, temp_url.query, temp_url.fragment = (
-        #     in_prometheus_query_endpoint,
-        #     None,
-        #     None,
-        #     None,
-        # )
-        # self.url = parse.urlunparse(temp_url)
-        # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
-        self.read_all(
-            start_date=self.start_date, end_date=end_date, query_type=METRICS_API_PROMETHEUS_QUERIES.request_bytes_name
-        )
+        for item in [
+            METRICS_API_PROMETHEUS_QUERIES.request_bytes_name,
+            METRICS_API_PROMETHEUS_QUERIES.response_bytes_name,
+        ]:
+            self.read_all(start_date=self.start_date, end_date=end_date, query_type=item)
         self.last_available_date = end_date
 
     def read_all(
@@ -130,13 +117,24 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         else:
             raise Exception("Could not connect to Prometheus Server. Please check your settings. " + resp.text)
 
-    def read_next_dataset(self):
-        self.start_date = self.last_available_date
-        end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
-        self.read_all(start_date=self.start_date, end_date=end_date)
-        self.last_available_date = end_date
-        in_mem_date_cutoff = self.last_available_date - datetime.timedelta(days=self.max_days_in_memory)
-        self.metrics_dataset = self.get_dataset_for_timerange(start_datetime=in_mem_date_cutoff, end_datetime=end_date)
+    def read_next_dataset(self, exposed_timestamp: datetime.datetime):
+        if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, next_fetch_within_days=2):
+            effective_dates = self.calculate_effective_dates(
+                self.last_available_date, self.days_per_query, self.max_days_in_memory
+            )
+            for item in [
+                METRICS_API_PROMETHEUS_QUERIES.request_bytes_name,
+                METRICS_API_PROMETHEUS_QUERIES.response_bytes_name,
+            ]:
+                self.read_all(
+                    start_date=effective_dates.next_fetch_start_date,
+                    end_date=effective_dates.next_fetch_end_date,
+                    query_type=item,
+                )
+            self.last_available_date = effective_dates.next_fetch_end_date
+            self.metrics_dataset = self.get_dataset_for_timerange(
+                start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
+            )
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
