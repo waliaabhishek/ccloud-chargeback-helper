@@ -30,15 +30,14 @@ BILLING_API_COLUMNS = BillingAPIColumnNames()
 
 @dataclass
 class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
-    start_date: datetime.datetime = field(init=True)
     last_available_date: datetime.datetime = field(init=False)
     days_per_query: int = field(default=7)
-    max_days_in_memory: int = field(default=30)
+    max_days_in_memory: int = field(default=14)
     billing_dataset: pd.DataFrame = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         # Initialize the super classes to set the internal attributes
-        AbstractDataHandler.__init__(self)
+        AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.get_billing_costs)
 
@@ -102,13 +101,18 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                         ],
                     )
 
-    def read_next_dataset(self):
-        self.start_date = self.last_available_date
-        end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
-        self.read_all(start_date=self.start_date, end_date=end_date)
-        self.last_available_date = end_date
-        in_mem_date_cutoff = self.last_available_date - datetime.timedelta(days=self.max_days_in_memory)
-        self.billing_dataset = self.get_dataset_for_timerange(start_datetime=in_mem_date_cutoff, end_datetime=end_date)
+    def read_next_dataset(self, exposed_timestamp: datetime.datetime):
+        if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
+            effective_dates = self.calculate_effective_dates(
+                self.last_available_date, self.days_per_query, self.max_days_in_memory
+            )
+            self.read_all(
+                start_date=effective_dates.next_fetch_start_date, end_date=effective_dates.next_fetch_end_date
+            )
+            self.last_available_date = effective_dates.next_fetch_end_date
+            self.billing_dataset = self.get_dataset_for_timerange(
+                start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
+            )
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
