@@ -26,5 +26,6 @@
     "Threadable",
     "timerange",
     "timeslot"
-  ]
+  ],
+  "python.analysis.typeCheckingMode": "off"
 }
