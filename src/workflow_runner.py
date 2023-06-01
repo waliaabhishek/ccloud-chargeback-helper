@@ -2,12 +2,14 @@ from argparse import Namespace
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from logging import debug
+from time import sleep
 from typing import Dict
-
+import prometheus_client
 import yaml
 
 from ccloud.org import CCloudOrgList
 from helpers import env_parse_replace, logged_method, timed_method
+from storage_mgmt import COMMON_THREAD_RUNNER, current_memory_usage
 
 
 @dataclass(kw_only=True)
@@ -68,35 +70,39 @@ def execute_workflow(arg_flags: Namespace):
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
     get_app_props(core_config["config"])
 
-    # thread_configs = [
-    #     [COMMON_THREAD_RUNNER, current_memory_usage, 5],
-    # [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
-    # [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
-    # [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
-    # ]
+    thread_configs = [
+        [COMMON_THREAD_RUNNER, current_memory_usage, 5],
+        # [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        # [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+        # [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
+    ]
 
-    # threads_list = list()
-    # for _, item in enumerate(thread_configs):
-    #     threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
+    threads_list = list()
+    for _, item in enumerate(thread_configs):
+        threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
 
-    # try:
-    #     for item in threads_list:
-    #         item.start()
+    prometheus_client.start_http_server(8000)
 
-    # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
-    # Those will include the first run for all the data gather step as well.
-    # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
-    ccloud_orgs = CCloudOrgList(
-        in_orgs=core_config["config"]["org_details"], in_days_in_memory=APP_PROPS.days_in_memory,
-    )
+    try:
+        for item in threads_list:
+            item.start()
 
-    # run_gather_cycle(ccloud_orgs=ccloud_orgs)
+        # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
+        # Those will include the first run for all the data gather step as well.
+        # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
+        ccloud_orgs = CCloudOrgList(
+            in_orgs=core_config["config"]["org_details"], in_days_in_memory=APP_PROPS.days_in_memory,
+        )
+        # run_gather_cycle(ccloud_orgs=ccloud_orgs)
+        # run_calculate_cycle(ccloud_orgs=ccloud_orgs)
 
-    # run_calculate_cycle(ccloud_orgs=ccloud_orgs)
-    # finally:
-    #     # Begin shutdown process.
-    #     for item in thread_configs:
-    #         item[0].stop_sync()
-    #     print("Waiting for State Sync ticker for Final sync before exit")
-    #     for item in threads_list:
-    #         item.join()
+        while True:
+            sleep(10 ** 8)
+
+    finally:
+        # Begin shutdown process.
+        for item in thread_configs:
+            item[0].stop_sync()
+        print("Waiting for State Sync ticker for Final sync before exit")
+        for item in threads_list:
+            item.join()
