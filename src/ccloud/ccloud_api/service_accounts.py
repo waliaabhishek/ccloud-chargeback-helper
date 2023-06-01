@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
+import datetime
 from typing import Dict
 
 from dateutil import parser
@@ -17,23 +18,30 @@ class CCloudServiceAccount:
 
 
 sa_prom_metrics = TimestampedCollector(
-    "confluent_cloud_sa", "Environment Details for every Environment created within CCloud", ["sa_id", "created_at"],
+    "confluent_cloud_sa",
+    "Environment Details for every Environment created within CCloud",
+    ["sa_id", "created_at"],
+    in_begin_timestamp=datetime.datetime.now(),
 )
 
 
 @dataclass(kw_only=True)
 class CCloudServiceAccountList(CCloudBase):
+    exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
     sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict, init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.service_accounts)
         self.read_all()
-        self.expose_prometheus_metrics()
+        self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
-    def expose_prometheus_metrics(self):
+    def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        sa_prom_metrics.clear()
+        sa_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.sa.items():
-            sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+            if v.created_at >= exposed_timestamp:
+                sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
 
     def __str__(self) -> str:
         for item in self.sa.values():

@@ -4,6 +4,8 @@ import datetime
 from abc import ABC, abstractmethod
 from typing import List
 
+import pandas as pd
+
 
 class Observer(ABC):
     """The Observer Pattern used here is used to signal an observer to a notifier class.
@@ -25,6 +27,10 @@ class Observer(ABC):
         """
         print("Observer: Sending request to attach for notifications.")
         notifier.attach(self)
+
+    def _generate_next_timestamp(self, curr_date: datetime.datetime, freq: str = "1H",) -> pd.Timestamp:
+        start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
+        return pd.date_range(start_date, freq=freq, periods=2)[1]
 
 
 class NotifierAbstract(ABC):
@@ -60,11 +66,15 @@ class NotifierAbstract(ABC):
             datetime.datetime: Output normalized datetime
         """
         if in_dt is not None:
-            return in_dt.combine(date=in_dt.date(), time=datetime.time.min).replace(tzinfo=datetime.timezone.utc)
+            return in_dt.combine(
+                date=in_dt.date(),
+                time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
+                tzinfo=datetime.timezone.utc,
+            )
         else:
             return datetime.datetime.combine(
                 date=datetime.datetime.now(tz=datetime.timezone.utc).date(),
-                time=datetime.time.min,
+                time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
                 tzinfo=datetime.timezone.utc,
             )
 

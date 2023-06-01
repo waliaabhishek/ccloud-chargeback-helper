@@ -1,5 +1,5 @@
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import Dict
 
 from dateutil import parser
@@ -26,17 +26,21 @@ users_prom_metrics = TimestampedCollector(
 
 @dataclass(kw_only=True)
 class CCloudUserAccountList(CCloudBase):
+    exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
     users: Dict[str, CCloudUserAccount] = field(default_factory=dict, init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.user_accounts)
         self.read_all()
-        self.expose_prometheus_metrics()
+        self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
-    def expose_prometheus_metrics(self):
+    def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        users_prom_metrics.clear()
+        users_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.users.items():
-            users_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+            if v.created_at >= exposed_timestamp:
+                users_prom_metrics.labels(v.resource_id, v.created_at).set(1)
 
     def __str__(self) -> str:
         for item in self.users.values():

@@ -1,6 +1,6 @@
 import datetime
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import NoneType
 from typing import Tuple
 
@@ -8,7 +8,19 @@ import pandas as pd
 
 
 @dataclass
+class EffectiveDates:
+    curr_start_date: datetime.datetime
+    curr_end_date: datetime.datetime
+    next_fetch_start_date: datetime.datetime
+    next_fetch_end_date: datetime.datetime
+    retention_start_date: datetime.datetime
+    retention_end_date: datetime.datetime
+
+
+@dataclass
 class AbstractDataHandler(ABC):
+    start_date: datetime.datetime = field(init=True)
+
     @abstractmethod
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         pass
@@ -18,7 +30,7 @@ class AbstractDataHandler(ABC):
         pass
 
     @abstractmethod
-    def read_next_dataset(self):
+    def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         pass
 
     def _generate_date_range_per_row(
@@ -61,6 +73,38 @@ class AbstractDataHandler(ABC):
             & (dataset.index.get_level_values(ts_column_name) < end_date)
         ]
 
+    def calculate_effective_dates(
+        self, last_available_date: datetime.datetime, days_per_query: int, max_days_in_memory: int,
+    ) -> EffectiveDates:
+        curr_start_date = last_available_date - datetime.timedelta(days=days_per_query)
+        curr_end_date = last_available_date
+        next_fetch_start_date = last_available_date
+        next_end_fetch_date = last_available_date + datetime.timedelta(days=days_per_query)
+        retention_start_date = next_end_fetch_date - datetime.timedelta(days=max_days_in_memory)
+        retention_end_date = next_end_fetch_date
+        return EffectiveDates(
+            curr_start_date,
+            curr_end_date,
+            next_fetch_start_date,
+            next_end_fetch_date,
+            retention_start_date,
+            retention_end_date,
+        )
+
+    def is_next_fetch_required(
+        self,
+        curr_exposed_datetime: datetime.datetime,
+        last_available_date: datetime.datetime,
+        next_fetch_within_days: int = 2,
+    ):
+        if (
+            abs(int((curr_exposed_datetime - last_available_date) / datetime.timedelta(days=1)))
+            < next_fetch_within_days
+        ):
+            return True
+        else:
+            return False
+
     def _get_dataset_for_exact_timestamp(
         self, dataset: pd.DataFrame, ts_column_name: str, time_slice: pd.Timestamp, **kwargs
     ) -> Tuple[pd.DataFrame | None, bool]:
@@ -82,5 +126,5 @@ class AbstractDataHandler(ABC):
         else:
             return (None, True)
 
-    def execute_requests(self):
-        self.read_next_dataset()
+    def execute_requests(self, exposed_timestamp: datetime.datetime):
+        self.read_next_dataset(exposed_timestamp=exposed_timestamp)

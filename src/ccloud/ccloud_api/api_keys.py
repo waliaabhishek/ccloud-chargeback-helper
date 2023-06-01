@@ -1,6 +1,6 @@
 import datetime
 import pprint
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import Dict, List
 
 from dateutil import parser
@@ -27,32 +27,37 @@ api_key_prom_metrics = TimestampedCollector(
     ["api_key", "owner_id", "cluster_id", "created_at"],
     in_begin_timestamp=datetime.datetime.now(),
 )
-api_key_prom_agg_count = TimestampedCollector(
-    "confluent_cloud_api_key_count",
-    "API Key details for every API Key created within CCloud",
-    ["owner_id", "cluster_id"],
-    in_begin_timestamp=datetime.datetime.now(),
-)
+# api_key_prom_agg_count = TimestampedCollector(
+#     "confluent_cloud_api_key_count",
+#     "API Key details for every API Key created within CCloud",
+#     ["owner_id", "cluster_id"],
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass
 class CCloudAPIKeyList(CCloudBase):
+    exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
+
     # ccloud_sa: service_account.CCloudServiceAccountList
     api_keys: Dict[str, CCloudAPIKey] = field(default_factory=dict, init=False)
 
     # This init function will initiate the base object and then check CCloud
     # for all the active API Keys. All API Keys that are listed in CCloud are
     # the added to a cache.
-    def __post_init__(self) -> None:
+    def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.api_keys)
         print("Gathering list of all API Key(s) for all Service Account(s) in CCloud.")
         self.read_all()
-        self.expose_prometheus_metrics()
+        self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
-    def expose_prometheus_metrics(self):
+    def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        api_key_prom_metrics.clear()
+        api_key_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.api_keys.items():
-            api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id, v.created_at).set(1)
+            if v.created_at >= exposed_timestamp:
+                api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id, v.created_at).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have

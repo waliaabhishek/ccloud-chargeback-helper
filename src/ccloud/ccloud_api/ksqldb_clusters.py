@@ -1,6 +1,6 @@
 import datetime
 import pprint
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from typing import Dict
 
 from dateutil import parser
@@ -34,22 +34,26 @@ ksqldb_prom_metrics = TimestampedCollector(
 @dataclass
 class CCloudKsqldbClusterList(CCloudBase):
     ccloud_envs: CCloudEnvironmentList
+    exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
 
     ksqldb_clusters: Dict[str, CCloudKsqldbCluster] = field(default_factory=dict, init=False)
 
     # This init function will initiate the base object and then check CCloud
     # for all the active API Keys. All API Keys that are listed in CCloud are
     # the added to a cache.
-    def __post_init__(self) -> None:
+    def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_ksql_clusters)
         print("Gathering list of all ksqlDB Clusters for all Service Account(s) in CCloud.")
         self.read_all()
-        self.expose_prometheus_metrics()
+        self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
-    def expose_prometheus_metrics(self):
+    def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        ksqldb_prom_metrics.clear()
+        ksqldb_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.ksqldb_clusters.items():
-            ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id, v.created_at).set(1)
+            if v.created_at >= exposed_timestamp:
+                ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id, v.created_at).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
