@@ -2,6 +2,8 @@ import datetime
 from dataclasses import InitVar, dataclass, field
 from typing import Dict, List
 
+import pandas as pd
+
 
 from ccloud.connections import CCloudConnection, EndpointURL
 from data_processing.data_handlers.billing_api_handler import CCloudBillingHandler
@@ -9,10 +11,20 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_metrics_handler import PrometheusMetricsDataHandler
 from helpers import sanitize_id
+from prometheus_processing.custom_collector import TimestampedCollector
+from prometheus_processing.notifier import NotifierAbstract, Observer
+
+
+org_chargeback_prom_metrics = TimestampedCollector(
+    "confluent_cloud_org_dummy_handler",
+    "Dummy Handler for ",
+    ["org_id", "principal", "cost_type"],
+    in_begin_timestamp=datetime.datetime.now(),
+)
 
 
 @dataclass(kw_only=True)
-class CCloudOrg:
+class CCloudOrg(Observer):
     in_org_details: InitVar[List | None] = None
     in_days_in_memory: InitVar[int] = field(default=7)
     org_id: str
@@ -21,9 +33,18 @@ class CCloudOrg:
     metrics_handler: PrometheusMetricsDataHandler = field(init=False)
     billing_handler: CCloudBillingHandler = field(init=False)
     chargeback_handler: CCloudChargebackHandler = field(init=False)
+    exposed_metrics_datetime: datetime.datetime = field(init=False)
 
     def __post_init__(self, in_org_details, in_days_in_memory) -> None:
+        Observer.__init__(self)
         self.org_id = sanitize_id(in_org_details["id"])
+        # This start date is calculated from the now time to rewind back 365 days as that is the
+        # time limit of the billing dataset which is available to us. We will need the metrics handler
+        # to try and get the data from that far back as well.
+        start_date = datetime.datetime.utcnow().replace(
+            minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        ) - datetime.timedelta(days=364)
+
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
             in_ccloud_connection=CCloudConnection(
@@ -31,13 +52,7 @@ class CCloudOrg:
                 in_api_secret=in_org_details["ccloud_details"]["ccloud_api"]["api_secret"],
                 base_url=EndpointURL.API_URL,
             ),
-        )
-
-        # This start date is calculated from the now time to rewind back 365 days as that is the
-        # time limit of the billing dataset which is available to us. We will need the metrics handler
-        # to try and get the data from that far back as well.
-        start_date = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0) + datetime.timedelta(
-            days=-364
+            start_date=start_date,
         )
 
         # Initialize the Billing API Handler
@@ -68,44 +83,27 @@ class CCloudOrg:
             start_date=start_date,
         )
 
-    def execute_requests(self):
-        print(f"Gathering CCloud Existing Objects Data")
-        self.objects_handler.execute_requests()
+        self.attach(notifier=org_chargeback_prom_metrics)
+        # This following action is required as for the first run we need to derive the start date.
+        # So we step back by 1 hour, so that the current hour slice is returned.
+        self.exposed_metrics_datetime = start_date - datetime.timedelta(hours=1)
+        self.update(notifier=org_chargeback_prom_metrics)
+
+    def update(self, notifier: NotifierAbstract):
+        next_ts = self._generate_next_timestamp(curr_date=self.exposed_metrics_datetime)
+        next_ts_in_dt = next_ts.to_pydatetime(warn=False)
+        notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
+        # self.expose_prometheus_metrics(ts_filter=next_ts)
+        print(f"Refreshing CCloud Existing Objects Data")
+        self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
         print(f"Gathering Metrics API Data")
-        self.metrics_handler.execute_requests()
+        self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
         print(f"Checking for new Billing CSV Files")
-        self.billing_handler.execute_requests()
+        self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
         print("Calculating next dataset for chargeback")
-        self.chargeback_handler.execute_requests()
+        self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
 
-    # def find_available_hour_slices_in_billing_datasets(self) -> datetime.datetime:
-    #     for item in self.billing_handler.available_hour_slices_in_dataset:
-    #         yield datetime.datetime.fromisoformat(item)
-
-    # def run_calculations(self):
-    #     curr_date = datetime.datetime.now(tz=None).replace(hour=0, minute=0, second=0, microsecond=0)
-    #     for hour_slice in self.find_available_hour_slices_in_billing_datasets():
-    #         if hour_slice >= curr_date:
-    #             print(f"Skipping Billing Row TS - {hour_slice} as the Metrics are fetched with 1 day delay")
-    #             continue
-    #         billing_data = self.billing_handler.get_hourly_dataset(time_slice=hour_slice)
-    #         if billing_data:
-    #             metrics_found, metrics_data = self.metrics_handler.get_hourly_dataset(
-    #                 time_slice=hour_slice, billing_mgmt=True
-    #             )
-    #             for filename, data_set in billing_data.items():
-    #                 if not data_set.empty:
-    #                     self.chargeback_handler.run_calculations(
-    #                         time_slice=hour_slice, billing_dataframe=data_set, metrics_dataframe=metrics_data,
-    #                     )
-    #                     BILLING_PERSISTENCE_STORE.add_data_to_persistence_store(
-    #                         org_id=self.org_id, key=(hour_slice,), value=filename
-    #                     )
-    #         # TODO: Need to add more status for when data is missing, cannot silently ignore.
-    #         # Bad user experience otherwise.
-    #     self.chargeback_handler.export_metrics_to_csv(
-    #         output_basepath=STORAGE_PATH.get_path(org_id=self.org_id, dir_type=DirType.OutputData, ensure_exists=True)
-    #     )
+        self.exposed_metrics_datetime = next_ts_in_dt
 
 
 @dataclass(kw_only=True)
