@@ -20,7 +20,7 @@ class CCloudServiceAccount:
 sa_prom_metrics = TimestampedCollector(
     "confluent_cloud_sa",
     "Environment Details for every Environment created within CCloud",
-    ["sa_id", "created_at"],
+    ["sa_id", "display_name"],
     in_begin_timestamp=datetime.datetime.now(),
 )
 
@@ -41,7 +41,7 @@ class CCloudServiceAccountList(CCloudBase):
         sa_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.sa.items():
             if v.created_at >= exposed_timestamp:
-                sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+                sa_prom_metrics.labels(v.resource_id, v.name).set(1)
 
     def __str__(self) -> str:
         for item in self.sa.values():

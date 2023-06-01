@@ -19,7 +19,7 @@ class CCloudUserAccount:
 users_prom_metrics = TimestampedCollector(
     "confluent_cloud_user",
     "Environment Details for every Environment created within CCloud",
-    ["sa_id", "created_at"],
+    ["sa_id", "display_name"],
     in_begin_timestamp=datetime.datetime.now(),
 )
 
@@ -40,7 +40,7 @@ class CCloudUserAccountList(CCloudBase):
         users_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.users.items():
             if v.created_at >= exposed_timestamp:
-                users_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+                users_prom_metrics.labels(v.resource_id, v.name).set(1)
 
     def __str__(self) -> str:
         for item in self.users.values():

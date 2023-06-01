@@ -24,7 +24,7 @@ class CCloudAPIKey:
 api_key_prom_metrics = TimestampedCollector(
     "confluent_cloud_api_key",
     "API Key details for every API Key created within CCloud",
-    ["api_key", "owner_id", "cluster_id", "created_at"],
+    ["api_key", "owner_id", "resource_id"],
     in_begin_timestamp=datetime.datetime.now(),
 )
 # api_key_prom_agg_count = TimestampedCollector(
@@ -57,7 +57,7 @@ class CCloudAPIKeyList(CCloudBase):
         api_key_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.api_keys.items():
             if v.created_at >= exposed_timestamp:
-                api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id, v.created_at).set(1)
+                api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have

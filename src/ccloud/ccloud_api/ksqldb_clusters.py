@@ -26,7 +26,7 @@ class CCloudKsqldbCluster:
 ksqldb_prom_metrics = TimestampedCollector(
     "confluent_cloud_ksqldb_cluster",
     "Environment Details for every Environment created within CCloud",
-    ["cluster_id", "env_id", "kafka_cluster_id", "created_at"],
+    ["cluster_id", "env_id", "kafka_cluster_id",],
     in_begin_timestamp=datetime.datetime.now(),
 )
 
@@ -53,7 +53,7 @@ class CCloudKsqldbClusterList(CCloudBase):
         ksqldb_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.ksqldb_clusters.items():
             if v.created_at >= exposed_timestamp:
-                ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id, v.created_at).set(1)
+                ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
