@@ -48,7 +48,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
     metrics_dataset: PrometheusMetricsDataHandler = field(init=True)
     start_date: datetime.datetime = field(init=True)
     days_per_query: int = field(default=7)
+    max_days_in_memory: int = field(default=14)
 
+    last_available_date: datetime.datetime = field(init=False)
     chargeback_dataset: Dict = field(init=False, repr=False, default_factory=dict)
     curr_export_datetime: datetime.datetime = field(init=False)
 
@@ -59,34 +61,17 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         * attach this class to the Prom scraper which is also a notifier
         * set the exported datetime in memory for stepping through the data every scrape
         """
-        AbstractDataHandler.__init__(self)
+        AbstractDataHandler.__init__(self, start_date=self.start_date)
         Observer.__init__(self)
-        self.start_date = datetime.datetime.combine(
-            date=self.start_date.date(), time=datetime.time.min, tzinfo=datetime.timezone.utc
-        )
+        # self.start_date = datetime.datetime.combine(
+        #     date=self.start_date.date(), time=datetime.time.min, tzinfo=datetime.timezone.utc
+        # )
         # Calculate the end_date from start_date plus number of days per query
-        end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
-        self.read_all(start_date=self.start_date, end_date=end_date)
-        self.attach(chargeback_prom_metrics)
-        self.curr_export_datetime = self.start_date - datetime.timedelta(hours=1)
+        self.last_available_date = self.start_date + datetime.timedelta(days=self.days_per_query)
+        self.read_all(start_date=self.start_date, end_date=self.last_available_date)
+        # self.attach(chargeback_prom_metrics)
+        self.curr_export_datetime = self.start_date
         self.update(notifier=chargeback_prom_metrics)
-
-    def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
-        """Set and expose the metrics to the prom collector as a Gauge.
-
-        Args:
-            ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
-            to a specific timestamp and expose it to the prometheus collector
-        """
-        out, is_none = self._get_dataset_for_exact_timestamp(
-            dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
-        )
-        if not is_none:
-            for df_row in out.itertuples(name="ChargeBackData"):
-                principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
-                for k, v in df_row._asdict().items():
-                    if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
-                        chargeback_prom_metrics.labels(principal_id, k).set(v)
 
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
@@ -96,11 +81,27 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         Args:
             notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on timestamp is complete and the dataset should be refreshed for the next timestamp.
         """
-        next_ts = self._generate_next_timestamp(curr_date=self.curr_export_datetime)
-        next_ts_in_dt = next_ts.to_pydatetime(warn=False)
-        notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
-        self.expose_prometheus_metrics(ts_filter=next_ts)
-        self.curr_export_datetime = next_ts_in_dt
+        curr_ts = pd.date_range(self.curr_export_datetime, freq="1H", periods=2)[0]
+        notifier.set_timestamp(curr_timestamp=self.curr_export_datetime)
+        self.expose_prometheus_metrics(ts_filter=curr_ts)
+
+    def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
+        """Set and expose the metrics to the prom collector as a Gauge.
+
+        Args:
+            ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
+            to a specific timestamp and expose it to the prometheus collector
+        """
+        chargeback_prom_metrics.clear()
+        out, is_none = self._get_dataset_for_exact_timestamp(
+            dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
+        )
+        if not is_none:
+            for df_row in out.itertuples(name="ChargeBackData"):
+                principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
+                for k, v in df_row._asdict().items():
+                    if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
+                        chargeback_prom_metrics.labels(principal_id, k).set(v)
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
@@ -112,20 +113,25 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         for time_slice_item in self._generate_date_range_per_row(start_date=start_date, end_date=end_date):
             self.compute_output(time_slice=time_slice_item)
 
-    def cleanup_old_data(self):
+    def cleanup_old_data(self, retention_start_date: datetime.datetime):
         """Cleanup the older dataset from the chargeback object and prevent it from using too much memory
         """
         for (k1, k2), (_, _, _) in self.chargeback_dataset.copy().items():
-            if k2 < self.start_date:
+            if k2 < retention_start_date:
                 del self.chargeback_dataset[(k1, k2)]
 
-    def read_next_dataset(self):
+    def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date.
         """
-        self.start_date = self.start_date + datetime.timedelta(days=self.days_per_query)
-        end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
-        self.cleanup_old_data()
-        self.read_all(start_date=self.start_date, end_date=end_date)
+        if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
+            effective_dates = self.calculate_effective_dates(
+                self.last_available_date, self.days_per_query, self.max_days_in_memory
+            )
+            self.read_all(effective_dates.next_fetch_start_date, effective_dates.next_fetch_end_date)
+            self.last_available_date = effective_dates.next_fetch_end_date
+            self.cleanup_old_data(retention_start_date=effective_dates.retention_start_date)
+        self.curr_export_datetime = exposed_timestamp
+        self.update(notifier=chargeback_prom_metrics)
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
