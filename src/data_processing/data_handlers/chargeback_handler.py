@@ -51,7 +51,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
     objects_dataset: CCloudObjectsHandler = field(init=True)
     metrics_dataset: PrometheusMetricsDataHandler = field(init=True)
     start_date: datetime.datetime = field(init=True)
-    days_per_query: int = field(default=1)
+    days_per_query: int = field(default=7)
     max_days_in_memory: int = field(default=14)
 
     last_available_date: datetime.datetime = field(init=False)

@@ -36,7 +36,7 @@ METRICS_API_COLUMNS = MetricsAPIColumnNames()
 class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
     in_prometheus_url: InitVar[str | None] = field(default="http://localhost:9090")
     in_prometheus_query_endpoint: InitVar[str] = field(default="/api/v1/query_range")
-    days_per_query: int = field(default=1)
+    days_per_query: int = field(default=7)
     max_days_in_memory: int = field(default=14)
 
     last_available_date: datetime.datetime = field(init=False)

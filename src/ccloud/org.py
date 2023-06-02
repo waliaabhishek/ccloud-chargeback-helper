@@ -39,7 +39,7 @@ class CCloudOrg(Observer):
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) - datetime.timedelta(days=2)
+        ) - datetime.timedelta(days=1)
 
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
@@ -88,7 +88,7 @@ class CCloudOrg(Observer):
     def update(self, notifier: NotifierAbstract):
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) - datetime.timedelta(days=2)
+        ) - datetime.timedelta(days=1)
         next_ts = self._generate_next_timestamp(curr_date=self.exposed_metrics_datetime)
         next_ts_in_dt = next_ts.to_pydatetime(warn=False)
         if next_ts_in_dt < self.exposed_end_date:
