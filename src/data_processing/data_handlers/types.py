@@ -1,6 +1,7 @@
 import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import functools
 from types import NoneType
 from typing import Tuple
 
@@ -43,9 +44,23 @@ class AbstractDataHandler(ABC):
         end_date = end_date - datetime.timedelta(minutes=1)
         return pd.date_range(start_date, end_date, freq=freq)
 
-    def _generate_next_timestamp(self, curr_date: datetime.datetime, freq: str = "1H",) -> pd.Timestamp:
+    def _generate_next_timestamp(
+        self, curr_date: datetime.datetime, freq: str = "1H", position: int = 1
+    ) -> pd.Timestamp:
+        """Generates the pandas Timestamp item from the provided datetime object based on the frequency provided.
+        position == 0 for converting current datetime to the pandas timestamp object
+        position == 1 for converting next in freq sequence item to the pandas timestamp object
+
+        Args:
+            curr_date (datetime.datetime): datetime object which will be converted
+            freq (str, optional): pandas freq object compatible string. Defaults to "1H".
+            position (int, optional): which positional item will be converted to the pandas timestamp object. Defaults to 1.
+
+        Returns:
+            pd.Timestamp: converted timestamp object
+        """
         start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
-        return pd.date_range(start_date, freq=freq, periods=2)[1]
+        return pd.date_range(start_date, freq=freq, periods=2)[position]
 
     def _get_dataset_for_timerange(
         self,
@@ -66,12 +81,21 @@ class AbstractDataHandler(ABC):
         Returns:
             pd.DatFrame: return filtered pandas DataFrame
         """
-        start_date = pd.to_datetime(start_datetime)
-        end_date = pd.to_datetime(end_datetime)
-        return dataset[
-            (dataset.index.get_level_values(ts_column_name) >= start_date)
-            & (dataset.index.get_level_values(ts_column_name) < end_date)
-        ]
+        start_date = pd.to_datetime(start_datetime.replace(tzinfo=None))
+        end_date = pd.to_datetime(end_datetime.replace(tzinfo=None))
+        if not isinstance(dataset, NoneType):
+            if not dataset.empty:
+                return (
+                    dataset[
+                        (dataset.index.get_level_values(ts_column_name) >= start_date)
+                        & (dataset.index.get_level_values(ts_column_name) < end_date)
+                    ],
+                    False,
+                )
+            else:
+                return (dataset, False)
+        else:
+            return (None, True)
 
     def calculate_effective_dates(
         self, last_available_date: datetime.datetime, days_per_query: int, max_days_in_memory: int,

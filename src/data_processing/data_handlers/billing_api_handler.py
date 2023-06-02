@@ -31,7 +31,7 @@ BILLING_API_COLUMNS = BillingAPIColumnNames()
 @dataclass
 class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
     last_available_date: datetime.datetime = field(init=False)
-    days_per_query: int = field(default=7)
+    days_per_query: int = field(default=1)
     max_days_in_memory: int = field(default=14)
     billing_dataset: pd.DataFrame = field(init=False, default=None)
 
@@ -110,7 +110,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                 start_date=effective_dates.next_fetch_start_date, end_date=effective_dates.next_fetch_end_date
             )
             self.last_available_date = effective_dates.next_fetch_end_date
-            self.billing_dataset = self.get_dataset_for_timerange(
+            self.billing_dataset, is_none = self.get_dataset_for_timerange(
                 start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
             )
 

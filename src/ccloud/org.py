@@ -11,16 +11,7 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_metrics_handler import PrometheusMetricsDataHandler
 from helpers import sanitize_id
-from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
-
-
-org_chargeback_prom_metrics = TimestampedCollector(
-    "confluent_cloud_org_dummy_handler",
-    "Dummy Handler for ",
-    ["org_id", "principal", "cost_type"],
-    in_begin_timestamp=datetime.datetime.now(),
-)
 
 
 @dataclass(kw_only=True)
@@ -34,6 +25,7 @@ class CCloudOrg(Observer):
     billing_handler: CCloudBillingHandler = field(init=False)
     chargeback_handler: CCloudChargebackHandler = field(init=False)
     exposed_metrics_datetime: datetime.datetime = field(init=False)
+    exposed_end_date: datetime.datetime = field(init=False)
 
     def __post_init__(self, in_org_details, in_days_in_memory) -> None:
         Observer.__init__(self)
@@ -44,6 +36,10 @@ class CCloudOrg(Observer):
         start_date = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=364)
+
+        self.exposed_end_date = datetime.datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        ) - datetime.timedelta(days=2)
 
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
@@ -83,27 +79,36 @@ class CCloudOrg(Observer):
             start_date=start_date,
         )
 
-        self.attach(notifier=org_chargeback_prom_metrics)
+        self.attach(notifier=self.chargeback_handler.metrics_collector)
         # This following action is required as for the first run we need to derive the start date.
         # So we step back by 1 hour, so that the current hour slice is returned.
         self.exposed_metrics_datetime = start_date - datetime.timedelta(hours=1)
-        self.update(notifier=org_chargeback_prom_metrics)
+        self.update(notifier=self.chargeback_handler.metrics_collector)
 
     def update(self, notifier: NotifierAbstract):
+        self.exposed_end_date = datetime.datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        ) - datetime.timedelta(days=2)
         next_ts = self._generate_next_timestamp(curr_date=self.exposed_metrics_datetime)
         next_ts_in_dt = next_ts.to_pydatetime(warn=False)
-        notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
-        # self.expose_prometheus_metrics(ts_filter=next_ts)
-        print(f"Refreshing CCloud Existing Objects Data")
-        self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-        print(f"Gathering Metrics API Data")
-        self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-        print(f"Checking for new Billing CSV Files")
-        self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-        print("Calculating next dataset for chargeback")
-        self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+        if next_ts_in_dt < self.exposed_end_date:
+            notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
+            # self.expose_prometheus_metrics(ts_filter=next_ts)
+            print(f"Refreshing CCloud Existing Objects Data")
+            self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            print(f"Gathering Metrics API Data")
+            self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            print(f"Checking for new Billing CSV Files")
+            self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            print("Calculating next dataset for chargeback")
+            self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
 
-        self.exposed_metrics_datetime = next_ts_in_dt
+            self.exposed_metrics_datetime = next_ts_in_dt
+        else:
+            print(
+                f"""Chargeback calculation is fully caught up to the point where it needs to be. 
+                More processing will continue after the day passes and the data for the day is finalized in the Billing API."""
+            )
 
 
 @dataclass(kw_only=True)

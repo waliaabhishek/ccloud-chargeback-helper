@@ -1,5 +1,9 @@
 import datetime
 import decimal
+import math
+
+decimal.getcontext().prec = 2
+
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -42,17 +46,18 @@ chargeback_prom_metrics = TimestampedCollector(
 
 
 @dataclass(kw_only=True)
-class CCloudChargebackHandler(AbstractDataHandler, Observer):
+class CCloudChargebackHandler(AbstractDataHandler):
     billing_dataset: CCloudBillingHandler = field(init=True)
     objects_dataset: CCloudObjectsHandler = field(init=True)
     metrics_dataset: PrometheusMetricsDataHandler = field(init=True)
     start_date: datetime.datetime = field(init=True)
-    days_per_query: int = field(default=7)
+    days_per_query: int = field(default=1)
     max_days_in_memory: int = field(default=14)
 
     last_available_date: datetime.datetime = field(init=False)
     chargeback_dataset: Dict = field(init=False, repr=False, default_factory=dict)
     curr_export_datetime: datetime.datetime = field(init=False)
+    metrics_collector: TimestampedCollector = field(init=False)
 
     def __post_init__(self) -> None:
         """Initialize the Chargeback handler:
@@ -71,7 +76,8 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         self.read_all(start_date=self.start_date, end_date=self.last_available_date)
         # self.attach(chargeback_prom_metrics)
         self.curr_export_datetime = self.start_date
-        self.update(notifier=chargeback_prom_metrics)
+        self.metrics_collector = chargeback_prom_metrics
+        self.update(notifier=self.metrics_collector)
 
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
@@ -98,10 +104,12 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         )
         if not is_none:
             for df_row in out.itertuples(name="ChargeBackData"):
-                principal_id = df_row[CHARGEBACK_COLUMNS.PRINCIPAL]
+                # print(df_row)
+                principal_id = df_row[0][0]
                 for k, v in df_row._asdict().items():
-                    if k not in [CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
-                        chargeback_prom_metrics.labels(principal_id, k).set(v)
+                    if k not in ["Index", CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
+                        if not math.isnan(v):
+                            chargeback_prom_metrics.labels(principal_id, k).set(v)
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
@@ -117,7 +125,7 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         """Cleanup the older dataset from the chargeback object and prevent it from using too much memory
         """
         for (k1, k2), (_, _, _) in self.chargeback_dataset.copy().items():
-            if k2 < retention_start_date:
+            if k2 < retention_start_date.replace(tzinfo=None):
                 del self.chargeback_dataset[(k1, k2)]
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
@@ -131,7 +139,7 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
             self.last_available_date = effective_dates.next_fetch_end_date
             self.cleanup_old_data(retention_start_date=effective_dates.retention_start_date)
         self.curr_export_datetime = exposed_timestamp
-        self.update(notifier=chargeback_prom_metrics)
+        self.update(notifier=self.metrics_collector)
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
@@ -155,7 +163,7 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         principal: str,
         time_slice: datetime.datetime,
         product_type_name: str,
-        additional_usage_cost: decimal.Decimal = decimal.Decimal(0),
+        additional_usage_cost: decimal.Decimal = decimal.Decimal(0,),
         additional_shared_cost: decimal.Decimal = decimal.Decimal(0),
     ):
         """Internal chargeback Data structure to hold all the calculated chargeback data in memory. 
@@ -190,15 +198,18 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
             )
 
     def get_chargeback_dataset(self):
+        temp_ds = []
         for (k1, k2), (usage, shared, extended) in self.chargeback_dataset.items():
+            k2_ts = self._generate_next_timestamp(curr_date=k2, position=0)
             temp_dict = {
                 CHARGEBACK_COLUMNS.PRINCIPAL: k1,
-                CHARGEBACK_COLUMNS.TS: k2,
+                CHARGEBACK_COLUMNS.TS: k2_ts,
                 CHARGEBACK_COLUMNS.USAGE_COST: usage,
                 CHARGEBACK_COLUMNS.SHARED_COST: shared,
             }
             temp_dict.update(extended)
-            yield temp_dict
+            temp_ds.append(temp_dict)
+        return temp_ds
 
     def get_chargeback_dataframe(self) -> pd.DataFrame:
         """Generate pandas Dataframe for the Chargeback data available in memory within attribute chargeback_dataset
@@ -209,9 +220,9 @@ class CCloudChargebackHandler(AbstractDataHandler, Observer):
         # TODO: Getting this dataframe is amazingly under optimized albeit uses yield.
         # Uses an intermittent list of dict conversion and then another step to convert to dataframe
         # No clue at the moment on how to improve this.
-        return pd.DataFrame.from_records(
-            self.get_chargeback_dataset(), index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS]
-        )
+        out_ds = self.get_chargeback_dataset()
+        temp = pd.DataFrame.from_records(out_ds, index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS])
+        return temp
 
     def compute_output(
         self, time_slice: datetime.datetime,
