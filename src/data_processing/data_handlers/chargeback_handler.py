@@ -247,7 +247,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
 
             row_cname = getattr(bill_row, BILLING_API_COLUMNS.cluster_name)
             row_cost = getattr(bill_row, BILLING_API_COLUMNS.calc_split_total)
-            if row_ptype == "KafkaBase":
+            if row_ptype == "KAFKA_BASE":
                 # GOAL: Split Cost equally across all the SA/Users that have API Keys for that Kafka Cluster
                 # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
                 sa_count = self.objects_dataset.cc_api_keys.find_sa_count_for_clusters(cluster_id=row_cid)
@@ -480,7 +480,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
-            elif row_ptype == "EventLogRead":
+            elif row_ptype == "AUDIT_LOG_READ":
                 # GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
                 # Find all active Service Accounts/Users in the system.
                 active_identities = list(self.objects_dataset.cc_sa.sa.keys()) + list(
@@ -495,7 +495,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                         row_ptype,
                         additional_shared_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                     )
-            elif row_ptype == "ConnectCapacity":
+            elif row_ptype == "CONNECT_CAPACITY":
                 # GOAL: Split the Connect Cost across all the connect Service Accounts active in the cluster
                 active_identities = set(
                     [
@@ -562,7 +562,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 self.__add_cost_to_chargeback_dataset(
                     row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                 )
-            elif row_ptype in ["GovernanceBase", "SchemaRegistry"]:
+            elif row_ptype in ["GOVERNANCE_BASE", "SCHEMA_REGISTRY"]:
                 # GOAL: Cost will be equally spread across all the Kafka Clusters existing in this CCloud Environment
                 active_identities = set(
                     [y.cluster_id for x, y in self.objects_dataset.cc_clusters.cluster.items() if y.env_id == row_env]

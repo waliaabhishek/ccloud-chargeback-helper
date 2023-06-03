@@ -14,7 +14,7 @@ class TimestampedCollector(NotifierAbstract, Gauge):
     def collect(self):
         try:
             metrics = super().collect()
-            ts_value = int(self._exported_timestamp.timestamp())
+            ts_value = int(self._exported_timestamp.timestamp() / 1000)
             for metric in metrics:
                 metric.samples = [
                     type(sample)(sample.name, sample.labels, sample.value, ts_value, sample.exemplar)
