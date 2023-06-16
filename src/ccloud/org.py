@@ -35,7 +35,7 @@ class CCloudOrg(Observer):
         # to try and get the data from that far back as well.
         start_date = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) - datetime.timedelta(days=364)
+        ) - datetime.timedelta(days=30)
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
