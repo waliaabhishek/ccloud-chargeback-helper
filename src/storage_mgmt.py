@@ -1,3 +1,4 @@
+import datetime
 import os
 import threading
 from dataclasses import dataclass, field
@@ -7,12 +8,20 @@ from typing import Dict, List, Tuple
 
 import psutil
 from helpers import sanitize_metric_name
+from prometheus_processing.custom_collector import TimestampedCollector
 
 # class DirType(Enum):
 #     MetricsData = auto()
 #     BillingsData = auto()
 #     OutputData = auto()
 #     PersistenceStats = auto()
+
+# code_run_stats = TimestampedCollector(
+#     "python_custom_memory_used_bytes",
+#     "Total memory consumed by the process.",
+#     [],
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 # @dataclass(kw_only=True)
@@ -180,7 +189,13 @@ def sync_to_file(persistence_object: PersistenceStore, flush_to_file: int = 5):
 
 def current_memory_usage(persistence_object: ThreadableRunner, evaluation_interval: int = 5):
     while persistence_object.sync_runner_status.is_set():
-        print(f"Current Memory Utilization: {psutil.Process().memory_info().rss / (2**20)}")
+        mem_used = psutil.Process().memory_info().rss
+        print(f"Current Memory Utilization: {mem_used / (2**20)}")
+        # curr_ts = datetime.datetime.utcnow().replace(
+        #     hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        # )
+        # code_run_stats.set_timestamp(curr_timestamp=curr_ts)
+        # code_run_stats.set(mem_used)
         sleep(evaluation_interval)
 
 
