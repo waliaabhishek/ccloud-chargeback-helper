@@ -76,6 +76,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         self.read_all(exposed_timestamp=exposed_timestamp)
+        print(f"Currently reading the Objects dataset for Timestamp: {exposed_timestamp}")
         self.cc_sa.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_users.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_api_keys.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
