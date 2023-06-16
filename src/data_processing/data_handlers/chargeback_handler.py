@@ -25,6 +25,7 @@ class ChargebackColumnNames:
     TS = "Timestamp"
     PRINCIPAL = "Principal"
     KAFKA_CLUSTER = "KafkaID"
+    PRODUCT_TYPE = "ProductType"
     USAGE_COST = "UsageCost"
     SHARED_COST = "SharedCost"
 
@@ -40,7 +41,7 @@ CHARGEBACK_COLUMNS = ChargebackColumnNames()
 chargeback_prom_metrics = TimestampedCollector(
     "confluent_cloud_chargeback_details",
     "Approximate Chargeback Distribution details for costs w.r.t contextual access within CCloud",
-    ["principal", "cost_type"],
+    ["principal", "product_type", "cost_type",],
     in_begin_timestamp=datetime.datetime.now(),
 )
 
@@ -98,6 +99,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
             ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
             to a specific timestamp and expose it to the prometheus collector
         """
+        print(f"Currently reading the Chargeback dataset for Timestamp: {ts_filter.to_pydatetime()}")
         chargeback_prom_metrics.clear()
         out, is_none = self._get_dataset_for_exact_timestamp(
             dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
@@ -106,10 +108,28 @@ class CCloudChargebackHandler(AbstractDataHandler):
             for df_row in out.itertuples(name="ChargeBackData"):
                 # print(df_row)
                 principal_id = df_row[0][0]
-                for k, v in df_row._asdict().items():
-                    if k not in ["Index", CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRINCIPAL]:
-                        if not math.isnan(v):
-                            chargeback_prom_metrics.labels(principal_id, k).set(v)
+                product_type = df_row[0][2]
+                usage_cost = df_row[1]
+                shared_cost = df_row[2]
+
+                chargeback_prom_metrics.labels(principal_id, product_type, CHARGEBACK_COLUMNS.USAGE_COST).set(
+                    df_row[1]
+                )
+                chargeback_prom_metrics.labels(principal_id, product_type, CHARGEBACK_COLUMNS.SHARED_COST).set(
+                    df_row[2]
+                )
+                # for k, v in df_row._asdict().items():
+
+                #     if k not in [
+                #         "Index",
+                #         CHARGEBACK_COLUMNS.TS,
+                #         CHARGEBACK_COLUMNS.PRINCIPAL,
+                #         CHARGEBACK_COLUMNS.PRODUCT_TYPE,
+                #         CHARGEBACK_COLUMNS.SHARED_COST,
+                #         CHARGEBACK_COLUMNS.USAGE_COST,
+                #     ]:
+                #         if not math.isnan(v):
+                #             chargeback_prom_metrics.labels(principal_id, CHARGEBACK_COLUMNS.SHARED_COST, k).set()
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
@@ -124,9 +144,9 @@ class CCloudChargebackHandler(AbstractDataHandler):
     def cleanup_old_data(self, retention_start_date: datetime.datetime):
         """Cleanup the older dataset from the chargeback object and prevent it from using too much memory
         """
-        for (k1, k2), (_, _, _) in self.chargeback_dataset.copy().items():
+        for (k1, k2, k3), (_, _) in self.chargeback_dataset.copy().items():
             if k2 < retention_start_date.replace(tzinfo=None):
-                del self.chargeback_dataset[(k1, k2)]
+                del self.chargeback_dataset[(k1, k2, k3)]
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date.
@@ -163,7 +183,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         principal: str,
         time_slice: datetime.datetime,
         product_type_name: str,
-        additional_usage_cost: decimal.Decimal = decimal.Decimal(0,),
+        additional_usage_cost: decimal.Decimal = decimal.Decimal(0),
         additional_shared_cost: decimal.Decimal = decimal.Decimal(0),
     ):
         """Internal chargeback Data structure to hold all the calculated chargeback data in memory. 
@@ -176,38 +196,29 @@ class CCloudChargebackHandler(AbstractDataHandler):
             additional_usage_cost (decimal.Decimal, optional): Is the cost Usage cost for that product type and what is the total usage cost for that duration? Defaults to decimal.Decimal(0).
             additional_shared_cost (decimal.Decimal, optional): Is the cost Shared cost for that product type and what is the total shared cost for that duration. Defaults to decimal.Decimal(0).
         """
-        if (principal, time_slice) in self.chargeback_dataset:
-            u, s, detailed_split = self.chargeback_dataset[(principal, time_slice)]
-            detailed_split[product_type_name] = (
-                detailed_split.get(product_type_name, decimal.Decimal(0))
-                + additional_shared_cost
-                + additional_usage_cost
-            )
-            self.chargeback_dataset[(principal, time_slice)] = (
+        if (principal, time_slice, product_type_name) in self.chargeback_dataset:
+            u, s = self.chargeback_dataset[(principal, time_slice, product_type_name)]
+            self.chargeback_dataset[(principal, time_slice, product_type_name)] = (
                 u + additional_usage_cost,
                 s + additional_shared_cost,
-                detailed_split,
             )
         else:
-            detailed_split = dict()
-            detailed_split[product_type_name] = additional_shared_cost + additional_usage_cost
-            self.chargeback_dataset[(principal, time_slice)] = (
+            self.chargeback_dataset[(principal, time_slice, product_type_name)] = (
                 additional_usage_cost,
                 additional_shared_cost,
-                detailed_split,
             )
 
     def get_chargeback_dataset(self):
         temp_ds = []
-        for (k1, k2), (usage, shared, extended) in self.chargeback_dataset.items():
-            k2_ts = self._generate_next_timestamp(curr_date=k2, position=0)
+        for (principal, ts, product_type), (usage, shared) in self.chargeback_dataset.items():
+            next_ts = self._generate_next_timestamp(curr_date=ts, position=0)
             temp_dict = {
-                CHARGEBACK_COLUMNS.PRINCIPAL: k1,
-                CHARGEBACK_COLUMNS.TS: k2_ts,
+                CHARGEBACK_COLUMNS.PRINCIPAL: principal,
+                CHARGEBACK_COLUMNS.TS: next_ts,
+                CHARGEBACK_COLUMNS.PRODUCT_TYPE: product_type,
                 CHARGEBACK_COLUMNS.USAGE_COST: usage,
                 CHARGEBACK_COLUMNS.SHARED_COST: shared,
             }
-            temp_dict.update(extended)
             temp_ds.append(temp_dict)
         return temp_ds
 
@@ -221,7 +232,9 @@ class CCloudChargebackHandler(AbstractDataHandler):
         # Uses an intermittent list of dict conversion and then another step to convert to dataframe
         # No clue at the moment on how to improve this.
         out_ds = self.get_chargeback_dataset()
-        temp = pd.DataFrame.from_records(out_ds, index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS])
+        temp = pd.DataFrame.from_records(
+            out_ds, index=[CHARGEBACK_COLUMNS.PRINCIPAL, CHARGEBACK_COLUMNS.TS, CHARGEBACK_COLUMNS.PRODUCT_TYPE]
+        )
         return temp
 
     def compute_output(
@@ -255,7 +268,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     splitter = len(sa_count)
                     # Add Shared Cost for all active SA/Users in the cluster and split it equally
                     for sa_name, sa_api_key_count in sa_count.items():
-                        self.chargeback_dataset.__add_cost_to_chargeback_dataset(
+                        self.__add_cost_to_chargeback_dataset(
                             principal=sa_name,
                             time_slice=row_ts,
                             product_type_name=row_ptype,
@@ -298,7 +311,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     )
                     # for every filtered Row , add consumption
                     for metric_row in metric_rows.itertuples(index=True, name="MetricsRow"):
-                        self.chargeback_dataset.__add_cost_to_chargeback_dataset(
+                        self.__add_cost_to_chargeback_dataset(
                             getattr(metric_row, METRICS_API_COLUMNS.principal_id),
                             row_ts,
                             row_ptype,
@@ -484,7 +497,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 # GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
                 # Find all active Service Accounts/Users in the system.
                 active_identities = list(self.objects_dataset.cc_sa.sa.keys()) + list(
-                    objects_dataset.cc_users.users.keys()
+                    self.objects_dataset.cc_users.users.keys()
                 )
                 splitter = len(active_identities)
                 # Add Shared Cost for all active SA/Users in the cluster and split it equally
@@ -507,7 +520,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 if len(active_identities) > 0:
                     splitter = len(active_identities)
                     for identity_item in active_identities:
-                        self.chargeback_dataset.__add_cost_to_chargeback_dataset(
+                        self.__add_cost_to_chargeback_dataset(
                             identity_item,
                             row_ts,
                             row_ptype,
@@ -570,7 +583,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 if len(active_identities) > 0:
                     splitter = len(active_identities)
                     for identity_item in active_identities:
-                        self.chargeback_dataset.__add_cost_to_chargeback_dataset(
+                        self.__add_cost_to_chargeback_dataset(
                             identity_item,
                             row_ts,
                             row_ptype,
@@ -604,9 +617,9 @@ class CCloudChargebackHandler(AbstractDataHandler):
                             additional_usage_cost=decimal.Decimal(row_cost) / decimal.Decimal(splitter),
                         )
                 else:
-                    print(
-                        f"Row TS: {str(row_ts)} -- No KSQL Cluster Details were found. Attributing as Shared Cost for ksqlDB cluster ID {row_cid}"
-                    )
+                    # print(
+                    #     f"Row TS: {str(row_ts)} -- No KSQL Cluster Details were found. Attributing as Shared Cost for ksqlDB cluster ID {row_cid}"
+                    # )
                     self.__add_cost_to_chargeback_dataset(
                         row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost)
                     )
