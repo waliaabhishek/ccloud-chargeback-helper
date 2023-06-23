@@ -9,7 +9,7 @@ import pandas as pd
 
 class Observer(ABC):
     """The Observer Pattern used here is used to signal an observer to a notifier class.
-    The notifier class collects all the references to the observer and notifies them when a new event occurs. 
+    The notifier class collects all the references to the observer and notifies them when a new event occurs.
     This needs the observer to be registered under the notifier using the attach method of the observer
 
     """
@@ -28,14 +28,18 @@ class Observer(ABC):
         print("Observer: Sending request to attach for notifications.")
         notifier.attach(self)
 
-    def _generate_next_timestamp(self, curr_date: datetime.datetime, freq: str = "1H",) -> pd.Timestamp:
+    def _generate_next_timestamp(
+        self,
+        curr_date: datetime.datetime,
+        freq: str = "1H",
+    ) -> pd.Timestamp:
         start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
         return pd.date_range(start_date, freq=freq, periods=2)[1]
 
 
 class NotifierAbstract(ABC):
     """This class works in conjunction with the Observer Class above to gather all the observers in a list
-    and execute their update method when some action is performed. 
+    and execute their update method when some action is performed.
     It is a custom way to link different objects together while not disturbing any existing functionality.
 
     """
@@ -56,7 +60,7 @@ class NotifierAbstract(ABC):
         return self
 
     def normalize_datetime(self, in_dt: datetime.datetime = None) -> datetime.datetime:
-        """Internal method to normalize a datetime toa  specific targeted format. 
+        """Internal method to normalize a datetime toa  specific targeted format.
         Changes the timezone to UTC and sets the time to midnight for the datetime.
 
         Args:
@@ -66,17 +70,20 @@ class NotifierAbstract(ABC):
             datetime.datetime: Output normalized datetime
         """
         if in_dt is not None:
-            return in_dt.combine(
-                date=in_dt.date(),
-                time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
-                tzinfo=datetime.timezone.utc,
-            )
+            # return in_dt.combine(
+            #     date=in_dt.date(),
+            #     time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
+            #     tzinfo=datetime.timezone.utc,
+            # )
+            return in_dt.replace(minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc)
+
         else:
-            return datetime.datetime.combine(
-                date=datetime.datetime.now(tz=datetime.timezone.utc).date(),
-                time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
-                tzinfo=datetime.timezone.utc,
-            )
+            # return datetime.datetime.combine(
+            #     date=datetime.datetime.now(tz=datetime.timezone.utc).date(),
+            #     time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
+            #     tzinfo=datetime.timezone.utc,
+            # )
+            return datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc)
 
     def attach(self, observer: Observer) -> None:
         """
@@ -98,4 +105,3 @@ class NotifierAbstract(ABC):
         Notify all observers about an event.
         """
         pass
-
