@@ -1,6 +1,5 @@
 import datetime
 import decimal
-import math
 
 decimal.getcontext().prec = 2
 
@@ -11,7 +10,7 @@ import pandas as pd
 
 from data_processing.data_handlers.billing_api_handler import BILLING_API_COLUMNS, CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
-from data_processing.data_handlers.prom_metrics_handler import (
+from data_processing.data_handlers.prom_metrics_api_handler import (
     METRICS_API_COLUMNS,
     METRICS_API_PROMETHEUS_QUERIES,
     PrometheusMetricsDataHandler,
@@ -41,9 +40,18 @@ CHARGEBACK_COLUMNS = ChargebackColumnNames()
 chargeback_prom_metrics = TimestampedCollector(
     "confluent_cloud_chargeback_details",
     "Approximate Chargeback Distribution details for costs w.r.t contextual access within CCloud",
-    ["principal", "product_type", "cost_type",],
+    [
+        "principal",
+        "product_type",
+        "cost_type",
+    ],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# chargeback_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_chargeback_scrape_status",
+#     "CCloud Chargeback Calculation scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass(kw_only=True)
@@ -90,6 +98,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         """
         curr_ts = pd.date_range(self.curr_export_datetime, freq="1H", periods=2)[0]
         notifier.set_timestamp(curr_timestamp=self.curr_export_datetime)
+        # chargeback_prom_status_metrics.set_timestamp(curr_timestamp=self.curr_export_datetime)
         self.expose_prometheus_metrics(ts_filter=curr_ts)
 
     def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
@@ -100,13 +109,14 @@ class CCloudChargebackHandler(AbstractDataHandler):
             to a specific timestamp and expose it to the prometheus collector
         """
         print(f"Currently reading the Chargeback dataset for Timestamp: {ts_filter.to_pydatetime()}")
+        # chargeback_prom_status_metrics.clear()
+        # chargeback_prom_status_metrics.set(1)
         chargeback_prom_metrics.clear()
         out, is_none = self._get_dataset_for_exact_timestamp(
             dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
         )
         if not is_none:
             for df_row in out.itertuples(name="ChargeBackData"):
-                # print(df_row)
                 principal_id = df_row[0][0]
                 product_type = df_row[0][2]
                 usage_cost = df_row[1]
@@ -118,39 +128,25 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 chargeback_prom_metrics.labels(principal_id, product_type, CHARGEBACK_COLUMNS.SHARED_COST).set(
                     df_row[2]
                 )
-                # for k, v in df_row._asdict().items():
-
-                #     if k not in [
-                #         "Index",
-                #         CHARGEBACK_COLUMNS.TS,
-                #         CHARGEBACK_COLUMNS.PRINCIPAL,
-                #         CHARGEBACK_COLUMNS.PRODUCT_TYPE,
-                #         CHARGEBACK_COLUMNS.SHARED_COST,
-                #         CHARGEBACK_COLUMNS.USAGE_COST,
-                #     ]:
-                #         if not math.isnan(v):
-                #             chargeback_prom_metrics.labels(principal_id, CHARGEBACK_COLUMNS.SHARED_COST, k).set()
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
 
         Args:
-            start_date (datetime.datetime): Inclusive datetime for the period beginning 
-            end_date (datetime.datetime): Exclusive datetime for the period ending 
+            start_date (datetime.datetime): Inclusive datetime for the period beginning
+            end_date (datetime.datetime): Exclusive datetime for the period ending
         """
         for time_slice_item in self._generate_date_range_per_row(start_date=start_date, end_date=end_date):
             self.compute_output(time_slice=time_slice_item)
 
     def cleanup_old_data(self, retention_start_date: datetime.datetime):
-        """Cleanup the older dataset from the chargeback object and prevent it from using too much memory
-        """
+        """Cleanup the older dataset from the chargeback object and prevent it from using too much memory"""
         for (k1, k2, k3), (_, _) in self.chargeback_dataset.copy().items():
             if k2 < retention_start_date.replace(tzinfo=None):
                 del self.chargeback_dataset[(k1, k2, k3)]
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
-        """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date.
-        """
+        """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date."""
         if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
             effective_dates = self.calculate_effective_dates(
                 self.last_available_date, self.days_per_query, self.max_days_in_memory
@@ -186,8 +182,8 @@ class CCloudChargebackHandler(AbstractDataHandler):
         additional_usage_cost: decimal.Decimal = decimal.Decimal(0),
         additional_shared_cost: decimal.Decimal = decimal.Decimal(0),
     ):
-        """Internal chargeback Data structure to hold all the calculated chargeback data in memory. 
-        As the column names & values were needed to be dynamic, we did not use a dataframe here for ease of use. 
+        """Internal chargeback Data structure to hold all the calculated chargeback data in memory.
+        As the column names & values were needed to be dynamic, we did not use a dataframe here for ease of use.
 
         Args:
             principal (str): The Principal used for Chargeback Aggregation -- Primary Complex key
@@ -238,7 +234,8 @@ class CCloudChargebackHandler(AbstractDataHandler):
         return temp
 
     def compute_output(
-        self, time_slice: datetime.datetime,
+        self,
+        time_slice: datetime.datetime,
     ):
         """The core calculation method. This method aggregates all the costs on a per product type basis for every principal per hour and appends that calculated dataset in chargeback_dataset object attribute
 
@@ -323,7 +320,10 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     #     f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
                     # )
                     self.__add_cost_to_chargeback_dataset(
-                        row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost),
+                        row_cid,
+                        row_ts,
+                        row_ptype,
+                        additional_shared_cost=decimal.Decimal(row_cost),
                     )
             elif row_ptype == "KAFKA_NETWORK_WRITE":
                 # GOAL: Split cost across all the producers to that cluster as a ratio of production performed.
@@ -370,7 +370,10 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     #     f"Row TS: {str(row_ts)} -- Could not map {row_ptype} for {row_cid}. Attributing as Cluster Shared Cost for cluster {row_cid}"
                     # )
                     self.__add_cost_to_chargeback_dataset(
-                        row_cid, row_ts, row_ptype, additional_shared_cost=decimal.Decimal(row_cost),
+                        row_cid,
+                        row_ts,
+                        row_ptype,
+                        additional_shared_cost=decimal.Decimal(row_cost),
                     )
             elif row_ptype == "KAFKA_NUM_CKUS":
                 # GOAL: Split into 2 Categories --
@@ -513,7 +516,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 active_identities = set(
                     [
                         y.owner_id
-                        for x, y in self.cc_objects.cc_connectors.connectors.items()
+                        for x, y in self.objects_dataset.cc_connectors.connectors.items()
                         if y.cluster_id == row_cid
                     ]
                 )
@@ -629,4 +632,3 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     f"Row TS: {str(row_ts)} -- No Chargeback calculation available for {row_ptype}. Please request for it to be added."
                 )
                 print("=" * 80)
-

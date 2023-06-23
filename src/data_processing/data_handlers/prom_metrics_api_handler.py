@@ -1,6 +1,5 @@
 import datetime
 from dataclasses import InitVar, dataclass, field
-from typing import Tuple
 from urllib import parse
 
 import pandas as pd
@@ -177,4 +176,3 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
             )
         else:
             return temp_data
-

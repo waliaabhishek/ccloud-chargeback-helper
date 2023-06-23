@@ -28,6 +28,11 @@ kafka_connectors_prom_metrics = TimestampedCollector(
     ["connector_id", "cluster_id", "env_id"],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# kafka_connectors_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_kafka_connector_scrape_status",
+#     "CCloud Kafka Connectors scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass
@@ -56,6 +61,7 @@ class CCloudConnectorList(CCloudBase):
         for _, v in self.connectors.items():
             # TODO: created datetime is missing from connector creation date.
             kafka_connectors_prom_metrics.labels(v.connector_name, v.cluster_id, v.env_id).set(1)
+        # kafka_connectors_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
     def __str__(self):
         for v in self.cluster.values():

@@ -23,6 +23,11 @@ sa_prom_metrics = TimestampedCollector(
     ["sa_id", "display_name"],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# sa_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_sa_scrape_status",
+#     "CCloud Service Accounts scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass(kw_only=True)
@@ -42,6 +47,7 @@ class CCloudServiceAccountList(CCloudBase):
         for _, v in self.sa.items():
             if v.created_at >= exposed_timestamp:
                 sa_prom_metrics.labels(v.resource_id, v.name).set(1)
+        # sa_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
     def __str__(self) -> str:
         for item in self.sa.values():

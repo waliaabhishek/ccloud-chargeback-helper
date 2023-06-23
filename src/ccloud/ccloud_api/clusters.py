@@ -24,6 +24,11 @@ kafka_cluster_prom_metrics = TimestampedCollector(
     ["cluster_id", "env_id", "display_name"],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# kafka_cluster_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_kafka_cluster_scrape_status",
+#     "CCloud Kafka Cluster scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass
@@ -45,6 +50,7 @@ class CCloudClusterList(CCloudBase):
         for _, v in self.cluster.items():
             # TODO: created datetime is missing from cluster creation date.
             kafka_cluster_prom_metrics.labels(v.cluster_id, v.env_id, v.cluster_name).set(1)
+        # kafka_cluster_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
     def __str__(self):
         for v in self.cluster.values():

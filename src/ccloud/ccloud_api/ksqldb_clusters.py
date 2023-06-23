@@ -26,9 +26,16 @@ class CCloudKsqldbCluster:
 ksqldb_prom_metrics = TimestampedCollector(
     "confluent_cloud_ksqldb_cluster",
     "Environment Details for every Environment created within CCloud",
-    ["cluster_id", "env_id", "kafka_cluster_id",],
+    [
+        "cluster_id",
+        "env_id",
+        "kafka_cluster_id",
+    ],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# ksqldb_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_ksqldb_scrape_status", "CCloud ksqlDB scrape status", in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass
@@ -54,6 +61,7 @@ class CCloudKsqldbClusterList(CCloudBase):
         for _, v in self.ksqldb_clusters.items():
             if v.created_at >= exposed_timestamp:
                 ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id).set(1)
+        # ksqldb_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
@@ -70,7 +78,9 @@ class CCloudKsqldbClusterList(CCloudBase):
                         csu_count=item["spec"]["csu"],
                         env_id=item["spec"]["environment"]["id"],
                         kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
-                        owner_id=item["spec"]["credential_identity"]["id"],
+                        owner_id=item["spec"]["credential_identity"]["id"]
+                        if item["spec"]["credential_identity"]["id"] is not None
+                        else "ksqldb_owner_id_missing",
                         created_at=parser.isoparse(item["metadata"]["created_at"]),
                     )
                 )

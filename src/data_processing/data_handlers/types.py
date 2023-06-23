@@ -35,7 +35,10 @@ class AbstractDataHandler(ABC):
         pass
 
     def _generate_date_range_per_row(
-        self, start_date: datetime.datetime, end_date: datetime.datetime, freq: str = "1H",
+        self,
+        start_date: datetime.datetime,
+        end_date: datetime.datetime,
+        freq: str = "1H",
     ):
         start_date = start_date.replace(tzinfo=datetime.timezone.utc).combine(
             date=start_date.date(), time=datetime.time.min
@@ -73,7 +76,7 @@ class AbstractDataHandler(ABC):
         """Converts the chargeback dict stored internally to a dataframe and filter the data using the args
 
         Args:
-            dataset (pd.DataFrame): input pandas Dataframe 
+            dataset (pd.DataFrame): input pandas Dataframe
             ts_column_name (str): Column name for the timestamp column in the index
             start_datetime (datetime.datetime): Inclusive start datetime
             end_datetime (datetime.datetime): Exclusive End datetime
@@ -98,7 +101,10 @@ class AbstractDataHandler(ABC):
             return (None, True)
 
     def calculate_effective_dates(
-        self, last_available_date: datetime.datetime, days_per_query: int, max_days_in_memory: int,
+        self,
+        last_available_date: datetime.datetime,
+        days_per_query: int,
+        max_days_in_memory: int,
     ) -> EffectiveDates:
         curr_start_date = last_available_date - datetime.timedelta(days=days_per_query)
         curr_end_date = last_available_date

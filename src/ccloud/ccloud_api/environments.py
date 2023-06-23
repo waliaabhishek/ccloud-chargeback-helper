@@ -21,6 +21,11 @@ env_prom_metrics = TimestampedCollector(
     ["env_id", "display_name"],
     in_begin_timestamp=datetime.datetime.now(),
 )
+# env_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_env_scrape_status",
+#     "CCloud Environments scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass(kw_only=True)
@@ -40,6 +45,7 @@ class CCloudEnvironmentList(CCloudBase):
         for _, v in self.env.items():
             if v.created_at >= exposed_timestamp:
                 env_prom_metrics.labels(v.env_id, v.display_name).set(1)
+        # env_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
     def __str__(self):
         print("Found " + str(len(self.env)) + " environments.")
