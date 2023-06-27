@@ -9,6 +9,7 @@ from ccloud.connections import CCloudConnection, EndpointURL
 from data_processing.data_handlers.billing_api_handler import CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
+from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
 from helpers import sanitize_id
 from prometheus_processing.custom_collector import TimestampedCollector
@@ -30,6 +31,7 @@ class CCloudOrg(Observer):
 
     objects_handler: CCloudObjectsHandler = field(init=False)
     metrics_handler: PrometheusMetricsDataHandler = field(init=False)
+    status_metrics_handler: PrometheusStatusMetricsDataHandler = field(init=False)
     billing_handler: CCloudBillingHandler = field(init=False)
     chargeback_handler: CCloudChargebackHandler = field(init=False)
     exposed_metrics_datetime: datetime.datetime = field(init=False)
@@ -41,13 +43,29 @@ class CCloudOrg(Observer):
         # This start date is calculated from the now time to rewind back 365 days as that is the
         # time limit of the billing dataset which is available to us. We will need the metrics handler
         # to try and get the data from that far back as well.
-        start_date = datetime.datetime.utcnow().replace(
+        # start_date = datetime.datetime.utcnow().replace(
+        #     minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        # ) + datetime.timedelta(days=-30, hours=+1)
+
+        # This following action is required as for the first run we need to derive the start date.
+        # So we step back by 1 hour, so that the current hour slice is returned.
+        self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=-30, hours=+1)
+        # - datetime.timedelta(hours=1)
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=1)
+
+        # Initialize the Scrape Metrics Handler
+        # This is used for checking when was the last scrape stored in Prometheus
+        # and where to resume the scrape
+        self.status_metrics_handler = PrometheusStatusMetricsDataHandler(
+            in_prometheus_url="http://localhost:9091",
+        )
+
+        next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
 
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
@@ -56,7 +74,7 @@ class CCloudOrg(Observer):
                 in_api_secret=in_org_details["ccloud_details"]["ccloud_api"]["api_secret"],
                 base_url=EndpointURL.API_URL,
             ),
-            start_date=start_date,
+            start_date=next_fetch_date,
         )
 
         # Initialize the Billing API Handler
@@ -66,7 +84,7 @@ class CCloudOrg(Observer):
                 in_api_secret=in_org_details["ccloud_details"]["billing_api"]["api_secret"],
                 base_url=EndpointURL.API_URL,
             ),
-            start_date=start_date,
+            start_date=next_fetch_date,
         )
 
         # Initialize the Metrics Handler
@@ -76,7 +94,7 @@ class CCloudOrg(Observer):
                 in_api_secret=in_org_details["ccloud_details"]["metrics_api"]["api_secret"],
             ),
             in_prometheus_url="http://localhost:9090",
-            start_date=start_date,
+            start_date=next_fetch_date,
         )
 
         # Initialize the Chargeback Object Handler
@@ -84,23 +102,19 @@ class CCloudOrg(Observer):
             billing_dataset=self.billing_handler,
             objects_dataset=self.objects_handler,
             metrics_dataset=self.metrics_handler,
-            start_date=start_date,
+            start_date=next_fetch_date,
         )
 
         self.attach(notifier=scrape_status_metrics)
-        # This following action is required as for the first run we need to derive the start date.
-        # So we step back by 1 hour, so that the current hour slice is returned.
-        self.exposed_metrics_datetime = start_date - datetime.timedelta(hours=1)
-        self.update(notifier=scrape_status_metrics)
+        # self.update(notifier=scrape_status_metrics)
 
     def update(self, notifier: NotifierAbstract):
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=1)
-        next_ts = self._generate_next_timestamp(curr_date=self.exposed_metrics_datetime)
-        next_ts_in_dt = next_ts.to_pydatetime(warn=False)
+        next_ts_in_dt = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime, is_notifier_update=True)
         if next_ts_in_dt <= self.exposed_end_date:
-            scrape_status_metrics.clear()
+            notifier.clear()
             notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
             # self.expose_prometheus_metrics(ts_filter=next_ts)
             print(f"Refreshing CCloud Existing Objects Data")
@@ -120,6 +134,33 @@ class CCloudOrg(Observer):
                 f"""Chargeback calculation is fully caught up to the point where it needs to be. 
                 More processing will continue after the day passes and the data for the day is finalized in the Billing API."""
             )
+
+    def locate_next_fetch_date(
+        self, start_date: datetime.datetime, is_notifier_update: bool = False
+    ) -> datetime.datetime:
+        # TODO; Current fetch is totally naive and finds the first gap in Chargeback dataset only.
+        # Long term thought is to diverge datetimes for multiple objects as necessary.
+        # This will prevent naive re-calculations for other objects as well.
+        # The reason we do it with CB object right now is 2 fold:
+        # 1. simple :)
+        # 2. as we scrape all the datasets in the same scrape and align the same dates, right now everything will work.
+        #    Once we diverge scrapes on their own dates, we will need to enhance this method to return specific values.
+        next_ts_in_dt = start_date
+        for next_date in pd.date_range(
+            start=start_date,
+            end=self.exposed_end_date,
+            freq="1H",
+            inclusive="neither" if is_notifier_update else "left",
+        ):
+            next_ts_in_dt = next_date.to_pydatetime(warn=False)
+            if not self.status_metrics_handler.is_dataset_present(
+                scrape_type=ScrapeType.BillingChargeback,
+                ts_in_millis=self.status_metrics_handler.convert_dt_to_ts(next_ts_in_dt),
+            ):
+                # return the immediate gap datetime in the series
+                return next_ts_in_dt
+        # if no dates are found, use the last fetch date
+        return next_ts_in_dt
 
 
 @dataclass(kw_only=True)

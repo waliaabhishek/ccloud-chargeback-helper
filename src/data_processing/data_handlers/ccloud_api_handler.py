@@ -14,7 +14,6 @@ from data_processing.data_handlers.types import AbstractDataHandler
 
 @dataclass
 class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
-
     last_refresh: datetime.datetime | None = field(init=False, default=None)
     min_refresh_gap: datetime.timedelta = field(init=False, default=datetime.timedelta(minutes=30))
     cc_sa: CCloudServiceAccountList = field(init=False)
@@ -33,7 +32,8 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         effective_dates = self.calculate_effective_dates(
             last_available_date=self.start_date, days_per_query=1, max_days_in_memory=1
         )
-        self.read_all(exposed_timestamp=effective_dates.curr_end_date)
+        # self.read_all(exposed_timestamp=effective_dates.curr_end_date)
+        self.read_next_dataset(exposed_timestamp=effective_dates.curr_end_date)
 
     def read_all(self, exposed_timestamp: datetime.datetime = None):
         if self.min_refresh_gap > datetime.datetime.now() - self.last_refresh:
@@ -42,16 +42,20 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         else:
             print(f"Starting CCloud Object refresh now -- {datetime.datetime.now()}")
             self.cc_sa = CCloudServiceAccountList(
-                in_ccloud_connection=self.in_ccloud_connection, exposed_timestamp=exposed_timestamp,
+                in_ccloud_connection=self.in_ccloud_connection,
+                exposed_timestamp=exposed_timestamp,
             )
             self.cc_users = CCloudUserAccountList(
-                in_ccloud_connection=self.in_ccloud_connection, exposed_timestamp=exposed_timestamp,
+                in_ccloud_connection=self.in_ccloud_connection,
+                exposed_timestamp=exposed_timestamp,
             )
             self.cc_api_keys = CCloudAPIKeyList(
-                in_ccloud_connection=self.in_ccloud_connection, exposed_timestamp=exposed_timestamp,
+                in_ccloud_connection=self.in_ccloud_connection,
+                exposed_timestamp=exposed_timestamp,
             )
             self.cc_environments = CCloudEnvironmentList(
-                in_ccloud_connection=self.in_ccloud_connection, exposed_timestamp=exposed_timestamp,
+                in_ccloud_connection=self.in_ccloud_connection,
+                exposed_timestamp=exposed_timestamp,
             )
             self.cc_clusters = CCloudClusterList(
                 in_ccloud_connection=self.in_ccloud_connection,
