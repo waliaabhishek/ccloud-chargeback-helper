@@ -29,12 +29,10 @@ class Observer(ABC):
         notifier.attach(self)
 
     def _generate_next_timestamp(
-        self,
-        curr_date: datetime.datetime,
-        freq: str = "1H",
+        self, curr_date: datetime.datetime, freq: str = "1H", periods: int = 2
     ) -> pd.Timestamp:
         start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
-        return pd.date_range(start_date, freq=freq, periods=2)[1]
+        return pd.date_range(start_date, freq=freq, periods=periods)[1]
 
 
 class NotifierAbstract(ABC):
