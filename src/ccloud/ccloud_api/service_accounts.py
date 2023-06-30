@@ -42,12 +42,15 @@ class CCloudServiceAccountList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        sa_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         sa_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.sa.items():
             if v.created_at >= exposed_timestamp:
                 sa_prom_metrics.labels(v.resource_id, v.name).set(1)
         # sa_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    def force_clear_prom_metrics(self):
+        sa_prom_metrics.clear()
 
     def __str__(self) -> str:
         for item in self.sa.values():

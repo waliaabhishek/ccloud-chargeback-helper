@@ -40,12 +40,15 @@ class CCloudEnvironmentList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        env_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         env_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.env.items():
             if v.created_at >= exposed_timestamp:
                 env_prom_metrics.labels(v.env_id, v.display_name).set(1)
         # env_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    def force_clear_prom_metrics(self):
+        env_prom_metrics.clear()
 
     def __str__(self):
         print("Found " + str(len(self.env)) + " environments.")

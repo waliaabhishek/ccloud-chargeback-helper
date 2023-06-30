@@ -111,7 +111,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         print(f"Currently reading the Chargeback dataset for Timestamp: {ts_filter.to_pydatetime()}")
         # chargeback_prom_status_metrics.clear()
         # chargeback_prom_status_metrics.set(1)
-        chargeback_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         out, is_none = self._get_dataset_for_exact_timestamp(
             dataset=self.get_chargeback_dataframe(), ts_column_name=CHARGEBACK_COLUMNS.TS, time_slice=ts_filter
         )
@@ -128,6 +128,9 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 chargeback_prom_metrics.labels(principal_id, product_type, CHARGEBACK_COLUMNS.SHARED_COST).set(
                     df_row[2]
                 )
+
+    def force_clear_prom_metrics(self):
+        chargeback_prom_metrics.clear()
 
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp

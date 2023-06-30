@@ -52,12 +52,15 @@ class CCloudAPIKeyList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        api_key_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         api_key_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.api_keys.items():
             if v.created_at >= exposed_timestamp:
                 api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id).set(1)
         # api_key_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    def force_clear_prom_metrics(self):
+        api_key_prom_metrics.clear()
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have

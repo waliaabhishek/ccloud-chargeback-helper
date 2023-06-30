@@ -57,11 +57,15 @@ class CCloudConnectorList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        kafka_connectors_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         kafka_connectors_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.connectors.items():
             # TODO: created datetime is missing from connector creation date.
             kafka_connectors_prom_metrics.labels(v.connector_id, v.cluster_id, v.env_id).set(1)
+
+    def force_clear_prom_metrics(self):
+        kafka_connectors_prom_metrics.clear()
+
 
     def __str__(self):
         for v in self.cluster.values():

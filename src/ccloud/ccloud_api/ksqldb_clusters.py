@@ -56,12 +56,15 @@ class CCloudKsqldbClusterList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        ksqldb_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         ksqldb_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.ksqldb_clusters.items():
             if v.created_at >= exposed_timestamp:
                 ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id).set(1)
         # ksqldb_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    def force_clear_prom_metrics(self):
+        ksqldb_prom_metrics.clear()
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have

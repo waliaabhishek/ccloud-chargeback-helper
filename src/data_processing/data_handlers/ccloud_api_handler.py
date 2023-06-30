@@ -89,6 +89,15 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         self.cc_connectors.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_ksqldb_clusters.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
+    def force_clear_prom_metrics(self):
+        self.cc_sa.force_clear_prom_metrics()
+        self.cc_users.force_clear_prom_metrics()
+        self.cc_api_keys.force_clear_prom_metrics()
+        self.cc_environments.force_clear_prom_metrics()
+        self.cc_clusters.force_clear_prom_metrics()
+        self.cc_connectors.force_clear_prom_metrics()
+        self.cc_ksqldb_clusters.force_clear_prom_metrics()
+
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         # TODO: Do we want to narrow down the active dataset for the timelines ?
         pass

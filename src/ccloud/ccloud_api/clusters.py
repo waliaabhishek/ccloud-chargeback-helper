@@ -45,12 +45,15 @@ class CCloudClusterList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        kafka_cluster_prom_metrics.clear()
+        self.force_clear_prom_metrics()
         kafka_cluster_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.cluster.items():
             # TODO: created datetime is missing from cluster creation date.
             kafka_cluster_prom_metrics.labels(v.cluster_id, v.env_id, v.cluster_name).set(1)
         # kafka_cluster_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    def force_clear_prom_metrics(self):
+        kafka_cluster_prom_metrics.clear()
 
     def __str__(self):
         for v in self.cluster.values():

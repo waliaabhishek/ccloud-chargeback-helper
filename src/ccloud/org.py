@@ -113,22 +113,26 @@ class CCloudOrg(Observer):
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=1)
         next_ts_in_dt = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime, is_notifier_update=True)
-        if next_ts_in_dt <= self.exposed_end_date:
-            notifier.clear()
-            notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
-            # self.expose_prometheus_metrics(ts_filter=next_ts)
-            print(f"Refreshing CCloud Existing Objects Data")
-            self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-            notifier.labels("ccloud_objects").set(1)
-            print(f"Gathering Metrics API Data")
-            self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-            print(f"Checking for new Billing CSV Files")
-            self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-            print("Calculating next dataset for chargeback")
-            self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-            notifier.labels("billing_chargeback").set(1)
-
-            self.exposed_metrics_datetime = next_ts_in_dt
+        if next_ts_in_dt < self.exposed_end_date:
+            if next_ts_in_dt == self.exposed_metrics_datetime:
+                notifier.clear()
+                self.objects_handler.force_clear_prom_metrics()
+                self.chargeback_handler.force_clear_prom_metrics()
+            else:
+                notifier.clear()
+                notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
+                # self.expose_prometheus_metrics(ts_filter=next_ts)
+                print(f"Refreshing CCloud Existing Objects Data")
+                self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+                notifier.labels("ccloud_objects").set(1)
+                print(f"Gathering Metrics API Data")
+                self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+                print(f"Checking for new Billing CSV Files")
+                self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+                print("Calculating next dataset for chargeback")
+                self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+                notifier.labels("billing_chargeback").set(1)
+                self.exposed_metrics_datetime = next_ts_in_dt
         else:
             print(
                 f"""Chargeback calculation is fully caught up to the point where it needs to be. 
