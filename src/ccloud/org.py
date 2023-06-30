@@ -52,7 +52,6 @@ class CCloudOrg(Observer):
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=-30, hours=+1)
-        # - datetime.timedelta(hours=1)
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
@@ -66,6 +65,7 @@ class CCloudOrg(Observer):
         )
 
         next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
+        print(f"Initial Fetch Date after checking chargeback status in Prometheus: {next_fetch_date}")
 
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
