@@ -62,7 +62,7 @@ class CCloudClusterList(CCloudBase):
 
     def read_all(self, params={"page_size": 100}):
         for env_item in self.ccloud_envs.env.values():
-            print("Checking CCloud Environment " + env_item.env_id + " for any provisioned ksqlDB Clusters.")
+            print("Checking CCloud Environment " + env_item.env_id + " for any provisioned Kafka Clusters.")
             params["environment"] = env_item.env_id
             for item in self.read_from_api(params=params):
                 self.__add_to_cache(
