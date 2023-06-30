@@ -71,6 +71,14 @@ class CCloudKsqldbClusterList(CCloudBase):
             print("Checking CCloud Environment " + env_item.env_id + " for any provisioned ksqlDB Clusters.")
             params["environment"] = env_item.env_id
             for item in self.read_from_api(params=params):
+                owner_id = None
+                if item["spec"]["credential_identity"]["id"]:
+                    owner_id = item["spec"]["credential_identity"]["id"]
+                else:
+                    owner_id = "ksqldb_owner_id_missing_in_api_response"
+                    print(
+                        f'ksqlDB API does not provide any Owner ID for cluster {item["id"]}. ksqlDB cluster Ownership will default to a static string'
+                    )
                 self.__add_to_cache(
                     CCloudKsqldbCluster(
                         cluster_id=item["id"],
@@ -78,40 +86,11 @@ class CCloudKsqldbClusterList(CCloudBase):
                         csu_count=item["spec"]["csu"],
                         env_id=item["spec"]["environment"]["id"],
                         kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
-                        owner_id=item["spec"]["credential_identity"]["id"]
-                        if item["spec"]["credential_identity"]["id"] is not None
-                        else "ksqldb_owner_id_missing",
+                        owner_id=owner_id,
                         created_at=parser.isoparse(item["metadata"]["created_at"]),
                     )
                 )
                 print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
-            # resp = requests.get(url=self.url, auth=self.http_connection, params=params)
-            # if resp.status_code == 200:
-            #     out_json = resp.json()
-            #     if out_json is not None and out_json["data"] is not None:
-            #         for item in out_json["data"]:
-            #             self.__add_to_cache(
-            #                 CCloudKsqldbCluster(
-            #                     cluster_id=item["id"],
-            #                     cluster_name=item["spec"]["display_name"],
-            #                     csu_count=item["spec"]["csu"],
-            #                     env_id=item["spec"]["environment"]["id"],
-            #                     kafka_cluster_id=item["spec"]["kafka_cluster"]["id"],
-            #                     owner_id=item["spec"]["credential_identity"]["id"],
-            #                     created_at=parser.isoparse(item["metadata"]["created_at"]),
-            #                 )
-            #             )
-            #             print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
-            #     if "next" in out_json["metadata"]:
-            #         query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
-            #         params["page_token"] = str(query_params["page_token"][0])
-            #         self.read_all(params)
-            # elif resp.status_code == 429:
-            #     print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
-            #     sleep(45)
-            #     print("Timer up. Resuming CCloud API scrape.")
-            # else:
-            #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
     def __add_to_cache(self, ksqldb_cluster: CCloudKsqldbCluster) -> None:
         self.ksqldb_clusters[ksqldb_cluster.cluster_id] = ksqldb_cluster
