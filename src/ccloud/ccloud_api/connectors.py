@@ -17,6 +17,7 @@ from prometheus_processing.custom_collector import TimestampedCollector
 class CCloudConnector:
     env_id: str
     cluster_id: str
+    connector_id: str
     connector_name: str
     connector_class: str
     owner_id: str
@@ -60,8 +61,7 @@ class CCloudConnectorList(CCloudBase):
         kafka_connectors_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.connectors.items():
             # TODO: created datetime is missing from connector creation date.
-            kafka_connectors_prom_metrics.labels(v.connector_name, v.cluster_id, v.env_id).set(1)
-        # kafka_connectors_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+            kafka_connectors_prom_metrics.labels(v.connector_id, v.cluster_id, v.env_id).set(1)
 
     def __str__(self):
         for v in self.cluster.values():
@@ -100,7 +100,7 @@ class CCloudConnectorList(CCloudBase):
     def read_connector_config(self, kafka_cluster: dict, connector_details:dict):
         connector_id = str(connector_details["id"]["id"]).strip().replace(" ", "")
         connector_config = connector_details["info"]["config"]
-        connector_name=str(connector_config["name"]).strip().replace(" ", ""),
+        connector_name=str(connector_config["name"]).strip().replace(" ", "")
         print("Found connector config for connector " + connector_config["name"])
         owner_id = None
         auth_mode = connector_config["kafka.auth.mode"]
@@ -117,19 +117,20 @@ class CCloudConnectorList(CCloudBase):
                         print(
                             f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding holder. Connector Ownership will default to the connector ID instead."
                         )
-                        owner_id = connector_id
+                        owner_id = "connector_api_key_cannot_be_mapped"
                 else:
                     print(f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}.")
                     print(
                         f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership will default to Connector ID {connector_id} instead."
                     )
-                    owner_id = connector_id
+                    owner_id = "connector_api_key_masked"
             case "SERVICE_ACCOUNT":
                 owner_id = connector_config["kafka.service.account.id"]
         self.__add_to_cache(
             CCloudConnector(
                 env_id=kafka_cluster.env_id,
                 cluster_id=kafka_cluster.cluster_id,
+                connector_id=connector_id,
                 connector_name=connector_name,
                 connector_class=connector_config["connector.class"],
                 owner_id=owner_id,
@@ -137,7 +138,7 @@ class CCloudConnectorList(CCloudBase):
         )
 
     def __add_to_cache(self, connector: CCloudConnector) -> None:
-        self.connectors[f"{connector.cluster_id}__{connector.connector_name}"] = connector
+        self.connectors[f"{connector.connector_id}"] = connector
 
     # def locate_api_key_owner(self, api_key: str) -> CCloudUserAccount | CCloudServiceAccount:
     #     key = self.ccloud_api_keys.api_keys[api_key]
