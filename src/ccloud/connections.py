@@ -19,7 +19,9 @@ class URIDetails:
     service_accounts = "/iam/v2/service-accounts"
     user_accounts = "/iam/v2/users"
     api_keys = "/iam/v2/api-keys"
-    list_connector_names = "/connect/v1/environments/{environment_id}/clusters/{kafka_cluster_id}/connectors"
+    list_connector_names = (
+        "/connect/v1/environments/{environment_id}/clusters/{kafka_cluster_id}/connectors?expand=info,status,id"
+    )
     get_connector_config = (
         "/connect/v1/environments/{environment_id}/clusters/{kafka_cluster_id}/connectors/{connector_name}/config"
     )
@@ -36,7 +38,8 @@ class URIDetails:
 
 
 @dataclass(
-    frozen=True, kw_only=True,
+    frozen=True,
+    kw_only=True,
 )
 class CCloudConnection:
     in_api_key: InitVar[str] = None
@@ -84,4 +87,3 @@ class CCloudBase:
             self.read_from_api(params)
         else:
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
-

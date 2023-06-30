@@ -74,24 +74,19 @@ class CCloudConnectorList(CCloudBase):
     def read_all(self):
         for kafka_cluster in self.ccloud_kafka_clusters.cluster.values():
             print("Checking Kafka Cluster " + kafka_cluster.env_id + " for any provisioned connectors.")
-            for connector_name in self.read_all_connector_names(kafka_cluster=kafka_cluster):
+            for connector_item in self.read_all_connector_details(kafka_cluster=kafka_cluster):
                 print(
-                    f"Found Connector {connector_name} linked to Kafka Cluster ID {kafka_cluster.cluster_id} with Cluster Name {kafka_cluster.cluster_name}"
+                    f'Found Connector {connector_item["status"]["name"]} linked to Kafka Cluster ID {kafka_cluster.cluster_id} with Cluster Name {kafka_cluster.cluster_name}'
                 )
-                temp_url = self.url_get_connector_config.format(
-                    environment_id=kafka_cluster.env_id,
-                    kafka_cluster_id=kafka_cluster.cluster_id,
-                    connector_name=connector_name,
-                )
-                self.read_connector_config(kafka_cluster=kafka_cluster, call_url=temp_url)
+                self.read_connector_config(kafka_cluster=kafka_cluster, connector_details=connector_item)
 
-    def read_all_connector_names(self, kafka_cluster: CCloudCluster, params={}):
+    def read_all_connector_details(self, kafka_cluster: CCloudCluster, params={}):
         temp_url = self.url.format(environment_id=kafka_cluster.env_id, kafka_cluster_id=kafka_cluster.cluster_id)
         resp = requests.get(url=temp_url, auth=self.http_connection, params=params)
         if resp.status_code == 200:
             out_json = resp.json()
             # if out_json is not None and out_json["data"] is not None:
-            for item in out_json:
+            for item in out_json.values():
                 yield item
         elif resp.status_code == 429:
             print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
@@ -102,35 +97,44 @@ class CCloudConnectorList(CCloudBase):
                 f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
             )
 
-    def read_connector_config(self, kafka_cluster: CCloudCluster, call_url: str, params={}):
-        resp = requests.get(url=call_url, auth=self.http_connection, params=params)
-        if resp.status_code == 200:
-            item = resp.json()
-            print("Found connector config for connector " + item["name"])
-            owner_id = None
-            if "kafka.api.key" in item.keys():
-                api_key = item["kafka.api.key"]
+    def read_connector_config(self, kafka_cluster: dict, connector_details:dict):
+        connector_id = str(connector_details["id"]["id"]).strip().replace(" ", "")
+        connector_config = connector_details["info"]["config"]
+        connector_name=str(connector_config["name"]).strip().replace(" ", ""),
+        print("Found connector config for connector " + connector_config["name"])
+        owner_id = None
+        auth_mode = connector_config["kafka.auth.mode"]
+        match auth_mode:
+            case "KAFKA_API_KEY":
+                api_key = connector_config["kafka.api.key"]
+                # Check if all the API_KEY value is protected or not
                 if not all([ch == "*" for ch in api_key]):
-                    owner_id = api_key
+                    # Locate the API Key details
+                    if self.ccloud_api_keys.api_keys.get(api_key) is not None:
+                        owner_id = self.ccloud_api_keys.api_keys[api_key].owner_id
+                    else:
+                        print(f"Connector API Key Not found in the Active API Keys. Connector {connector_config['name']} returned {api_key} as the executioner.")
+                        print(
+                            f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding holder. Connector Ownership will default to the connector ID instead."
+                        )
+                        owner_id = connector_id
                 else:
-                    print(f"Connector API Key Masked. Found API Key {api_key} for Connector {item['name']}.")
+                    print(f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}.")
                     print(
-                        f"API Key is unavailable for Mapping Connector {item['name']} to its corresponding Service Account. Connector Ownership will default to the Kafka Cluster {kafka_cluster} instead."
+                        f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership will default to Connector ID {connector_id} instead."
                     )
-                    owner_id = kafka_cluster.cluster_id
-            elif "kafka.service.account.id" in item.keys():
-                owner_id = item["kafka.service.account.id"]
-            self.__add_to_cache(
-                CCloudConnector(
-                    env_id=kafka_cluster.env_id,
-                    cluster_id=kafka_cluster.cluster_id,
-                    connector_name=str(item["name"]).strip().replace(" ", ""),
-                    connector_class=item["connector.class"],
-                    owner_id=owner_id,
-                )
+                    owner_id = connector_id
+            case "SERVICE_ACCOUNT":
+                owner_id = connector_config["kafka.service.account.id"]
+        self.__add_to_cache(
+            CCloudConnector(
+                env_id=kafka_cluster.env_id,
+                cluster_id=kafka_cluster.cluster_id,
+                connector_name=connector_name,
+                connector_class=connector_config["connector.class"],
+                owner_id=owner_id,
             )
-        else:
-            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+        )
 
     def __add_to_cache(self, connector: CCloudConnector) -> None:
         self.connectors[f"{connector.cluster_id}__{connector.connector_name}"] = connector
