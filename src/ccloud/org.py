@@ -11,7 +11,7 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
-from helpers import sanitize_id
+from helpers import check_pair, sanitize_id
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
 
@@ -51,17 +51,17 @@ class CCloudOrg(Observer):
         # So we step back by 1 hour, so that the current hour slice is returned.
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) + datetime.timedelta(days=-30, hours=+1)
+        ) + datetime.timedelta(days=-70, hours=+1)
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) - datetime.timedelta(days=1)
+        ) - datetime.timedelta(days=2)
 
         # Initialize the Scrape Metrics Handler
         # This is used for checking when was the last scrape stored in Prometheus
         # and where to resume the scrape
         self.status_metrics_handler = PrometheusStatusMetricsDataHandler(
-            in_prometheus_url="http://localhost:9091",
+            in_prometheus_url=in_org_details["prometheus_details"]["chargeback_datastore"]["prometheus_url"],
         )
 
         next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
@@ -88,12 +88,17 @@ class CCloudOrg(Observer):
         )
 
         # Initialize the Metrics Handler
+
         self.metrics_handler = PrometheusMetricsDataHandler(
             in_ccloud_connection=CCloudConnection(
                 in_api_key=in_org_details["ccloud_details"]["metrics_api"]["api_key"],
                 in_api_secret=in_org_details["ccloud_details"]["metrics_api"]["api_secret"],
             ),
-            in_prometheus_url="http://localhost:9090",
+            in_prometheus_url=in_org_details["prometheus_details"]["metrics_api_datastore"]["prometheus_url"],
+            in_connection_kwargs=in_org_details["prometheus_details"]["metrics_api_datastore"]["connection_params"],
+            in_connection_auth=in_org_details.get("prometheus_details", dict())
+            .get("metrics_api_datastore", dict())
+            .get("auth", dict()),
             start_date=next_fetch_date,
         )
 
@@ -111,7 +116,7 @@ class CCloudOrg(Observer):
     def update(self, notifier: NotifierAbstract):
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) - datetime.timedelta(days=1)
+        ) - datetime.timedelta(days=2)
         next_ts_in_dt = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime, is_notifier_update=True)
         if next_ts_in_dt < self.exposed_end_date:
             if next_ts_in_dt == self.exposed_metrics_datetime:
