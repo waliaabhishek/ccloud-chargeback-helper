@@ -1,5 +1,6 @@
 import datetime
 from dataclasses import InitVar, dataclass, field
+from typing import Dict, Tuple
 from urllib import parse
 
 import pandas as pd
@@ -35,6 +36,8 @@ METRICS_API_COLUMNS = MetricsAPIColumnNames()
 class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
     in_prometheus_url: InitVar[str | None] = field(default="http://localhost:9090")
     in_prometheus_query_endpoint: InitVar[str] = field(default="/api/v1/query_range")
+    in_connection_kwargs: Dict = field(default=None)
+    in_connection_auth: Dict = field(default_factory=dict())
     days_per_query: int = field(default=7)
     max_days_in_memory: int = field(default=14)
 
@@ -46,6 +49,7 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         # Initialize the super classes to set the internal attributes
         AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
+        self.override_auth_type_from_yaml(self.in_connection_auth)
         self.url = parse.urljoin(base=in_prometheus_url, url=in_prometheus_query_endpoint)
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
@@ -70,8 +74,9 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         post_body["end"] = f'{end_date.replace(tzinfo=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}+00:00'
         post_body["step"] = params["step"]
         post_body["query"] = METRICS_API_PROMETHEUS_QUERIES.__getattribute__(query_type)
-        resp = requests.post(url=self.url, auth=self.http_connection, headers=headers, data=post_body)
-        # resp = requests.get(url=self.url, auth=self.http_connection, headers=headers, data=post_body)
+        resp = requests.post(
+            url=self.url, auth=self.http_connection, headers=headers, data=post_body, **self.in_connection_kwargs
+        )
         if resp.status_code == 200:
             out_json = resp.json()
             if out_json is not None and out_json["data"] is not None:
