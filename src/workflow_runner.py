@@ -71,7 +71,7 @@ def execute_workflow(arg_flags: Namespace):
     get_app_props(core_config["config"])
 
     thread_configs = [
-        [COMMON_THREAD_RUNNER, current_memory_usage, 5],
+        # [COMMON_THREAD_RUNNER, current_memory_usage, 5],
         # [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
         # [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
         # [BILLING_PERSISTENCE_STORE, sync_to_file, BILLING_PERSISTENCE_STORE.flush_to_disk_interval_sec],
@@ -91,13 +91,14 @@ def execute_workflow(arg_flags: Namespace):
         # Those will include the first run for all the data gather step as well.
         # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
         ccloud_orgs = CCloudOrgList(
-            in_orgs=core_config["config"]["org_details"], in_days_in_memory=APP_PROPS.days_in_memory,
+            in_orgs=core_config["config"]["org_details"],
+            in_days_in_memory=APP_PROPS.days_in_memory,
         )
         # run_gather_cycle(ccloud_orgs=ccloud_orgs)
         # run_calculate_cycle(ccloud_orgs=ccloud_orgs)
 
         while True:
-            sleep(10 ** 8)
+            sleep(10**8)
 
     finally:
         # Begin shutdown process.
