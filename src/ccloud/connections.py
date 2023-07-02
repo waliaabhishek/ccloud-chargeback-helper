@@ -1,10 +1,12 @@
 from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
 from time import sleep
+from typing import Dict
 from urllib import parse
 
 import requests
-from requests.auth import HTTPBasicAuth
+from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+from requests_oauthlib import OAuth1
 
 
 class EndpointURL(Enum):
@@ -68,6 +70,18 @@ class CCloudBase:
 
     def __post_init__(self) -> None:
         self.http_connection = self.in_ccloud_connection.http_connection
+
+    def override_auth_type_from_yaml(self, auth_dict: Dict):
+        if auth_dict.get("enable_auth", False):
+            if auth_dict.get("auth_type") == "HTTPBasicAuth":
+                self.http_connection = HTTPBasicAuth(**auth_dict.get("auth_args"))
+            elif auth_dict.get("auth_type") == "HTTPDigestAuth":
+                self.http_connection = HTTPDigestAuth(**auth_dict.get("auth_args"))
+            else:
+                # Other AUTH Types are not implemented yet.
+                self.http_connection = None
+        else:
+            self.http_connection = None
 
     def read_from_api(self, params={"page_size": 500}, **kwagrs):
         resp = requests.get(url=self.url, auth=self.http_connection, params=params)
