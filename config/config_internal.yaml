@@ -14,8 +14,16 @@ config:
         metrics_api:
           api_key: env::CCLOUD_BILLING_API_KEY
           api_secret: env::CCLOUD_BILLING_API_SECRET
-      storage:
-        metrics:
-        billing_csv:
-      requests:
-        - CHARGEBACK_REQUESTS
+      prometheus_details:
+        metrics_api_datastore:
+          prometheus_url: env::METRICS_API_SERVER_URL
+          auth:
+            enable_auth: env::METRICS_API_SERVER_ENABLE_AUTH
+            auth_type: env::METRICS_API_SERVER_AUTH_TYPE
+            auth_args:
+              username: env::METRICS_API_SERVER_AUTH_USERNAME
+              password: env::METRICS_API_SERVER_AUTH_PASSWORD
+          connection_params:
+            verify: False
+        chargeback_datastore:
+          prometheus_url: env::CHARGEBACK_SERVER_URL
