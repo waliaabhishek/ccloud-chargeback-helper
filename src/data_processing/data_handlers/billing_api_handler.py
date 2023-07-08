@@ -1,11 +1,15 @@
 import datetime
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import List, Tuple
 
 import pandas as pd
 
 from ccloud.connections import CCloudBase
+from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.types import AbstractDataHandler
+from prometheus_processing.custom_collector import TimestampedCollector
+from prometheus_processing.notifier import NotifierAbstract
 
 
 class BillingAPIColumnNames:
@@ -27,13 +31,31 @@ class BillingAPIColumnNames:
 
 BILLING_API_COLUMNS = BillingAPIColumnNames()
 
+billing_api_prom_metrics = TimestampedCollector(
+    "confluent_cloud_billing_details",
+    "Confluent Cloud Costs API data distribution details divided on a per hour basis",
+    [
+        "env_id",
+        "kafka_cluster_id",
+        "kafka_cluster_unknown_reason",
+        "resource_id",
+        "product_name",
+        "product_line_type",
+    ],
+    in_begin_timestamp=datetime.datetime.now(),
+)
+
 
 @dataclass
 class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
-    last_available_date: datetime.datetime = field(init=False)
+    start_date: datetime.datetime = field(init=True)
+    objects_dataset: CCloudObjectsHandler = field(init=True)
     days_per_query: int = field(default=7)
     max_days_in_memory: int = field(default=14)
+
     billing_dataset: pd.DataFrame = field(init=False, default=None)
+    last_available_date: datetime.datetime = field(init=False)
+    curr_export_datetime: datetime.datetime = field(init=False)
 
     def __post_init__(self) -> None:
         # Initialize the super classes to set the internal attributes
@@ -45,7 +67,71 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
         self.read_all(start_date=self.start_date, end_date=end_date)
+        self.curr_export_datetime = self.start_date
+        self.update(notifier=billing_api_prom_metrics)
+
         self.last_available_date = end_date
+
+    def update(self, notifier: NotifierAbstract) -> None:
+        """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
+        The Data for next timestamp is also populated in the Gauge implementation using this method.
+        It also tracks the currently exported timestamp in Observer as well as update it to the Notifier.
+
+        Args:
+            notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on timestamp is complete and the dataset should be refreshed for the next timestamp.
+        """
+        curr_ts = pd.date_range(self.curr_export_datetime, freq="1H", periods=2)[0]
+        notifier.set_timestamp(curr_timestamp=self.curr_export_datetime)
+        # chargeback_prom_status_metrics.set_timestamp(curr_timestamp=self.curr_export_datetime)
+        self.expose_prometheus_metrics(ts_filter=curr_ts)
+
+    def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
+        """Set and expose the metrics to the prom collector as a Gauge.
+
+        Args:
+            ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
+            to a specific timestamp and expose it to the prometheus collector
+        """
+        print(f"Currently reading the Billing dataset for Timestamp: {ts_filter.to_pydatetime()}")
+        self.force_clear_prom_metrics()
+        out, is_none = self._get_dataset_for_exact_timestamp(
+            dataset=self.billing_dataset, ts_column_name=BILLING_API_COLUMNS.calc_timestamp, time_slice=ts_filter
+        )
+        if not is_none:
+            for df_row in out.itertuples(name="BillingData"):
+                env_id = df_row[0][1]
+                resource_id = df_row[0][2]
+                product_name = df_row[0][3]
+                product_line_type = df_row[0][4]
+                cost = df_row[8]
+
+                kafka_cluster_list, not_found_reason = self.get_connected_kafka_cluster_id(
+                    env_id=env_id, resource_id=resource_id
+                )
+                for item in kafka_cluster_list:
+                    billing_api_prom_metrics.labels(
+                        env_id,
+                        item,
+                        not_found_reason,
+                        resource_id,
+                        product_name,
+                        product_line_type,
+                    ).set(cost / len(kafka_cluster_list))
+
+    def get_connected_kafka_cluster_id(self, env_id: str, resource_id: str) -> Tuple[List[str], str]:
+        """This method is used to get the connected Kafka Cluster ID for a given Billing API resource ID
+
+        Args:
+            env_id (str): The environment ID for the resource
+            resource_id (str): The resource ID for which the connected Kafka Cluster ID is required
+
+        Returns:
+            str: The connected Kafka Cluster ID
+        """
+        return self.objects_dataset.get_connected_kafka_cluster_id(env_id=env_id, resource_id=resource_id)
+
+    def force_clear_prom_metrics(self):
+        billing_api_prom_metrics.clear()
 
     def read_all(
         self, start_date: datetime.datetime, end_date: datetime.datetime, params={"page_size": 2000}, **kwargs
@@ -53,7 +139,9 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         params["start_date"] = str(start_date.date())
         params["end_date"] = str(end_date.date())
         for item in self.read_from_api(params=params):
-            temp_date_range = self._generate_date_range_per_row(start_date=start_date, end_date=end_date)
+            item_start_date = datetime.datetime.strptime(item["start_date"], "%Y-%m-%d")
+            item_end_date = datetime.datetime.strptime(item["end_date"], "%Y-%m-%d")
+            temp_date_range = self._generate_date_range_per_row(start_date=item_start_date, end_date=item_end_date)
             temp_data = [
                 {
                     BILLING_API_COLUMNS.calc_timestamp: x,
@@ -66,9 +154,9 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                     BILLING_API_COLUMNS.orig_amt: item["original_amount"],
                     BILLING_API_COLUMNS.total: item["amount"],
                     BILLING_API_COLUMNS.price: item["price"],
-                    BILLING_API_COLUMNS.calc_split_quantity: Decimal(item["quantity"]) / temp_date_range.size,
-                    BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"]) / temp_date_range.size,
-                    BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / temp_date_range.size,
+                    BILLING_API_COLUMNS.calc_split_quantity: Decimal(item["quantity"]) / 24,
+                    BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"]) / 24,
+                    BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / 24,
                 }
                 for x in temp_date_range
             ]
@@ -113,6 +201,8 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
             self.billing_dataset, is_none = self.get_dataset_for_timerange(
                 start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
             )
+        self.curr_export_datetime = exposed_timestamp
+        self.update(notifier=billing_api_prom_metrics)
 
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary

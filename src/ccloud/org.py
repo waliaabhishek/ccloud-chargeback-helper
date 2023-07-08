@@ -1,3 +1,4 @@
+from copy import deepcopy
 import datetime
 from dataclasses import InitVar, dataclass, field
 from typing import Dict, List
@@ -35,7 +36,9 @@ class CCloudOrg(Observer):
     billing_handler: CCloudBillingHandler = field(init=False)
     chargeback_handler: CCloudChargebackHandler = field(init=False)
     exposed_metrics_datetime: datetime.datetime = field(init=False)
+    epoch_start_date: datetime.datetime = field(init=False)
     exposed_end_date: datetime.datetime = field(init=False)
+    reset_counter: int = field(default=0, init=False)
 
     def __post_init__(self, in_org_details, in_days_in_memory) -> None:
         Observer.__init__(self)
@@ -52,6 +55,8 @@ class CCloudOrg(Observer):
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=-70, hours=+1)
+
+        self.epoch_start_date = deepcopy(self.exposed_metrics_datetime)
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
@@ -85,6 +90,7 @@ class CCloudOrg(Observer):
                 base_url=EndpointURL.API_URL,
             ),
             start_date=next_fetch_date,
+            objects_dataset=self.objects_handler,
         )
 
         # Initialize the Metrics Handler
@@ -155,6 +161,14 @@ class CCloudOrg(Observer):
         # 2. as we scrape all the datasets in the same scrape and align the same dates, right now everything will work.
         #    Once we diverge scrapes on their own dates, we will need to enhance this method to return specific values.
         next_ts_in_dt = start_date
+        self.reset_counter += 1
+        # Add a reset intelligence marker to rewind just in case any time slot is missed and we need to go back in time to
+        # fetch the data set again. Yes, this will be a little bit of a performance hit, but it is better than missing data.
+        if self.reset_counter > 500:
+            print("Rewinding back to the start date to ensure no data is missed.")
+            self.reset_counter = 0
+            next_ts_in_dt = self.epoch_start_date
+            is_notifier_update = False
         for next_date in pd.date_range(
             start=start_date,
             end=self.exposed_end_date,
