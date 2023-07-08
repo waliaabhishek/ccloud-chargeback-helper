@@ -84,7 +84,7 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
                     for item in out_json["data"]["result"]:
                         temp_data = [
                             {
-                                METRICS_API_COLUMNS.timestamp: pd.to_datetime(in_item[0], unit="s"),
+                                METRICS_API_COLUMNS.timestamp: pd.to_datetime(in_item[0], unit="s", utc=True),
                                 METRICS_API_COLUMNS.query_type: query_type,
                                 METRICS_API_COLUMNS.cluster_id: item["metric"]["kafka_id"],
                                 METRICS_API_COLUMNS.principal_id: item["metric"]["principal_id"],
