@@ -121,10 +121,10 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 shared_cost = df_row[2]
 
                 chargeback_prom_metrics.labels(principal_id, product_type, env_id, CHARGEBACK_COLUMNS.USAGE_COST).set(
-                    df_row[1]
+                    usage_cost
                 )
                 chargeback_prom_metrics.labels(principal_id, product_type, env_id, CHARGEBACK_COLUMNS.SHARED_COST).set(
-                    df_row[2]
+                    shared_cost
                 )
 
     def force_clear_prom_metrics(self):
@@ -143,7 +143,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
     def cleanup_old_data(self, retention_start_date: datetime.datetime):
         """Cleanup the older dataset from the chargeback object and prevent it from using too much memory"""
         for (k1, k2, k3, k4), (_, _) in self.chargeback_dataset.copy().items():
-            if k2 < retention_start_date.replace(tzinfo=None):
+            if k2 < retention_start_date:
                 del self.chargeback_dataset[(k1, k2, k3, k4)]
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
@@ -263,7 +263,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 bill_row.Index[4],
             )
 
-            df_time_slice = pd.Timestamp(time_slice, tz="UTC")
+            df_time_slice = pd.Timestamp(time_slice)
 
             row_cname = getattr(bill_row, BILLING_API_COLUMNS.cluster_name)
             row_cost = getattr(bill_row, BILLING_API_COLUMNS.calc_split_total)
@@ -633,7 +633,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
             elif row_ptype in ["GOVERNANCE_BASE", "SCHEMA_REGISTRY"]:
                 # GOAL: Cost will be equally spread across all the Kafka Clusters existing in this CCloud Environment
                 active_identities = set(
-                    [y.cluster_id for x, y in self.objects_dataset.cc_clusters.cluster.items() if y.env_id == row_env]
+                    [y.cluster_id for x, y in self.objects_dataset.cc_clusters.clusters.items() if y.env_id == row_env]
                 )
                 if len(active_identities) > 0:
                     splitter = len(active_identities)

@@ -41,9 +41,15 @@ class AbstractDataHandler(ABC):
         freq: str = "1H",
     ):
         start_date = start_date.replace(tzinfo=datetime.timezone.utc).combine(
-            date=start_date.date(), time=datetime.time.min
+            date=start_date.date(),
+            time=datetime.time.min,
+            tzinfo=datetime.timezone.utc,
         )
-        end_date = end_date.replace(tzinfo=datetime.timezone.utc).combine(date=end_date.date(), time=datetime.time.min)
+        end_date = end_date.replace(tzinfo=datetime.timezone.utc).combine(
+            date=end_date.date(),
+            time=datetime.time.min,
+            tzinfo=datetime.timezone.utc,
+        )
         end_date = end_date - datetime.timedelta(minutes=1)
         return pd.date_range(start_date, end_date, freq=freq)
 
@@ -84,8 +90,8 @@ class AbstractDataHandler(ABC):
         Returns:
             pd.DatFrame: return filtered pandas DataFrame
         """
-        start_date = pd.to_datetime(start_datetime.replace(tzinfo=None))
-        end_date = pd.to_datetime(end_datetime.replace(tzinfo=None))
+        start_date = pd.to_datetime(start_datetime)
+        end_date = pd.to_datetime(end_datetime)
         if not isinstance(dataset, NoneType):
             if not dataset.empty:
                 return (
@@ -150,6 +156,7 @@ class AbstractDataHandler(ABC):
         """
         if not isinstance(dataset, NoneType):
             if not dataset.empty:
+                temp_ds = dataset.index.get_level_values(ts_column_name)
                 return (dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)], False)
             else:
                 return (dataset, False)
