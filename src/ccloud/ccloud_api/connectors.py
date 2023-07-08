@@ -76,7 +76,7 @@ class CCloudConnectorList(CCloudBase):
             )
 
     def read_all(self):
-        for kafka_cluster in self.ccloud_kafka_clusters.cluster.values():
+        for kafka_cluster in self.ccloud_kafka_clusters.clusters.values():
             print("Checking Kafka Cluster " + kafka_cluster.env_id + " for any provisioned connectors.")
             for connector_item in self.read_all_connector_details(kafka_cluster=kafka_cluster):
                 print(

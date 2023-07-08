@@ -1,5 +1,6 @@
 import datetime
 from dataclasses import dataclass, field
+from typing import List, Tuple
 
 from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
 from ccloud.ccloud_api.clusters import CCloudClusterList
@@ -101,3 +102,36 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         # TODO: Do we want to narrow down the active dataset for the timelines ?
         pass
+
+    def get_connected_kafka_cluster_id(self, env_id: str, resource_id: str) -> Tuple[List[str], str]:
+        cluster_list = []
+        error_string = None
+        if resource_id.startswith("lcc"):
+            if resource_id in self.cc_connectors.connectors.keys():
+                cluster_list.append(self.cc_connectors.connectors[resource_id].cluster_id)
+                error_string = None
+            else:
+                cluster_list.append("unknown")
+                error_string = "no_data_in_api"
+        elif resource_id.startswith("lksql"):
+            if resource_id in self.cc_ksqldb_clusters.ksqldb_clusters.keys():
+                cluster_list.append(self.cc_ksqldb_clusters.ksqldb_clusters[resource_id].kafka_cluster_id)
+                error_string = None
+            else:
+                cluster_list.append("unknown")
+                error_string = "no_data_in_api"
+        elif resource_id.startswith("lkc"):
+            cluster_list.append(resource_id)
+            error_string = None
+        elif resource_id.startswith("lsr"):
+            temp_cluster_list = [x.cluster_id for x in self.cc_clusters.clusters.values() if x.env_id == env_id]
+            if len(temp_cluster_list) > 0:
+                cluster_list += temp_cluster_list
+                error_string = None
+            else:
+                cluster_list.append(None)
+                error_string = "no_cluster_in_env"
+        else:
+            cluster_list.append("unknown")
+            error_string = "unknown_resource_type"
+        return (cluster_list, error_string)

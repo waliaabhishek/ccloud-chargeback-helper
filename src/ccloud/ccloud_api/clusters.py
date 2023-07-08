@@ -36,7 +36,7 @@ class CCloudClusterList(CCloudBase):
     ccloud_envs: CCloudEnvironmentList
     exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
 
-    cluster: Dict[str, CCloudCluster] = field(default_factory=dict, init=False)
+    clusters: Dict[str, CCloudCluster] = field(default_factory=dict, init=False)
 
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
@@ -47,7 +47,7 @@ class CCloudClusterList(CCloudBase):
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         self.force_clear_prom_metrics()
         kafka_cluster_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
-        for _, v in self.cluster.items():
+        for _, v in self.clusters.items():
             # TODO: created datetime is missing from cluster creation date.
             kafka_cluster_prom_metrics.labels(v.cluster_id, v.env_id, v.cluster_name).set(1)
         # kafka_cluster_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
@@ -56,7 +56,7 @@ class CCloudClusterList(CCloudBase):
         kafka_cluster_prom_metrics.clear()
 
     def __str__(self):
-        for v in self.cluster.values():
+        for v in self.clusters.values():
             print(
                 "{:<15} {:<15} {:<25} {:<10} {:<25} {:<50}".format(
                     v.env_id, v.cluster_id, v.cluster_name, v.cloud, v.availability, v.bootstrap_url
@@ -111,8 +111,8 @@ class CCloudClusterList(CCloudBase):
         #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
     def __add_to_cache(self, ccloud_cluster: CCloudCluster) -> None:
-        self.cluster[ccloud_cluster.cluster_id] = ccloud_cluster
+        self.clusters[ccloud_cluster.cluster_id] = ccloud_cluster
 
     # Read/Find one Cluster from the cache
     def find_cluster(self, cluster_id):
-        return self.cluster[cluster_id]
+        return self.clusters[cluster_id]
