@@ -21,6 +21,7 @@ services:
       - METRICS_API_SERVER_AUTH_TYPE=HTTPBasicAuth
       - METRICS_API_SERVER_USERNAME=${METRICS_API_SERVER_USERNAME}
       - METRICS_API_SERVER_PASSWORD=${METRICS_API_SERVER_PASSWORD}
+      - CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090
   prometheus_for_chargeback:
     image: prom/prometheus:v2.44.0
     container_name: prometheus_for_chargeback
