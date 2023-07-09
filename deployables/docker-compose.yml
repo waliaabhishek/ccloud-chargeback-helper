@@ -1,0 +1,50 @@
+version: "2.3"
+services:
+  chargeback_handler:
+    image: abhiwalia/ccloud_chargeback_handler
+    container_name: ccloud_chargeback_handler
+    # cpus: 1
+    restart: "yes"
+    volumes:
+    # This is the folder which you can use to override the pre-coded config file. The internally available file still needs the environment variables to be configured with the API Keys for access. 
+    # No credentials are hard coded into the code at all, so if you do not provide any access credentials, the code will not work.
+      - ./config:/user_config
+    # command: [ # The below command switch will alllow you to specify your custom config file. 
+    #            # The internally sourced config file relies on the ENV vars and only fetches the Chargeback related requests
+    #           "--config-file","/user_config/config.yaml",
+    # ]
+    environment:
+      - CCLOUD_BILLING_API_KEY=${CCLOUD_BILLING_API_KEY}
+      - CCLOUD_BILLING_API_SECRET=${CCLOUD_BILLING_API_SECRET}
+      - METRICS_API_SERVER_URL=${METRICS_API_SERVER_URL}
+      - METRICS_API_SERVER_ENABLE_AUTH=${METRICS_API_SERVER_ENABLE_AUTH}
+      - METRICS_API_SERVER_AUTH_TYPE=HTTPBasicAuth
+      - METRICS_API_SERVER_USERNAME=${METRICS_API_SERVER_USERNAME}
+      - METRICS_API_SERVER_PASSWORD=${METRICS_API_SERVER_PASSWORD}
+  prometheus_for_chargeback:
+    image: prom/prometheus:v2.44.0
+    container_name: prometheus_for_chargeback
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2y"
+      - "--storage.tsdb.retention.size=1TB"
+      # - "--log.level=debug"
+    ports:
+    # Exposed_port:Internal_port
+      - 9090:9090
+    volumes:
+      - ./assets/prometheus_for_chargeback/prometheus_chargeback.yml:/etc/prometheus/prometheus.yml
+      - ./assets/datastore/prometheus_for_chargeback/:/prometheus
+  grafana:
+    image: grafana/grafana:10.0.1
+    container_name: grafana
+    environment:
+      - "GF_SECURITY_ADMIN_USER=admin"
+      - "GF_SECURITY_ADMIN_PASSWORD=password"
+      - "GF_USERS_ALLOW_SIGN_UP=false"
+    ports:
+    # Exposed_port:Internal_port
+      - 3000:3000
+    volumes:
+      - ./assets/grafana/provisioning/:/etc/grafana/provisioning
