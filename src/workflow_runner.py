@@ -2,6 +2,7 @@ from argparse import Namespace
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from logging import debug
+import threading
 from time import sleep
 from typing import Dict
 import prometheus_client
@@ -10,6 +11,7 @@ import yaml
 from ccloud.org import CCloudOrgList
 from helpers import env_parse_replace, logged_method, timed_method
 from storage_mgmt import COMMON_THREAD_RUNNER, current_memory_usage
+import readiness_probe
 
 
 @dataclass(kw_only=True)
@@ -82,6 +84,7 @@ def execute_workflow(arg_flags: Namespace):
         threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
 
     prometheus_client.start_http_server(8000)
+    threading.Thread(target=readiness_probe.internal_api.run, args=("0.0.0.0", "8001")).start()
 
     try:
         for item in threads_list:
@@ -94,8 +97,7 @@ def execute_workflow(arg_flags: Namespace):
             in_orgs=core_config["config"]["org_details"],
             in_days_in_memory=APP_PROPS.days_in_memory,
         )
-        # run_gather_cycle(ccloud_orgs=ccloud_orgs)
-        # run_calculate_cycle(ccloud_orgs=ccloud_orgs)
+        readiness_probe.set_readiness(readiness_flag=True)
 
         while True:
             sleep(10**8)
