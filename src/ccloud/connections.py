@@ -6,7 +6,6 @@ from urllib import parse
 
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
-from requests_oauthlib import OAuth1
 
 
 class EndpointURL(Enum):

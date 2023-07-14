@@ -1,7 +1,6 @@
 import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-import functools
 from types import NoneType
 from typing import Tuple
 

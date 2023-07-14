@@ -1,4 +1,3 @@
-import datetime
 import os
 import threading
 from dataclasses import dataclass, field
@@ -8,7 +7,6 @@ from typing import Dict, List, Tuple
 
 import psutil
 from helpers import sanitize_metric_name
-from prometheus_processing.custom_collector import TimestampedCollector
 
 # class DirType(Enum):
 #     MetricsData = auto()

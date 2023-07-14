@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import InitVar, dataclass, field
-from typing import Dict, Tuple
+from typing import Dict
 from urllib import parse
 
 import pandas as pd

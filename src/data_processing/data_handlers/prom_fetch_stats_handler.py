@@ -1,6 +1,5 @@
 import datetime
 from dataclasses import InitVar, dataclass, field
-from functools import lru_cache
 from urllib import parse
 from enum import Enum, auto
 import requests
