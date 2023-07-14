@@ -1,3 +1,6 @@
+#!/bin/sh
+set -x #echo on
+
 READINESS_PROBE="/is_ready"
 CURRENT_TS_PROBE="/current_timestamp"
 
@@ -9,7 +12,9 @@ SCRAPE_URL="${CHARGEBACK_URL}"
 check_readiness () {
     # This function checks if the readiness probe is True
     # If it is not, it will wait 5 seconds and try again
-    while [ `wget -O - ${READINESS_URL} 2>/dev/null` != "True" ]
+    test=`wget -O - ${READINESS_URL} 2>&1 | cut -d ' ' -f 1 `
+    echo "Readiness probe is ${test}"
+    while [ ${test} != "True" ]
     do
         echo "Waiting for readiness probe to be True"
         sleep 5
@@ -20,14 +25,14 @@ check_ts_vicinity () {
     # This function checks if the scrape timestamp is getting close to the current time
     # If it is, it will increase the scrape interval to 10 minutes
     # If it is not, it will set the scrape interval to 0.1 seconds
-    TS_VALUE=`wget -O - ${TS_URL} 2>/dev/null`
-    VICINITY_CUTOFF=`date '+%s'` - ( 24 * 60 * 60 * 5 )
+    TS_VALUE=`wget -O - ${TS_URL} 2>&1 | cut -d ' ' -f 1 `
+    VICINITY_CUTOFF=$(( `date '+%s'` - $(( 24 * 60 * 60 * 5 )) ))
     if [ ${TS_VALUE} -gt ${VICINITY_CUTOFF} ]
     then
         echo "Scrape timestamp is getting close, Scrape interval increased to 10 minutes."
         return 600
     else
-        return 0.1
+        return 1
     fi
 }
 
@@ -43,13 +48,14 @@ check_ts_vicinity () {
 while true
 do
     check_readiness
-    SCRAPE_INTERVAL=`check_ts_vicinity`
-    rm -f index.html index2.html
-    wget -T 60 ${SCRAPE_URL}
-    tail +19 index.html > index2.html
-    echo "# EOF" >> index2.html
-    promtool tsdb create-blocks-from openmetrics index2.html .
-    rm -f index.html index2.html
-    sleep ${SCRAPE_INTERVAL}
+    # SCRAPE_INTERVAL=`check_ts_vicinity`
+    # echo "Scraping Interval set to ${SCRAPE_INTERVAL}"
+    # rm -f index.html index2.html
+    # wget -T 60 ${SCRAPE_URL}
+    # tail +19 index.html > index2.html
+    # echo "# EOF" >> index2.html
+    # promtool tsdb create-blocks-from openmetrics index2.html .
+    # rm -f index.html index2.html
+    sleep 5
 done
 
