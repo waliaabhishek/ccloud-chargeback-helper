@@ -13,6 +13,7 @@ from data_processing.data_handlers.chargeback_handler import CCloudChargebackHan
 from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
 from helpers import check_pair, sanitize_id
+from internal_data_probe import set_current_exposed_date, set_readiness
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
 
@@ -55,6 +56,7 @@ class CCloudOrg(Observer):
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=-70, hours=+1)
+        set_current_exposed_date(exposed_date=self.exposed_metrics_datetime)
 
         self.epoch_start_date = deepcopy(self.exposed_metrics_datetime)
 
@@ -94,7 +96,6 @@ class CCloudOrg(Observer):
         )
 
         # Initialize the Metrics Handler
-
         self.metrics_handler = PrometheusMetricsDataHandler(
             in_ccloud_connection=CCloudConnection(
                 in_api_key=in_org_details["ccloud_details"]["metrics_api"]["api_key"],
@@ -130,6 +131,7 @@ class CCloudOrg(Observer):
                 self.objects_handler.force_clear_prom_metrics()
                 self.chargeback_handler.force_clear_prom_metrics()
             else:
+                set_readiness(readiness_flag=False)
                 notifier.clear()
                 notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
                 # self.expose_prometheus_metrics(ts_filter=next_ts)
@@ -144,6 +146,8 @@ class CCloudOrg(Observer):
                 self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
                 notifier.labels("billing_chargeback").set(1)
                 self.exposed_metrics_datetime = next_ts_in_dt
+                set_current_exposed_date(exposed_date=next_ts_in_dt)
+                set_readiness(readiness_flag=True)
         else:
             print(
                 f"""Chargeback calculation is fully caught up to the point where it needs to be. 
@@ -164,7 +168,7 @@ class CCloudOrg(Observer):
         self.reset_counter += 1
         # Add a reset intelligence marker to rewind just in case any time slot is missed and we need to go back in time to
         # fetch the data set again. Yes, this will be a little bit of a performance hit, but it is better than missing data.
-        if self.reset_counter > 500:
+        if self.reset_counter > 50:
             print("Rewinding back to the start date to ensure no data is missed.")
             self.reset_counter = 0
             next_ts_in_dt = self.epoch_start_date
