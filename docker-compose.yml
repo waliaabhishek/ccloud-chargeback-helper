@@ -8,7 +8,7 @@ services:
     volumes:
     # This is the folder which you can use to override the pre-coded config file. The internally available file still needs the environment variables to be configured with the API Keys for access. 
     # No credentials are hard coded into the code at all, so if you do not provide any access credentials, the code will not work.
-      - ./assets/chargeback_handler/config/config_internal.yaml:/user_config/config.yaml
+      - ./deployables/assets/chargeback_handler/config/config_internal.yaml:/user_config/config.yaml
     command:
     # The below command switch will alllow you to specify your custom config file.
     # The /user_config/config.yaml file is the default config file which is used if no config file is specified.
@@ -20,8 +20,8 @@ services:
       - METRICS_API_SERVER_URL=${METRICS_API_SERVER_URL}
       - METRICS_API_SERVER_ENABLE_AUTH=${METRICS_API_SERVER_ENABLE_AUTH}
       - METRICS_API_SERVER_AUTH_TYPE=HTTPBasicAuth
-      - METRICS_API_SERVER_USERNAME=${METRICS_API_SERVER_USERNAME}
-      - METRICS_API_SERVER_PASSWORD=${METRICS_API_SERVER_PASSWORD}
+      - METRICS_API_SERVER_AUTH_USERNAME=${METRICS_API_SERVER_USERNAME}
+      - METRICS_API_SERVER_AUTH_PASSWORD=${METRICS_API_SERVER_PASSWORD}
       - CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback_test:9090
     depends_on:
       - prometheus_for_chargeback_test
