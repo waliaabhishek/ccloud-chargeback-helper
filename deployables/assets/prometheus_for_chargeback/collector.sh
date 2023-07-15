@@ -12,7 +12,7 @@ SCRAPE_URL="${CHARGEBACK_URL}"
 check_readiness () {
     # This function checks if the readiness probe is True
     # If it is not, it will wait 5 seconds and try again
-    test=`wget -O - ${READINESS_URL} 2>&1 | cut -d ' ' -f 1 `
+    test=`wget -O - -q ${READINESS_URL} 2>&1 | cut -d ' ' -f 1 `
     echo "Readiness probe is ${test}"
     while [ ${test} != "True" ]
     do
@@ -25,7 +25,7 @@ check_ts_vicinity () {
     # This function checks if the scrape timestamp is getting close to the current time
     # If it is, it will increase the scrape interval to 10 minutes
     # If it is not, it will set the scrape interval to 0.1 seconds
-    TS_VALUE=`wget -O - ${TS_URL} 2>&1 | cut -d ' ' -f 1 `
+    TS_VALUE=`wget -O - -q ${TS_URL} 2>&1 | cut -d ' ' -f 1 `
     VICINITY_CUTOFF=$(( `date '+%s'` - $(( 24 * 60 * 60 * 5 )) ))
     if [ ${TS_VALUE} -gt ${VICINITY_CUTOFF} ]
     then
