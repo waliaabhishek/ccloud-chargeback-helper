@@ -1,5 +1,5 @@
 #!/bin/sh
-set -x #echo on
+# set -x #echo on
 
 READINESS_PROBE="/is_ready"
 CURRENT_TS_PROBE="/current_timestamp"
@@ -7,7 +7,7 @@ CURRENT_TS_PROBE="/current_timestamp"
 READINESS_URL="${CHARGEBACK_READINESS_PROBE}${READINESS_PROBE}"
 TS_URL="${CHARGEBACK_READINESS_PROBE}${CURRENT_TS_PROBE}"
 
-SCRAPE_URL="${CHARGEBACK_URL}"
+SCRAPE_URL="${CHARGEBACK_METRICS_URL}"
 
 check_readiness () {
     # This function checks if the readiness probe is True
@@ -48,14 +48,16 @@ check_ts_vicinity () {
 while true
 do
     check_readiness
-    # SCRAPE_INTERVAL=`check_ts_vicinity`
-    # echo "Scraping Interval set to ${SCRAPE_INTERVAL}"
-    # rm -f index.html index2.html
-    # wget -T 60 ${SCRAPE_URL}
-    # tail +19 index.html > index2.html
-    # echo "# EOF" >> index2.html
-    # promtool tsdb create-blocks-from openmetrics index2.html .
-    # rm -f index.html index2.html
-    sleep 5
+    `check_ts_vicinity`
+    SCRAPE_INTERVAL=$?
+    echo "Scraping Interval set to ${SCRAPE_INTERVAL}"
+    rm -f index.html index2.html
+    wget -T 60 ${SCRAPE_URL}
+    tail +19 index.html > index2.html
+    echo "# EOF" >> index2.html
+    promtool tsdb create-blocks-from openmetrics index2.html .
+    rm -f index.html index2.html
+    echo "Sleeping for ${SCRAPE_INTERVAL} seconds"
+    sleep ${SCRAPE_INTERVAL}
 done
 
