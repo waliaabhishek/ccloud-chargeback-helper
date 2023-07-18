@@ -10,6 +10,7 @@ from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -50,13 +51,18 @@ class CCloudConnectorList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_connector_names)
+        LOGGER.debug(f"Kafka Connector URL: {self.url}")
         self.url_get_connector_config = self.in_ccloud_connection.get_endpoint_url(
             key=self.in_ccloud_connection.uri.get_connector_config
         )
+        LOGGER.debug(f"Kafka Get Connector Config URL: {self.url}")
         self.read_all()
+        LOGGER.debug("Exposing Prometheus Metrics for Kafka Connector")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud Kafka Connectors initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for Kafka Connector for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         kafka_connectors_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.connectors.items():
@@ -76,28 +82,31 @@ class CCloudConnectorList(CCloudBase):
             )
 
     def read_all(self):
+        LOGGER.debug("Reading all Kafka Connector from Confluent Cloud")
         for kafka_cluster in self.ccloud_kafka_clusters.clusters.values():
-            print("Checking Kafka Cluster " + kafka_cluster.env_id + " for any provisioned connectors.")
+            LOGGER.info("Checking Environment " + kafka_cluster.env_id + " for any provisioned connectors.")
             for connector_item in self.read_all_connector_details(kafka_cluster=kafka_cluster):
-                print(
+                LOGGER.debug(
                     f'Found Connector {connector_item["status"]["name"]} linked to Kafka Cluster ID {kafka_cluster.cluster_id} with Cluster Name {kafka_cluster.cluster_name}'
                 )
                 self.read_connector_config(kafka_cluster=kafka_cluster, connector_details=connector_item)
 
     def read_all_connector_details(self, kafka_cluster: CCloudCluster, params={}):
         temp_url = self.url.format(environment_id=kafka_cluster.env_id, kafka_cluster_id=kafka_cluster.cluster_id)
-        resp = requests.get(url=temp_url, auth=self.http_connection, params=params)
+        LOGGER.debug(f"Reading from CCloud API: {temp_url}")
+        resp = requests.get(url=temp_url, auth=self.http_connection, timeout=10, params=params)
         if resp.status_code == 200:
+            LOGGER.debug(f"Successfully fetched the Connector details for Kafka Cluster {kafka_cluster.cluster_id}")
             out_json = resp.json()
             # if out_json is not None and out_json["data"] is not None:
             for item in out_json.values():
                 yield item
         elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            LOGGER.info(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
             sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
+            LOGGER.info("Timer up. Resuming CCloud API scrape.")
         elif resp.status_code >= 400:
-            print(
+            LOGGER.error(
                 f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
             )
 
@@ -105,7 +114,7 @@ class CCloudConnectorList(CCloudBase):
         connector_id = str(connector_details["id"]["id"]).strip().replace(" ", "")
         connector_config = connector_details["info"]["config"]
         connector_name=str(connector_config["name"]).strip().replace(" ", "")
-        print("Found connector config for connector " + connector_config["name"])
+        LOGGER.debug("Found connector config for connector " + connector_config["name"])
         owner_id = None
         auth_mode = connector_config["kafka.auth.mode"]
         match auth_mode:
@@ -117,17 +126,17 @@ class CCloudConnectorList(CCloudBase):
                     if self.ccloud_api_keys.api_keys.get(api_key) is not None:
                         owner_id = self.ccloud_api_keys.api_keys[api_key].owner_id
                     else:
-                        print(f"Connector API Key Not found in the Active API Keys. Connector {connector_config['name']} returned {api_key} as the executioner.")
-                        print(
-                            f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding holder. Connector Ownership will default to the connector ID instead."
-                        )
+                        LOGGER.warn(f"Connector API Key Not found in the Active API Keys. Connector {connector_config['name']} returned {api_key} as the executioner.")
                         owner_id = "connector_api_key_cannot_be_mapped"
+                        LOGGER.debug(
+                            f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding holder. Connector Ownership defaulted to {owner_id}."
+                        )
                 else:
-                    print(f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}.")
-                    print(
-                        f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership will default to Connector ID {connector_id} instead."
-                    )
+                    LOGGER.warn(f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}.")
                     owner_id = "connector_api_key_masked"
+                    LOGGER.debug(
+                        f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership defaulted to {owner_id}."
+                    )
             case "SERVICE_ACCOUNT":
                 owner_id = connector_config["kafka.service.account.id"]
         self.__add_to_cache(

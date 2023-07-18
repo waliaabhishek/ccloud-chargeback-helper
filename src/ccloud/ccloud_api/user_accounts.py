@@ -5,6 +5,7 @@ from typing import Dict
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -37,10 +38,14 @@ class CCloudUserAccountList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.user_accounts)
+        LOGGER.debug(f"CCloud Users Fetch URL: {self.url}")
         self.read_all()
+        LOGGER.debug("Exposing Prometheus Metrics for CCloud Users")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud Users initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for Users for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         users_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.users.items():
@@ -57,6 +62,7 @@ class CCloudUserAccountList(CCloudBase):
 
     # Read ALL Service Account details from Confluent Cloud
     def read_all(self, params={"page_size": 100}):
+        LOGGER.debug("Reading all CCloud Users from Confluent Cloud")
         for item in self.read_from_api(params=params):
             self.__add_to_cache(
                 CCloudUserAccount(
@@ -66,7 +72,7 @@ class CCloudUserAccountList(CCloudBase):
                     updated_at=parser.isoparse(item["metadata"]["updated_at"]),
                 )
             )
-            print(f"Found User: {item['id']}; Name {item['full_name']}")
+            LOGGER.debug(f"Found User: {item['id']}; Name {item['full_name']}")
         # resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         # if resp.status_code == 200:
         #     out_json = resp.json()

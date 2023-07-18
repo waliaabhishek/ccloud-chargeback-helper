@@ -12,7 +12,7 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
-from helpers import check_pair, sanitize_id
+from helpers import LOGGER, check_pair, sanitize_id
 from internal_data_probe import set_current_exposed_date, set_readiness
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
@@ -43,7 +43,9 @@ class CCloudOrg(Observer):
 
     def __post_init__(self, in_org_details, in_days_in_memory) -> None:
         Observer.__init__(self)
+        LOGGER.debug(f"Sanitizing Org ID {in_org_details['id']}")
         self.org_id = sanitize_id(in_org_details["id"])
+        LOGGER.debug(f"Initializing CCloudOrg for Org ID: {self.org_id}")
         # This start date is calculated from the now time to rewind back 365 days as that is the
         # time limit of the billing dataset which is available to us. We will need the metrics handler
         # to try and get the data from that far back as well.
@@ -56,17 +58,21 @@ class CCloudOrg(Observer):
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=-70, hours=+1)
+        LOGGER.debug(f"Starting Exposed Metrics Datetime: {self.exposed_metrics_datetime}")
         set_current_exposed_date(exposed_date=self.exposed_metrics_datetime)
 
         self.epoch_start_date = deepcopy(self.exposed_metrics_datetime)
+        LOGGER.debug(f"Epoch Start Date: {self.epoch_start_date}")
 
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=2)
+        LOGGER.debug(f"Exposed End Date: {self.exposed_end_date}")
 
         # Initialize the Scrape Metrics Handler
         # This is used for checking when was the last scrape stored in Prometheus
         # and where to resume the scrape
+        LOGGER.info(f"Initializing Prometheus Status Metrics Handler for Org ID: {self.org_id}")
         self.status_metrics_handler = PrometheusStatusMetricsDataHandler(
             in_prometheus_url=in_org_details["prometheus_details"]["chargeback_datastore"]["prometheus_url"],
         )
@@ -74,6 +80,7 @@ class CCloudOrg(Observer):
         next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
         print(f"Initial Fetch Date after checking chargeback status in Prometheus: {next_fetch_date}")
 
+        LOGGER.debug(f"Initializing CCloud Objects Handler for Org ID: {self.org_id}")
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
             in_ccloud_connection=CCloudConnection(
@@ -84,6 +91,7 @@ class CCloudOrg(Observer):
             start_date=next_fetch_date,
         )
 
+        LOGGER.debug(f"Initializing CCloud Billing Handler for Org ID: {self.org_id}")
         # Initialize the Billing API Handler
         self.billing_handler = CCloudBillingHandler(
             in_ccloud_connection=CCloudConnection(
@@ -95,6 +103,7 @@ class CCloudOrg(Observer):
             objects_dataset=self.objects_handler,
         )
 
+        LOGGER.debug(f"Initializing Prometheus Metrics Handler for Org ID: {self.org_id}")
         # Initialize the Metrics Handler
         self.metrics_handler = PrometheusMetricsDataHandler(
             in_ccloud_connection=CCloudConnection(
@@ -109,6 +118,7 @@ class CCloudOrg(Observer):
             start_date=next_fetch_date,
         )
 
+        LOGGER.debug(f"Initializing CCloud Chargeback Handler for Org ID: {self.org_id}")
         # Initialize the Chargeback Object Handler
         self.chargeback_handler = CCloudChargebackHandler(
             billing_dataset=self.billing_handler,
@@ -117,6 +127,7 @@ class CCloudOrg(Observer):
             start_date=next_fetch_date,
         )
 
+        LOGGER.debug(f"Attaching CCloudOrg to notifier {scrape_status_metrics._name} for Org ID: {self.org_id}")
         self.attach(notifier=scrape_status_metrics)
         # self.update(notifier=scrape_status_metrics)
 
@@ -198,6 +209,7 @@ class CCloudOrgList:
     orgs: Dict[str, CCloudOrg] = field(default_factory=dict, init=False)
 
     def __post_init__(self, in_orgs, in_days_in_memory) -> None:
+        LOGGER.info("Initializing CCloudOrgList")
         req_count = 0
         for org_item in in_orgs:
             temp = CCloudOrg(
@@ -206,6 +218,9 @@ class CCloudOrgList:
                 org_id=org_item["id"] if org_item["id"] else req_count,
             )
             self.__add_org_to_cache(ccloud_org=temp)
+        LOGGER.debug("Initialization Complete.")
+        LOGGER.debug("marking readiness")
+        set_readiness(readiness_flag=True)
 
     def __add_org_to_cache(self, ccloud_org: CCloudOrg) -> None:
         self.orgs[ccloud_org.org_id] = ccloud_org

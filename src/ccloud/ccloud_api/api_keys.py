@@ -6,6 +6,7 @@ from typing import Dict, List
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
@@ -47,11 +48,14 @@ class CCloudAPIKeyList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.api_keys)
-        print("Gathering list of all API Key(s) for all Service Account(s) in CCloud.")
+        LOGGER.debug(f"API Keys URL: {self.url}")
         self.read_all()
+        LOGGER.debug("Exposing Prometheus Metrics for API Keys")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud API Keys initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for API Keys for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         api_key_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.api_keys.items():
@@ -66,6 +70,7 @@ class CCloudAPIKeyList(CCloudBase):
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
     def read_all(self, params={"page_size": 100}):
+        LOGGER.debug("Reading all API Keys from Confluent Cloud")
         for item in self.read_from_api(params=params):
             self.__add_to_cache(
                 CCloudAPIKey(
@@ -77,7 +82,7 @@ class CCloudAPIKeyList(CCloudBase):
                     created_at=parser.isoparse(item["metadata"]["created_at"]),
                 )
             )
-            print("Found API Key " + item["id"] + " with owner " + item["spec"]["owner"]["id"])
+            LOGGER.debug("Found API Key " + item["id"] + " with owner " + item["spec"]["owner"]["id"])
 
         # resp = requests.get(url=self.url, auth=self.http_connection, params=params)
         # if resp.status_code == 200:

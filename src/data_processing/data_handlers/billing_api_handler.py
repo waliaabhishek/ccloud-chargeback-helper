@@ -8,6 +8,7 @@ import pandas as pd
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.types import AbstractDataHandler
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract
 
@@ -62,7 +63,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.get_billing_costs)
-
+        LOGGER.info(f"Initialized the Billing API Handler with URL: {self.url}")
         # Calculate the end_date from start_date plus number of days per query
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
@@ -71,6 +72,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         self.update(notifier=billing_api_prom_metrics)
 
         self.last_available_date = end_date
+        LOGGER.info(f"Initialized the Billing API Handler with last available date: {self.last_available_date}")
 
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
@@ -92,7 +94,9 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
             ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
             to a specific timestamp and expose it to the prometheus collector
         """
-        print(f"Currently reading the Billing dataset for Timestamp: {ts_filter.to_pydatetime()}")
+        LOGGER.debug(
+            "Exposing Prometheus Metrics for Billing dataset for timestamp: " + str(ts_filter.to_pydatetime())
+        )
         self.force_clear_prom_metrics()
         out, is_none = self._get_dataset_for_exact_timestamp(
             dataset=self.billing_dataset, ts_column_name=BILLING_API_COLUMNS.calc_timestamp, time_slice=ts_filter
@@ -138,6 +142,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
     ):
         params["start_date"] = str(start_date.date())
         params["end_date"] = str(end_date.date())
+        LOGGER.debug(f"Reading from Billing API with params: {params}")
         for item in self.read_from_api(params=params):
             item_start_date = datetime.datetime.strptime(item["start_date"], "%Y-%m-%d")
             item_end_date = datetime.datetime.strptime(item["end_date"], "%Y-%m-%d")
@@ -162,6 +167,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
             ]
             if temp_data is not None:
                 if self.billing_dataset is not None:
+                    LOGGER.debug(f"Appending new Billing data to the existing dataset")
                     self.billing_dataset = pd.concat(
                         [
                             self.billing_dataset,
@@ -178,6 +184,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                         ]
                     )
                 else:
+                    LOGGER.debug(f"Initializing the Billing dataset with new data")
                     self.billing_dataset = pd.DataFrame.from_records(
                         temp_data,
                         index=[
@@ -190,6 +197,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                     )
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Reading the next dataset for Billing API")
         if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
             effective_dates = self.calculate_effective_dates(
                 self.last_available_date, self.days_per_query, self.max_days_in_memory

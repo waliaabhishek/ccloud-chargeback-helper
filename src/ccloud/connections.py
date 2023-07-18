@@ -7,6 +7,8 @@ from urllib import parse
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
+from helpers import LOGGER
+
 
 class EndpointURL(Enum):
     API_URL = auto()
@@ -83,20 +85,25 @@ class CCloudBase:
             self.http_connection = None
 
     def read_from_api(self, params={"page_size": 500}, **kwagrs):
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
+        LOGGER.info(f"Reading from API: {self.url}")
+        resp = requests.get(url=self.url, auth=self.http_connection, timeout=10, params=params)
         if resp.status_code == 200:
+            LOGGER.debug("Received 200 OK from API")
             out_json = resp.json()
             if out_json is not None and out_json["data"] is not None:
+                LOGGER.info(f"Found {len(out_json['data'])} items in API response.")
                 for item in out_json["data"]:
                     yield item
             if "next" in out_json["metadata"] and out_json["metadata"]["next"]:
                 query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
                 params["page_token"] = str(query_params["page_token"][0])
+                LOGGER.info(f"Found next page token: {params['page_token']}. Grabbing next page.")
                 self.read_from_api(params)
         elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            LOGGER.info(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
             sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
+            LOGGER.info("Timer up. Resuming CCloud API scrape.")
             self.read_from_api(params)
         else:
+            LOGGER.error("Error stack: " + resp.text)
             raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)

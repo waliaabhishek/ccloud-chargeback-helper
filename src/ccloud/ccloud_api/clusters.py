@@ -4,6 +4,7 @@ from typing import Dict
 
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -41,10 +42,14 @@ class CCloudClusterList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.clusters)
+        LOGGER.debug(f"Kafka Cluster URL: {self.url}")
         self.read_all(params={"page_size": 50})
+        LOGGER.debug("Exposing Prometheus Metrics for Kafka Clusters")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud Kafka Clusters initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for Kafka Clusters for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         kafka_cluster_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.clusters.items():
@@ -64,8 +69,9 @@ class CCloudClusterList(CCloudBase):
             )
 
     def read_all(self, params={"page_size": 100}):
+        LOGGER.debug("Reading all Kafka Clusters from Confluent Cloud")
         for env_item in self.ccloud_envs.env.values():
-            print("Checking CCloud Environment " + env_item.env_id + " for any provisioned Kafka Clusters.")
+            LOGGER.info("Checking CCloud Environment " + env_item.env_id + " for any provisioned Kafka Clusters.")
             params["environment"] = env_item.env_id
             for item in self.read_from_api(params=params):
                 self.__add_to_cache(
@@ -79,7 +85,7 @@ class CCloudClusterList(CCloudBase):
                         bootstrap_url=item["spec"]["kafka_bootstrap_endpoint"],
                     )
                 )
-                print("Found cluster " + item["id"] + " with name " + item["spec"]["display_name"])
+                LOGGER.debug("Found cluster " + item["id"] + " with name " + item["spec"]["display_name"])
 
         # params["environment"] = env_id
         # resp = requests.get(url=self.url, auth=self.http_connection, params=params)

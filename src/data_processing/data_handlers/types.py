@@ -6,6 +6,8 @@ from typing import Tuple
 
 import pandas as pd
 
+from helpers import LOGGER
+
 
 @dataclass
 class EffectiveDates:
@@ -136,8 +138,10 @@ class AbstractDataHandler(ABC):
             abs(int((curr_exposed_datetime - last_available_date) / datetime.timedelta(days=1)))
             < next_fetch_within_days
         ):
+            LOGGER.debug("Next fetch is required as the data is not available in memory")
             return True
         else:
+            LOGGER.debug("Next fetch is not required as the data is available in memory")
             return False
 
     def _get_dataset_for_exact_timestamp(

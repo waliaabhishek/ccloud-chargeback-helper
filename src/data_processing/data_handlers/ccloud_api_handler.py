@@ -11,6 +11,7 @@ from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
+from helpers import LOGGER
 
 
 @dataclass
@@ -26,6 +27,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
     cc_ksqldb_clusters: CCloudKsqldbClusterList = field(init=False)
 
     def __post_init__(self) -> None:
+        LOGGER.debug(f"Initializing CCloudObjectsHandler")
         # Initialize the super classes to set the internal attributes
         AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
@@ -35,34 +37,41 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         )
         # self.read_all(exposed_timestamp=effective_dates.curr_end_date)
         self.read_next_dataset(exposed_timestamp=effective_dates.curr_end_date)
+        LOGGER.debug(f"Finished Initializing CCloudObjectsHandler")
 
     def read_all(self, exposed_timestamp: datetime.datetime = None):
         if self.min_refresh_gap > datetime.datetime.now() - self.last_refresh:
             # TODO: Add Refresh gap as a configurable value in YAML file
-            print(f"Not refreshing the CCloud Object state  -- TimeDelta is not enough. {self.min_refresh_gap}")
+            LOGGER.info(f"Not refreshing the CCloud Object state  -- TimeDelta is not enough. {self.min_refresh_gap}")
         else:
-            print(f"Starting CCloud Object refresh now -- {datetime.datetime.now()}")
+            LOGGER.info(f"Starting CCloud Object refresh now -- {datetime.datetime.now()}")
+            LOGGER.info(f"Refreshing CCloud Service Accounts")
             self.cc_sa = CCloudServiceAccountList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud User Accounts")
             self.cc_users = CCloudUserAccountList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud API Keys")
             self.cc_api_keys = CCloudAPIKeyList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud Environments")
             self.cc_environments = CCloudEnvironmentList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud Kafka Clusters")
             self.cc_clusters = CCloudClusterList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 ccloud_envs=self.cc_environments,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud Connectors")
             self.cc_connectors = CCloudConnectorList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 ccloud_kafka_clusters=self.cc_clusters,
@@ -71,13 +80,14 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
                 ccloud_api_keys=self.cc_api_keys,
                 exposed_timestamp=exposed_timestamp,
             )
+            LOGGER.info(f"Refreshing CCloud KSQLDB Clusters")
             self.cc_ksqldb_clusters = CCloudKsqldbClusterList(
                 in_ccloud_connection=self.in_ccloud_connection,
                 ccloud_envs=self.cc_environments,
                 exposed_timestamp=exposed_timestamp,
             )
             self.last_refresh = datetime.datetime.now()
-            print(f"Finished CCloud Object refresh -- {self.last_refresh}")
+            LOGGER.info(f"Finished CCloud Object refresh -- {self.last_refresh}")
 
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         self.read_all(exposed_timestamp=exposed_timestamp)
@@ -106,6 +116,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
     def get_connected_kafka_cluster_id(self, env_id: str, resource_id: str) -> Tuple[List[str], str]:
         cluster_list = []
         error_string = None
+        LOGGER.debug(f"Getting connected Kafka cluster(s) for resource_id: {resource_id} in env_id: {env_id}")
         if resource_id.startswith("lcc"):
             if resource_id in self.cc_connectors.connectors.keys():
                 cluster_list.append(self.cc_connectors.connectors[resource_id].cluster_id)
@@ -134,4 +145,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         else:
             cluster_list.append("unknown")
             error_string = "unknown_resource_type"
+        LOGGER.debug(
+            f"Found cluster_list: {cluster_list} and error_string: {error_string} for resource_id: {resource_id} in env_id: {env_id}"
+        )
         return (cluster_list, error_string)

@@ -5,6 +5,7 @@ from typing import Dict
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -38,10 +39,14 @@ class CCloudServiceAccountList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.service_accounts)
+        LOGGER.debug(f"Service Account URL: {self.url}")
         self.read_all()
+        LOGGER.debug("Exposing Prometheus Metrics for Service Accounts")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud Service Accounts initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for Service Accounts for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         sa_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.sa.items():
@@ -58,6 +63,7 @@ class CCloudServiceAccountList(CCloudBase):
 
     # Read ALL Service Account details from Confluent Cloud
     def read_all(self, params={"page_size": 100}):
+        LOGGER.debug("Reading all Service Accounts from Confluent Cloud")
         for item in self.read_from_api(params=params):
             self.__add_to_cache(
                 CCloudServiceAccount(
@@ -68,7 +74,7 @@ class CCloudServiceAccountList(CCloudBase):
                     updated_at=parser.isoparse(item["metadata"]["updated_at"]),
                 )
             )
-            print(f"Found SA: {item['id']}; Name {item['display_name']}")
+            LOGGER.debug(f"Found Service Account: {item['id']}; Name {item['display_name']}")
 
     def __add_to_cache(self, ccloud_sa: CCloudServiceAccount) -> None:
         self.sa[ccloud_sa.resource_id] = ccloud_sa

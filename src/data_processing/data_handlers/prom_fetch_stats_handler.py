@@ -4,6 +4,8 @@ from urllib import parse
 from enum import Enum, auto
 import requests
 
+from helpers import LOGGER
+
 
 class MetricsAPIPrometheusStatusQueries:
     objects_sync_status_name = "ccloud_objects"
@@ -35,6 +37,7 @@ class PrometheusStatusMetricsDataHandler:
 
     def __post_init__(self, in_prometheus_url, in_prometheus_query_endpoint) -> None:
         self.url = parse.urljoin(base=in_prometheus_url, url=in_prometheus_query_endpoint)
+        LOGGER.debug(f"Current Prometheus URL: {self.url}")
         # end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
         # for item in [

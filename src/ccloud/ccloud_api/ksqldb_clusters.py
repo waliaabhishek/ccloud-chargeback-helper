@@ -7,6 +7,7 @@ from dateutil import parser
 
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.connections import CCloudBase
+from helpers import LOGGER
 from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
@@ -51,11 +52,14 @@ class CCloudKsqldbClusterList(CCloudBase):
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_ksql_clusters)
-        print("Gathering list of all ksqlDB Clusters for all Service Account(s) in CCloud.")
+        LOGGER.debug(f"ksqlDB Cluster URL: {self.url}")
         self.read_all()
+        LOGGER.debug("Exposing Prometheus Metrics for ksqlDB Cluster")
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud ksqlDB Cluster initialized successfully")
 
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for ksqlDB Cluster for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
         ksqldb_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.ksqldb_clusters.items():
@@ -70,8 +74,9 @@ class CCloudKsqldbClusterList(CCloudBase):
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
     def read_all(self, params={"page_size": 100}):
+        LOGGER.debug("Reading all ksqlDB Cluster from Confluent Cloud")
         for env_item in self.ccloud_envs.env.values():
-            print("Checking CCloud Environment " + env_item.env_id + " for any provisioned ksqlDB Clusters.")
+            LOGGER.info("Checking CCloud Environment " + env_item.env_id + " for any provisioned ksqlDB Clusters.")
             params["environment"] = env_item.env_id
             for item in self.read_from_api(params=params):
                 owner_id = None
@@ -79,7 +84,7 @@ class CCloudKsqldbClusterList(CCloudBase):
                     owner_id = item["spec"]["credential_identity"]["id"]
                 else:
                     owner_id = "ksqldb_owner_id_missing_in_api_response"
-                    print(
+                    LOGGER.warn(
                         f'ksqlDB API does not provide any Owner ID for cluster {item["id"]}. ksqlDB cluster Ownership will default to a static string'
                     )
                 self.__add_to_cache(
@@ -93,7 +98,7 @@ class CCloudKsqldbClusterList(CCloudBase):
                         created_at=parser.isoparse(item["metadata"]["created_at"]),
                     )
                 )
-                print("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
+                LOGGER.debug("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
 
     def __add_to_cache(self, ksqldb_cluster: CCloudKsqldbCluster) -> None:
         self.ksqldb_clusters[ksqldb_cluster.cluster_id] = ksqldb_cluster
