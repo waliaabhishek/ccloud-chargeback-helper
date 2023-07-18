@@ -18,6 +18,7 @@
     "ksqldbcm",
     "kwagrs",
     "lksql",
+    "loglevel",
     "metricsapi",
     "mgmt",
     "millis",
