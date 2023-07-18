@@ -6,3 +6,4 @@ __pycache__/
 testing/
 src/to_be_deleted/
 deployables/datastore/
+.my-env
