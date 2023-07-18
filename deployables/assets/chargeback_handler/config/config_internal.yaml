@@ -2,6 +2,7 @@ config:
   system:
     days_in_memory: 7
     output_dir_name: "output"
+    loglevel: "DEBUG"
   org_details:
     - id: CCloud Org 1
       ccloud_details:
