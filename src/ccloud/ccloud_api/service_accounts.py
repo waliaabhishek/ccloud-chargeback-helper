@@ -5,7 +5,7 @@ from typing import Dict
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -45,6 +45,7 @@ class CCloudServiceAccountList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud Service Accounts initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for Service Accounts for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -54,6 +55,7 @@ class CCloudServiceAccountList(CCloudBase):
                 sa_prom_metrics.labels(v.resource_id, v.name).set(1)
         # sa_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         sa_prom_metrics.clear()
 
@@ -62,6 +64,7 @@ class CCloudServiceAccountList(CCloudBase):
             print("{:<15} {:<40} {:<50}".format(item.resource_id, item.name, item.description))
 
     # Read ALL Service Account details from Confluent Cloud
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all Service Accounts from Confluent Cloud")
         for item in self.read_from_api(params=params):
@@ -76,10 +79,12 @@ class CCloudServiceAccountList(CCloudBase):
             )
             LOGGER.debug(f"Found Service Account: {item['id']}; Name {item['display_name']}")
 
+    @logged_method
     def __add_to_cache(self, ccloud_sa: CCloudServiceAccount) -> None:
         self.sa[ccloud_sa.resource_id] = ccloud_sa
 
     # Read/Find one SA from the cache
+    @logged_method
     def find_sa(self, sa_name):
         for item in self.sa.values():
             if sa_name == item.name:

@@ -6,6 +6,8 @@ from typing import List
 
 import pandas as pd
 
+from helpers import LOGGER, logged_method
+
 
 class Observer(ABC):
     """The Observer Pattern used here is used to signal an observer to a notifier class.
@@ -25,7 +27,7 @@ class Observer(ABC):
         """
         Attach an observer to the Notifier.
         """
-        print("Observer: Sending request to attach for notifications.")
+        LOGGER.debug("Observer: Sending request to attach for notifications.")
         notifier.attach(self)
 
     def _generate_next_timestamp(
@@ -68,33 +70,25 @@ class NotifierAbstract(ABC):
             datetime.datetime: Output normalized datetime
         """
         if in_dt is not None:
-            # return in_dt.combine(
-            #     date=in_dt.date(),
-            #     time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
-            #     tzinfo=datetime.timezone.utc,
-            # )
             return in_dt.replace(minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc)
 
         else:
-            # return datetime.datetime.combine(
-            #     date=datetime.datetime.now(tz=datetime.timezone.utc).date(),
-            #     time=datetime.time(hour=in_dt.hour, minute=0, second=0, microsecond=0),
-            #     tzinfo=datetime.timezone.utc,
-            # )
             return datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc)
 
+    @logged_method
     def attach(self, observer: Observer) -> None:
         """
         Attach an observer to the Notifier.
         """
-        print("Notifier: Attaching an observer.")
+        LOGGER.debug("Notifier: Attaching an observer.")
         self._observers.append(observer)
 
+    @logged_method
     def detach(self, observer: Observer) -> None:
         """
         Detach an observer from the Notifier.
         """
-        print("Notifier: Detaching an observer.")
+        LOGGER.debug("Notifier: Detaching an observer.")
         self._observers.remove(observer)
 
     @abstractmethod

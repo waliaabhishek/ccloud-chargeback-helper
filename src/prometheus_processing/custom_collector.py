@@ -1,6 +1,7 @@
 import datetime
 
 from prometheus_client import Gauge
+from helpers import LOGGER, logged_method
 from prometheus_processing.notifier import NotifierAbstract
 
 
@@ -11,6 +12,7 @@ class TimestampedCollector(NotifierAbstract, Gauge):
         if in_begin_timestamp is not None:
             self.set_timestamp(curr_timestamp=in_begin_timestamp)
 
+    @logged_method
     def collect(self):
         try:
             metrics = super().collect()
@@ -24,9 +26,12 @@ class TimestampedCollector(NotifierAbstract, Gauge):
         finally:
             self.notify()
 
+    @logged_method
     def notify(self) -> None:
+        LOGGER.debug("Notifying observers")
         for item in self._observers:
             item.update(self)
 
+    @logged_method
     def convert_ts_to_str(self, input_datetime: datetime.datetime) -> str:
         return input_datetime.strftime("%Y_%m_%d_%H_%M_%S")

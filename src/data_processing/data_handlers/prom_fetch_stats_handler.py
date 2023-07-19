@@ -4,7 +4,7 @@ from urllib import parse
 from enum import Enum, auto
 import requests
 
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 
 
 class MetricsAPIPrometheusStatusQueries:
@@ -46,9 +46,11 @@ class PrometheusStatusMetricsDataHandler:
         #     self.read_all(start_date=self.start_date, end_date=end_date, query_type=item)
         # self.last_available_date = end_date
 
+    @logged_method
     def convert_dt_to_ts(self, ts_date: datetime.datetime) -> int:
         return int(ts_date.timestamp())
 
+    @logged_method
     def is_dataset_present(self, scrape_type: ScrapeType, ts_in_millis: int) -> bool:
         # return True if (scrape_type.value, ts_in_millis) in self.scrape_status_dataset.keys() else False
         headers = {"Content-Type": "application/x-www-form-urlencoded"}

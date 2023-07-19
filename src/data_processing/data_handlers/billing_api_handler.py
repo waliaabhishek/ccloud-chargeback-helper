@@ -8,7 +8,7 @@ import pandas as pd
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.types import AbstractDataHandler
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract
 
@@ -74,6 +74,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         self.last_available_date = end_date
         LOGGER.info(f"Initialized the Billing API Handler with last available date: {self.last_available_date}")
 
+    @logged_method
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
         The Data for next timestamp is also populated in the Gauge implementation using this method.
@@ -87,6 +88,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         # chargeback_prom_status_metrics.set_timestamp(curr_timestamp=self.curr_export_datetime)
         self.expose_prometheus_metrics(ts_filter=curr_ts)
 
+    @logged_method
     def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
         """Set and expose the metrics to the prom collector as a Gauge.
 
@@ -122,6 +124,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                         product_line_type,
                     ).set(cost / len(kafka_cluster_list))
 
+    @logged_method
     def get_connected_kafka_cluster_id(self, env_id: str, resource_id: str) -> Tuple[List[str], str]:
         """This method is used to get the connected Kafka Cluster ID for a given Billing API resource ID
 
@@ -134,9 +137,11 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         """
         return self.objects_dataset.get_connected_kafka_cluster_id(env_id=env_id, resource_id=resource_id)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         billing_api_prom_metrics.clear()
 
+    @logged_method
     def read_all(
         self, start_date: datetime.datetime, end_date: datetime.datetime, params={"page_size": 2000}, **kwargs
     ):
@@ -196,22 +201,27 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                         ],
                     )
 
+    @logged_method
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Reading the next dataset for Billing API")
         if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
+            LOGGER.debug("Next fetch is required for Billing API")
             effective_dates = self.calculate_effective_dates(
                 self.last_available_date, self.days_per_query, self.max_days_in_memory
             )
+            LOGGER.debug(f"Effective dates for Billing API: {effective_dates}")
             self.read_all(
                 start_date=effective_dates.next_fetch_start_date, end_date=effective_dates.next_fetch_end_date
             )
             self.last_available_date = effective_dates.next_fetch_end_date
+            LOGGER.debug("Trimming Billing dataset to max days in memory per config")
             self.billing_dataset, is_none = self.get_dataset_for_timerange(
                 start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
             )
         self.curr_export_datetime = exposed_timestamp
         self.update(notifier=billing_api_prom_metrics)
 
+    @logged_method
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
 
@@ -229,6 +239,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
             end_datetime=end_datetime,
         )
 
+    @logged_method
     def get_dataset_for_time_slice(self, time_slice: pd.Timestamp, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
 

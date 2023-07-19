@@ -6,7 +6,7 @@ from time import sleep
 from typing import Dict, List, Tuple
 
 import psutil
-from helpers import sanitize_metric_name
+from helpers import logged_method, sanitize_metric_name
 
 # class DirType(Enum):
 #     MetricsData = auto()
@@ -117,6 +117,7 @@ class PersistenceStore(ThreadableRunner):
                 self.persistence_path[org_id] = temp
             self.rehydrate_persistence_status(org_id=org_id)
 
+    @logged_method
     def rehydrate_persistence_status(self, org_id: str = "common"):
         org_details = self.persistence_path[org_id]
         path_str = org_details["path"]
@@ -127,6 +128,7 @@ class PersistenceStore(ThreadableRunner):
             org_details["data"].pop(item)
         # print(org_details["data"])
 
+    @logged_method
     def add_data_to_persistence_store(self, org_id: str, key: Tuple, value: str):
         if not org_id in self.persistence_path.keys():
             self.add_persistence_path(org_id=org_id, ensure_exists=True)
@@ -148,6 +150,7 @@ class PersistenceStore(ThreadableRunner):
         #     with self.object_lock:
         #         self.persistence_path[org_id]["sync_needed"] = True
 
+    @logged_method
     def is_dataset_present(self, org_id: str, key: Tuple, value: dict) -> bool:
         temp_key = self.__encode_key(key=key)
         if org_id in self.persistence_path.keys():
@@ -157,6 +160,7 @@ class PersistenceStore(ThreadableRunner):
                     return True
         return False
 
+    @logged_method
     def write_file(self, force_write: bool = False):
         with self.object_lock:
             for org_id, v in self.persistence_path.items():
@@ -164,6 +168,7 @@ class PersistenceStore(ThreadableRunner):
                     with open(v["path"], "w") as f:
                         f.write(dumps(v["data"], indent=1))
 
+    @logged_method
     def __find_datasets_to_evict(self, org_id: str) -> List[str]:
         if self.historical_data_to_maintain == -1:
             return []
@@ -179,12 +184,14 @@ class PersistenceStore(ThreadableRunner):
         # return temp[self.historical_data_to_maintain :]
 
 
+@logged_method
 def sync_to_file(persistence_object: PersistenceStore, flush_to_file: int = 5):
     while persistence_object.sync_runner_status.is_set():
         persistence_object.write_file()
         sleep(flush_to_file)
 
 
+@logged_method
 def current_memory_usage(persistence_object: ThreadableRunner, evaluation_interval: int = 5):
     while persistence_object.sync_runner_status.is_set():
         mem_used = psutil.Process().memory_info().rss

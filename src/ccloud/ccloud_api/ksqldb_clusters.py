@@ -7,7 +7,7 @@ from dateutil import parser
 
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
@@ -58,6 +58,7 @@ class CCloudKsqldbClusterList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud ksqlDB Cluster initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for ksqlDB Cluster for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -67,12 +68,14 @@ class CCloudKsqldbClusterList(CCloudBase):
                 ksqldb_prom_metrics.labels(v.cluster_id, v.env_id, v.kafka_cluster_id).set(1)
         # ksqldb_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         ksqldb_prom_metrics.clear()
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all ksqlDB Cluster from Confluent Cloud")
         for env_item in self.ccloud_envs.env.values():
@@ -100,5 +103,6 @@ class CCloudKsqldbClusterList(CCloudBase):
                 )
                 LOGGER.debug("Found ksqlDB Cluster " + item["id"] + " with name " + item["spec"]["display_name"])
 
+    @logged_method
     def __add_to_cache(self, ksqldb_cluster: CCloudKsqldbCluster) -> None:
         self.ksqldb_clusters[ksqldb_cluster.cluster_id] = ksqldb_cluster

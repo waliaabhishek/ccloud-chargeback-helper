@@ -1,6 +1,8 @@
 import datetime
 import decimal
 
+from helpers import LOGGER, logged_method
+
 decimal.getcontext().prec = 2
 
 from dataclasses import dataclass, field
@@ -29,9 +31,11 @@ class ChargebackColumnNames:
     USAGE_COST = "UsageCost"
     SHARED_COST = "SharedCost"
 
+    @logged_method
     def override_column_names(self, key, value):
         object.__setattr__(self, key, value)
 
+    @logged_method
     def all_column_values(self) -> List:
         return [y for x, y in vars(self).items()]
 
@@ -85,6 +89,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         self.metrics_collector = chargeback_prom_metrics
         self.update(notifier=self.metrics_collector)
 
+    @logged_method
     def update(self, notifier: NotifierAbstract) -> None:
         """This is the Observer class method implementation that helps us step through the next timestamp in sequence.
         The Data for next timestamp is also populated in the Gauge implementation using this method.
@@ -98,6 +103,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         # chargeback_prom_status_metrics.set_timestamp(curr_timestamp=self.curr_export_datetime)
         self.expose_prometheus_metrics(ts_filter=curr_ts)
 
+    @logged_method
     def expose_prometheus_metrics(self, ts_filter: pd.Timestamp):
         """Set and expose the metrics to the prom collector as a Gauge.
 
@@ -105,7 +111,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
             ts_filter (pd.Timestamp): This Timestamp allows us to filter the data from the entire data set
             to a specific timestamp and expose it to the prometheus collector
         """
-        print(f"Currently reading the Chargeback dataset for Timestamp: {ts_filter.to_pydatetime()}")
+        LOGGER.info(f"Currently reading the Chargeback dataset for Timestamp: {ts_filter.to_pydatetime()}")
         # chargeback_prom_status_metrics.clear()
         # chargeback_prom_status_metrics.set(1)
         self.force_clear_prom_metrics()
@@ -127,9 +133,11 @@ class CCloudChargebackHandler(AbstractDataHandler):
                     shared_cost
                 )
 
+    @logged_method
     def force_clear_prom_metrics(self):
         chargeback_prom_metrics.clear()
 
+    @logged_method
     def read_all(self, start_date: datetime.datetime, end_date: datetime.datetime, **kwargs):
         """Iterate through all the timestamps in the datetime range and calculate the chargeback for that timestamp
 
@@ -140,12 +148,14 @@ class CCloudChargebackHandler(AbstractDataHandler):
         for time_slice_item in self._generate_date_range_per_row(start_date=start_date, end_date=end_date):
             self.compute_output(time_slice=time_slice_item)
 
+    @logged_method
     def cleanup_old_data(self, retention_start_date: datetime.datetime):
         """Cleanup the older dataset from the chargeback object and prevent it from using too much memory"""
         for (k1, k2, k3, k4), (_, _) in self.chargeback_dataset.copy().items():
             if k2 < retention_start_date:
                 del self.chargeback_dataset[(k1, k2, k3, k4)]
 
+    @logged_method
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         """Calculate chargeback data fom the next timeslot. This should be used when the current_export_datetime is running very close to the days_per_query end_date."""
         if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, 2):
@@ -158,6 +168,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         self.curr_export_datetime = exposed_timestamp
         self.update(notifier=self.metrics_collector)
 
+    @logged_method
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
 
@@ -175,6 +186,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
             end_datetime=end_datetime,
         )
 
+    @logged_method
     def __add_cost_to_chargeback_dataset(
         self,
         principal: str,
@@ -207,6 +219,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 additional_shared_cost,
             )
 
+    @logged_method
     def get_chargeback_dataset(self):
         temp_ds = []
         for (principal, ts, product_type, env_id), (usage, shared) in self.chargeback_dataset.items():
@@ -222,6 +235,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
             temp_ds.append(temp_dict)
         return temp_ds
 
+    @logged_method
     def get_chargeback_dataframe(self) -> pd.DataFrame:
         """Generate pandas Dataframe for the Chargeback data available in memory within attribute chargeback_dataset
 
@@ -243,6 +257,7 @@ class CCloudChargebackHandler(AbstractDataHandler):
         )
         return temp
 
+    @logged_method
     def compute_output(
         self,
         time_slice: datetime.datetime,

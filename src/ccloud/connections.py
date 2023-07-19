@@ -7,7 +7,7 @@ from urllib import parse
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 
 
 class EndpointURL(Enum):
@@ -36,6 +36,7 @@ class URIDetails:
 
     prometheus_query_range = "/api/v1/query_range"
 
+    @logged_method
     def override_column_names(self, key, value):
         object.__setattr__(self, key, value)
 
@@ -55,6 +56,7 @@ class CCloudConnection:
     def __post_init__(self, in_api_key, in_api_secret) -> None:
         object.__setattr__(self, "http_connection", HTTPBasicAuth(in_api_key, in_api_secret))
 
+    @logged_method
     def get_endpoint_url(self, key="/") -> str:
         if self.base_url is EndpointURL.API_URL:
             return self.uri.API_URL + key
@@ -72,18 +74,27 @@ class CCloudBase:
     def __post_init__(self) -> None:
         self.http_connection = self.in_ccloud_connection.http_connection
 
+    @logged_method
     def override_auth_type_from_yaml(self, auth_dict: Dict):
+        LOGGER.debug(f"Trying to override auth type")
         if auth_dict.get("enable_auth", False):
+            LOGGER.debug(f"Enable Auth Flag is found in the config with value {auth_dict.get('enable_auth', False)}.")
             if auth_dict.get("auth_type") == "HTTPBasicAuth":
+                LOGGER.debug(f"Setting Auth Type as HTTPBasicAuth")
                 self.http_connection = HTTPBasicAuth(**auth_dict.get("auth_args"))
             elif auth_dict.get("auth_type") == "HTTPDigestAuth":
+                LOGGER.debug(f"Setting Auth Type as HTTPDigestAuth")
                 self.http_connection = HTTPDigestAuth(**auth_dict.get("auth_args"))
             else:
                 # Other AUTH Types are not implemented yet.
+                LOGGER.debug(f"Unsupported Auth Type received. Value: {auth_dict.get('enable_auth', False)}")
+                LOGGER.debug(f"Setting Auth Type as None")
                 self.http_connection = None
         else:
+            LOGGER.debug(f"Enable Auth Flag is set to false.")
             self.http_connection = None
 
+    @logged_method
     def read_from_api(self, params={"page_size": 500}, **kwagrs):
         LOGGER.info(f"Reading from API: {self.url}")
         resp = requests.get(url=self.url, auth=self.http_connection, timeout=10, params=params)

@@ -11,7 +11,7 @@ from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 
 
 @dataclass
@@ -39,6 +39,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         self.read_next_dataset(exposed_timestamp=effective_dates.curr_end_date)
         LOGGER.debug(f"Finished Initializing CCloudObjectsHandler")
 
+    @logged_method
     def read_all(self, exposed_timestamp: datetime.datetime = None):
         if self.min_refresh_gap > datetime.datetime.now() - self.last_refresh:
             # TODO: Add Refresh gap as a configurable value in YAML file
@@ -89,9 +90,10 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
             self.last_refresh = datetime.datetime.now()
             LOGGER.info(f"Finished CCloud Object refresh -- {self.last_refresh}")
 
+    @logged_method
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         self.read_all(exposed_timestamp=exposed_timestamp)
-        print(f"Currently reading the Objects dataset for Timestamp: {exposed_timestamp}")
+        LOGGER.info(f"Reading Objects dataset for Timestamp: {exposed_timestamp}")
         self.cc_sa.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_users.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_api_keys.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
@@ -100,6 +102,7 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         self.cc_connectors.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         self.cc_ksqldb_clusters.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         self.cc_sa.force_clear_prom_metrics()
         self.cc_users.force_clear_prom_metrics()
@@ -109,10 +112,12 @@ class CCloudObjectsHandler(AbstractDataHandler, CCloudBase):
         self.cc_connectors.force_clear_prom_metrics()
         self.cc_ksqldb_clusters.force_clear_prom_metrics()
 
+    @logged_method
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         # TODO: Do we want to narrow down the active dataset for the timelines ?
         pass
 
+    @logged_method
     def get_connected_kafka_cluster_id(self, env_id: str, resource_id: str) -> Tuple[List[str], str]:
         cluster_list = []
         error_string = None

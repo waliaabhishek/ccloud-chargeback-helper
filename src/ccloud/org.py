@@ -12,7 +12,7 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
-from helpers import LOGGER, check_pair, sanitize_id
+from helpers import LOGGER, check_pair, logged_method, sanitize_id
 from internal_data_probe import set_current_exposed_date, set_readiness
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
@@ -78,7 +78,7 @@ class CCloudOrg(Observer):
         )
 
         next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
-        print(f"Initial Fetch Date after checking chargeback status in Prometheus: {next_fetch_date}")
+        LOGGER.info(f"Initial Fetch Date after checking chargeback status in Prometheus: {next_fetch_date}")
 
         LOGGER.debug(f"Initializing CCloud Objects Handler for Org ID: {self.org_id}")
         # Initialize the CCloud Objects Handler
@@ -131,6 +131,7 @@ class CCloudOrg(Observer):
         self.attach(notifier=scrape_status_metrics)
         # self.update(notifier=scrape_status_metrics)
 
+    @logged_method
     def update(self, notifier: NotifierAbstract):
         self.exposed_end_date = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
@@ -138,6 +139,9 @@ class CCloudOrg(Observer):
         next_ts_in_dt = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime, is_notifier_update=True)
         if next_ts_in_dt < self.exposed_end_date:
             if next_ts_in_dt == self.exposed_metrics_datetime:
+                LOGGER.debug(
+                    f"Next Fetch Date is same as the current fetch date. Clearing out the stats to prevent republishing of the same data."
+                )
                 notifier.clear()
                 self.objects_handler.force_clear_prom_metrics()
                 self.chargeback_handler.force_clear_prom_metrics()
@@ -146,25 +150,27 @@ class CCloudOrg(Observer):
                 notifier.clear()
                 notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
                 # self.expose_prometheus_metrics(ts_filter=next_ts)
-                print(f"Refreshing CCloud Existing Objects Data")
+                LOGGER.info(f"Refreshing CCloud Existing Objects Data")
                 self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
                 notifier.labels("ccloud_objects").set(1)
-                print(f"Gathering Metrics API Data")
+                LOGGER.info(f"Gathering Metrics API Data")
                 self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                print(f"Checking for new Billing CSV Files")
+                LOGGER.info(f"Checking for new Billing CSV Files")
                 self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                print("Calculating next dataset for chargeback")
+                LOGGER.info("Calculating next dataset for chargeback")
                 self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
                 notifier.labels("billing_chargeback").set(1)
                 self.exposed_metrics_datetime = next_ts_in_dt
+                LOGGER.info(f"Fetch Date: {next_ts_in_dt}")
                 set_current_exposed_date(exposed_date=next_ts_in_dt)
                 set_readiness(readiness_flag=True)
         else:
-            print(
+            LOGGER.info(
                 f"""Chargeback calculation is fully caught up to the point where it needs to be. 
                 More processing will continue after the day passes and the data for the day is finalized in the Billing API."""
             )
 
+    @logged_method
     def locate_next_fetch_date(
         self, start_date: datetime.datetime, is_notifier_update: bool = False
     ) -> datetime.datetime:
@@ -180,7 +186,7 @@ class CCloudOrg(Observer):
         # Add a reset intelligence marker to rewind just in case any time slot is missed and we need to go back in time to
         # fetch the data set again. Yes, this will be a little bit of a performance hit, but it is better than missing data.
         if self.reset_counter > 50:
-            print("Rewinding back to the start date to ensure no data is missed.")
+            LOGGER.debug("Rewinding back to the start date to ensure no data is missed.")
             self.reset_counter = 0
             next_ts_in_dt = self.epoch_start_date
             is_notifier_update = False
@@ -222,13 +228,16 @@ class CCloudOrgList:
         LOGGER.debug("marking readiness")
         set_readiness(readiness_flag=True)
 
+    @logged_method
     def __add_org_to_cache(self, ccloud_org: CCloudOrg) -> None:
         self.orgs[ccloud_org.org_id] = ccloud_org
 
+    @logged_method
     def execute_requests(self):
         for org_item in self.orgs.values():
             org_item.execute_requests()
 
+    @logged_method
     def run_calculations(self):
         for org_id, org in self.orgs.items():
             org.run_calculations()

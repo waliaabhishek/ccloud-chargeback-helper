@@ -5,7 +5,7 @@ from typing import Dict
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -43,6 +43,7 @@ class CCloudEnvironmentList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud Environment List initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for Environment List for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -52,14 +53,16 @@ class CCloudEnvironmentList(CCloudBase):
                 env_prom_metrics.labels(v.env_id, v.display_name).set(1)
         # env_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         env_prom_metrics.clear()
 
     def __str__(self):
-        print("Found " + str(len(self.env)) + " environments.")
+        LOGGER.debug("Found " + str(len(self.env)) + " environments.")
         for v in self.env.values():
             print("{:<15} {:<40}".format(v.env_id, v.display_name))
 
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all Environment List from Confluent Cloud")
         for item in self.read_from_api(params=params):
@@ -95,9 +98,11 @@ class CCloudEnvironmentList(CCloudBase):
         # else:
         #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
+    @logged_method
     def __add_env_to_cache(self, ccloud_env: CCloudEnvironment) -> None:
         self.env[ccloud_env.env_id] = ccloud_env
 
     # Read/Find one Cluster from the cache
+    @logged_method
     def find_environment(self, env_id):
         return self.env[env_id]

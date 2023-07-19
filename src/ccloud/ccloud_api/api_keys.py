@@ -6,7 +6,7 @@ from typing import Dict, List
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
@@ -45,6 +45,7 @@ class CCloudAPIKeyList(CCloudBase):
     # This init function will initiate the base object and then check CCloud
     # for all the active API Keys. All API Keys that are listed in CCloud are
     # the added to a cache.
+    @logged_method
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
         self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.api_keys)
@@ -63,12 +64,14 @@ class CCloudAPIKeyList(CCloudBase):
                 api_key_prom_metrics.labels(v.api_key, v.owner_id, v.cluster_id).set(1)
         # api_key_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         api_key_prom_metrics.clear()
 
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all API Keys from Confluent Cloud")
         for item in self.read_from_api(params=params):
@@ -111,9 +114,11 @@ class CCloudAPIKeyList(CCloudBase):
         # else:
         #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
+    @logged_method
     def __add_to_cache(self, api_key: CCloudAPIKey) -> None:
         self.api_keys[api_key.api_key] = api_key
 
+    @logged_method
     def find_keys_with_sa(self, sa_id: str) -> List[CCloudAPIKey]:
         output = []
         for item in self.api_keys.values():
@@ -121,6 +126,7 @@ class CCloudAPIKeyList(CCloudBase):
                 output.append(item)
         return output
 
+    @logged_method
     def find_sa_count_for_clusters(self, cluster_id: str) -> Dict[str, int]:
         out = {}
         for item in self.api_keys.values():
@@ -129,6 +135,7 @@ class CCloudAPIKeyList(CCloudBase):
                 out[item.owner_id] = count + 1
         return out
 
+    @logged_method
     def find_keys_with_sa_and_cluster(self, sa_id: str, cluster_id: str) -> List[CCloudAPIKey]:
         output = []
         for item in self.api_keys.values():

@@ -5,7 +5,7 @@ from typing import Dict
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -44,6 +44,7 @@ class CCloudUserAccountList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud Users initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for Users for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -53,6 +54,7 @@ class CCloudUserAccountList(CCloudBase):
                 users_prom_metrics.labels(v.resource_id, v.name).set(1)
         # users_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         users_prom_metrics.clear()
 
@@ -61,6 +63,7 @@ class CCloudUserAccountList(CCloudBase):
             print("{:<15} {:<40} {:<50}".format(item.resource_id, item.name, item.description))
 
     # Read ALL Service Account details from Confluent Cloud
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all CCloud Users from Confluent Cloud")
         for item in self.read_from_api(params=params):
@@ -98,10 +101,12 @@ class CCloudUserAccountList(CCloudBase):
         # else:
         #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
+    @logged_method
     def __add_to_cache(self, ccloud_user: CCloudUserAccount) -> None:
         self.users[ccloud_user.resource_id] = ccloud_user
 
     # Read/Find one SA from the cache
+    @logged_method
     def find_user(self, ccloud_user):
         for item in self.users.values():
             if ccloud_user == item.name:

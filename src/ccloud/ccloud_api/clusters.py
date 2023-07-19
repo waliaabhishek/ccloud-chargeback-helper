@@ -4,7 +4,7 @@ from typing import Dict
 
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -48,6 +48,7 @@ class CCloudClusterList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud Kafka Clusters initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for Kafka Clusters for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -57,9 +58,11 @@ class CCloudClusterList(CCloudBase):
             kafka_cluster_prom_metrics.labels(v.cluster_id, v.env_id, v.cluster_name).set(1)
         # kafka_cluster_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         kafka_cluster_prom_metrics.clear()
 
+    @logged_method
     def __str__(self):
         for v in self.clusters.values():
             print(
@@ -68,6 +71,7 @@ class CCloudClusterList(CCloudBase):
                 )
             )
 
+    @logged_method
     def read_all(self, params={"page_size": 100}):
         LOGGER.debug("Reading all Kafka Clusters from Confluent Cloud")
         for env_item in self.ccloud_envs.env.values():
@@ -116,9 +120,11 @@ class CCloudClusterList(CCloudBase):
         # else:
         #     raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
 
+    @logged_method
     def __add_to_cache(self, ccloud_cluster: CCloudCluster) -> None:
         self.clusters[ccloud_cluster.cluster_id] = ccloud_cluster
 
     # Read/Find one Cluster from the cache
+    @logged_method
     def find_cluster(self, cluster_id):
         return self.clusters[cluster_id]

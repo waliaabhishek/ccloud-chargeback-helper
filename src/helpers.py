@@ -9,6 +9,18 @@ ENV_PREFIX = "env::"
 pretty = pprint.PrettyPrinter(indent=2)
 
 
+def logged_method(func):
+    @wraps(func)
+    def add_entry_exit_logs(*args, **kwargs):
+        LOGGER.debug(f"Begin method execution:\t\t{str(func.__name__)}")
+        ret = func(*args, **kwargs)
+        LOGGER.debug(f"End method execution:\t\t{str(func.__name__)}")
+        return ret
+
+    return add_entry_exit_logs
+
+
+@logged_method
 def get_env_var(var_name: str):
     if environ.get(var_name.strip()) is None:
         raise Exception("Cannot find environment variable " + var_name)
@@ -16,6 +28,7 @@ def get_env_var(var_name: str):
         return environ[var_name]
 
 
+@logged_method
 def find_replace_env_vars(input: str, env_prefix=ENV_PREFIX):
     if input.startswith(env_prefix):
         input = input.split(env_prefix)[1]
@@ -39,6 +52,7 @@ def env_parse_replace(input):
                 input[k] = find_replace_env_vars(v)
 
 
+@logged_method
 def ensure_path(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
@@ -47,19 +61,23 @@ def ensure_path(path: str):
     #     print(f"Path already present: {path}")
 
 
+@logged_method
 def sanitize_id(input: str) -> str:
     return input.strip().replace(" ", "_").lower()
 
 
+@logged_method
 def sanitize_metric_name(input: str) -> str:
     return input.strip().replace("/", "_").replace(" ", "_").replace(".", "_")
 
 
+@logged_method
 def mandatory_check(key, value):
     if not value:
         raise Exception(key + " is a mandatory attribute. Please populate to ensure correct functionality.")
 
 
+@logged_method
 def check_pair(key1Name, key1Value, key2Name, key2Value):
     if (key1Value and not key2Value) or (not key1Value and key2Value) or (not key1Value and not key2Value):
         raise Exception("Both " + key1Name + " & " + key2Name + " must be present in the configuration.")
@@ -70,24 +88,13 @@ def printline():
     print("=" * 80)
 
 
-def logged_method(func):
-    @wraps(func)
-    def add_entry_exit_logs(*args, **kwargs):
-        print(f"Begin method execution:\t\t{str(func.__name__)}")
-        ret = func(*args, **kwargs)
-        print(f"End method execution:\t\t{str(func.__name__)}")
-        return ret
-
-    return add_entry_exit_logs
-
-
 def timed_method(func):
     @wraps(func)
     def add_timer(*args, **kwargs):
         start = timeit.default_timer()
         ret = func(*args, **kwargs)
         stop = timeit.default_timer()
-        print(f"Time to execute method:\t\t{func.__name__}:\t\t\t", stop - start)
+        LOGGER.debug(f"Time to execute method:\t\t{func.__name__}:\t\t\t", stop - start)
         return ret
 
     return add_timer
@@ -102,6 +109,7 @@ logging.basicConfig(level=logging.INFO, format="{asctime} {name:25s} {levelname:
 LOGGER = logging.getLogger("ChargebackHandler")
 
 
+@logged_method
 def set_logger_level(log_level: int):
     global LOGGER
     LOGGER.setLevel(log_level)

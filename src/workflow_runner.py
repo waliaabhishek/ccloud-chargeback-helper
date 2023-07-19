@@ -20,7 +20,7 @@ class AppProps:
     relative_output_dir: str = field(default="output")
     loglevel: str = field(default="INFO")
 
-
+@logged_method
 def get_app_props(in_config: Dict):
     global APP_PROPS
 
@@ -62,7 +62,7 @@ class WorkflowStage(Enum):
     CALCULATE_OUTPUT = auto()
     SLEEP = auto()
 
-
+@logged_method
 def try_parse_config_file(config_yaml_path: str) -> Dict:
     LOGGER.debug("Trying to parse Configuration File: " + config_yaml_path)
     with open(config_yaml_path, "r") as config_file:
@@ -73,7 +73,7 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
     LOGGER.debug("Successfully parsed Environment Variables")
     return core_config
 
-
+@logged_method
 def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # This will try to refresh and read all the data that might be new from the last gather phase.
     # Org Object has built in safeguard to prevent repetitive gathering for the same datasets.
@@ -82,11 +82,11 @@ def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # for billing CSV files --> if the data is already read in memory, it wont be read in again.
     ccloud_orgs.execute_requests()
 
-
+@logged_method
 def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
     ccloud_orgs.run_calculations()
 
-
+@logged_method
 def execute_workflow(arg_flags: Namespace):
     LOGGER.info("Starting Workflow Runner")
     LOGGER.debug("Debug Mode is ON")
@@ -143,6 +143,6 @@ def execute_workflow(arg_flags: Namespace):
         # Begin shutdown process.
         for item in thread_configs:
             item[0].stop_sync()
-        print("Waiting for State Sync ticker for Final sync before exit")
+        LOGGER.info("Waiting for State Sync ticker for Final sync before exit")
         for item in threads_list:
             item.join()

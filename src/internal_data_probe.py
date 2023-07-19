@@ -1,12 +1,15 @@
 from datetime import datetime
 from flask import Flask
 
+from helpers import logged_method
+
 internal_api = Flask(__name__)
 
 READINESS_FLAG = False
 CURRENT_EXPOSED_DATE: datetime = None
 
 
+@logged_method
 def set_readiness(readiness_flag: bool):
     global READINESS_FLAG
     READINESS_FLAG = readiness_flag

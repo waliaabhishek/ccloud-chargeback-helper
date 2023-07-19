@@ -8,6 +8,7 @@ import requests
 
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
+from helpers import LOGGER, logged_method
 
 
 class MetricsAPIPrometheusQueries:
@@ -49,8 +50,10 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         # Initialize the super classes to set the internal attributes
         AbstractDataHandler.__init__(self, start_date=self.start_date)
         CCloudBase.__post_init__(self)
+        LOGGER.info("Setting up Auth Type Supplied by the config file")
         self.override_auth_type_from_yaml(self.in_connection_auth)
         self.url = parse.urljoin(base=in_prometheus_url, url=in_prometheus_query_endpoint)
+        LOGGER.debug(f"Prometheus URL: {self.url}")
         end_date = self.start_date + datetime.timedelta(days=self.days_per_query)
         # Set up params for querying the Billing API
         for item in [
@@ -59,7 +62,9 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         ]:
             self.read_all(start_date=self.start_date, end_date=end_date, query_type=item)
         self.last_available_date = end_date
+        LOGGER.debug(f"Finished Initializing PrometheusMetricsDataHandler")
 
+    @logged_method
     def read_all(
         self,
         start_date: datetime.datetime,
@@ -74,13 +79,16 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
         post_body["end"] = f'{end_date.replace(tzinfo=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}+00:00'
         post_body["step"] = params["step"]
         post_body["query"] = METRICS_API_PROMETHEUS_QUERIES.__getattribute__(query_type)
+        LOGGER.debug(f"Post Body: {post_body}")
         resp = requests.post(
             url=self.url, auth=self.http_connection, headers=headers, data=post_body, **self.in_connection_kwargs
         )
         if resp.status_code == 200:
+            LOGGER.debug("Received 200 OK from API")
             out_json = resp.json()
             if out_json is not None and out_json["data"] is not None:
                 if out_json["data"]["result"]:
+                    LOGGER.info(f"Found {len(out_json['data']['result'])} items in API response.")
                     for item in out_json["data"]["result"]:
                         temp_data = [
                             {
@@ -118,9 +126,12 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
                                         METRICS_API_COLUMNS.principal_id,
                                     ],
                                 )
+            else:
+                LOGGER.debug("No data found in the API response. Response Received is: " + str(out_json))
         else:
             raise Exception("Could not connect to Prometheus Server. Please check your settings. " + resp.text)
 
+    @logged_method
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         if self.is_next_fetch_required(exposed_timestamp, self.last_available_date, next_fetch_within_days=2):
             effective_dates = self.calculate_effective_dates(
@@ -140,6 +151,7 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
                 start_datetime=effective_dates.retention_start_date, end_datetime=effective_dates.retention_end_date
             )
 
+    @logged_method
     def get_dataset_for_timerange(self, start_datetime: datetime.datetime, end_datetime: datetime.datetime, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
 
@@ -157,6 +169,7 @@ class PrometheusMetricsDataHandler(AbstractDataHandler, CCloudBase):
             end_datetime=end_datetime,
         )
 
+    @logged_method
     def get_dataset_for_time_slice(self, time_slice: pd.Timestamp, **kwargs):
         """Wrapper over the internal method so that cross-imports are not necessary
 

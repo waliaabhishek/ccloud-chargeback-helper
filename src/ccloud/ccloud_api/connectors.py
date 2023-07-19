@@ -10,7 +10,7 @@ from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 
@@ -61,6 +61,7 @@ class CCloudConnectorList(CCloudBase):
         self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
         LOGGER.info("CCloud Kafka Connectors initialized successfully")
 
+    @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
         LOGGER.debug("Exposing Prometheus Metrics for Kafka Connector for timestamp: " + str(exposed_timestamp))
         self.force_clear_prom_metrics()
@@ -69,10 +70,11 @@ class CCloudConnectorList(CCloudBase):
             # TODO: created datetime is missing from connector creation date.
             kafka_connectors_prom_metrics.labels(v.connector_id, v.cluster_id, v.env_id).set(1)
 
+    @logged_method
     def force_clear_prom_metrics(self):
         kafka_connectors_prom_metrics.clear()
 
-
+    @logged_method
     def __str__(self):
         for v in self.cluster.values():
             print(
@@ -81,6 +83,7 @@ class CCloudConnectorList(CCloudBase):
                 )
             )
 
+    @logged_method
     def read_all(self):
         LOGGER.debug("Reading all Kafka Connector from Confluent Cloud")
         for kafka_cluster in self.ccloud_kafka_clusters.clusters.values():
@@ -110,6 +113,7 @@ class CCloudConnectorList(CCloudBase):
                 f"Cannot fetch the Connector details. API Error Code: {resp.status_code} API Error Message: {resp.text}"
             )
 
+    @logged_method
     def read_connector_config(self, kafka_cluster: dict, connector_details:dict):
         connector_id = str(connector_details["id"]["id"]).strip().replace(" ", "")
         connector_config = connector_details["info"]["config"]
@@ -150,6 +154,7 @@ class CCloudConnectorList(CCloudBase):
             )
         )
 
+    @logged_method
     def __add_to_cache(self, connector: CCloudConnector) -> None:
         self.connectors[f"{connector.connector_id}"] = connector
 
@@ -161,5 +166,6 @@ class CCloudConnectorList(CCloudBase):
     #         return self.ccloud_users.users[key.owner_id]
 
     # Read/Find one Cluster from the cache
+    @logged_method
     def find_cluster(self, cluster_id):
         return self.cluster[cluster_id]

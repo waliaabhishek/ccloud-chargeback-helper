@@ -6,7 +6,7 @@ from typing import Tuple
 
 import pandas as pd
 
-from helpers import LOGGER
+from helpers import LOGGER, logged_method
 
 
 @dataclass
@@ -35,6 +35,7 @@ class AbstractDataHandler(ABC):
     def read_next_dataset(self, exposed_timestamp: datetime.datetime):
         pass
 
+    @logged_method
     def _generate_date_range_per_row(
         self,
         start_date: datetime.datetime,
@@ -54,6 +55,7 @@ class AbstractDataHandler(ABC):
         end_date = end_date - datetime.timedelta(minutes=1)
         return pd.date_range(start_date, end_date, freq=freq)
 
+    @logged_method
     def _generate_next_timestamp(
         self, curr_date: datetime.datetime, freq: str = "1H", position: int = 1
     ) -> pd.Timestamp:
@@ -72,6 +74,7 @@ class AbstractDataHandler(ABC):
         start_date = curr_date.replace(minute=0, microsecond=0, tzinfo=datetime.timezone.utc)
         return pd.date_range(start_date, freq=freq, periods=2)[position]
 
+    @logged_method
     def _get_dataset_for_timerange(
         self,
         dataset: pd.DataFrame,
@@ -107,6 +110,7 @@ class AbstractDataHandler(ABC):
         else:
             return (None, True)
 
+    @logged_method
     def calculate_effective_dates(
         self,
         last_available_date: datetime.datetime,
@@ -128,6 +132,7 @@ class AbstractDataHandler(ABC):
             retention_end_date,
         )
 
+    @logged_method
     def is_next_fetch_required(
         self,
         curr_exposed_datetime: datetime.datetime,
@@ -144,6 +149,7 @@ class AbstractDataHandler(ABC):
             LOGGER.debug("Next fetch is not required as the data is available in memory")
             return False
 
+    @logged_method
     def _get_dataset_for_exact_timestamp(
         self, dataset: pd.DataFrame, ts_column_name: str, time_slice: pd.Timestamp, **kwargs
     ) -> Tuple[pd.DataFrame | None, bool]:
@@ -166,5 +172,6 @@ class AbstractDataHandler(ABC):
         else:
             return (None, True)
 
+    @logged_method
     def execute_requests(self, exposed_timestamp: datetime.datetime):
         self.read_next_dataset(exposed_timestamp=exposed_timestamp)
