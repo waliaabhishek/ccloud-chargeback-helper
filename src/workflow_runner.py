@@ -11,7 +11,7 @@ import yaml
 
 import internal_data_probe
 from ccloud.org import CCloudOrgList
-from helpers import env_parse_replace, logged_method, set_logger_level
+from helpers import env_parse_replace, logged_method, set_breadcrumb_flag, set_logger_level
 from storage_mgmt import COMMON_THREAD_RUNNER, current_memory_usage
 
 LOGGER = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def get_app_props(in_config: Dict):
         LOGGER.debug("System Configuration found. Using values from config file.")
         config: Dict = in_config["system"]
         LOGGER.debug("Parsing loglevel from config file")
-        logLvl = config.get("loglevel", "INFO").upper()
+        logLvl = config.get("log_level", "INFO").upper()
         match logLvl:
             case "DEBUG":
                 LOGGER.info("Setting loglevel to DEBUG")
@@ -52,6 +52,9 @@ def get_app_props(in_config: Dict):
                 LOGGER.info(f"Cannot understand log level {logLvl}. Setting loglevel to INFO")
                 loglevel = logging.INFO
         set_logger_level(loglevel)
+        breadcrumbs = config.get("enable_method_breadcrumbs", False)
+        breadcrumbs = bool(breadcrumbs if breadcrumbs is True else False)
+        set_breadcrumb_flag(breadcrumbs)
         LOGGER.info("Parsing Core Application Properties")
         APP_PROPS = AppProps(
             days_in_memory=config.get("days_in_memory", 7),

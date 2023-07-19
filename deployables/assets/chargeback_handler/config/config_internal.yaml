@@ -2,7 +2,8 @@ config:
   system:
     days_in_memory: 7
     output_dir_name: "output"
-    loglevel: "DEBUG"
+    log_level: "DEBUG"
+    enable_method_breadcrumbs: False
   org_details:
     - id: CCloud Org 1
       ccloud_details:

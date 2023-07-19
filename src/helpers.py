@@ -19,14 +19,22 @@ def set_logger_level(log_level: int):
 
 
 LOGGER = logging.getLogger(__name__)
+METHOD_BREADCRUMBS = False
+
+
+def set_breadcrumb_flag(breadcrumbs: bool):
+    global METHOD_BREADCRUMBS
+    METHOD_BREADCRUMBS = breadcrumbs
 
 
 def logged_method(func):
     @wraps(func)
     def add_entry_exit_logs(*args, **kwargs):
-        LOGGER.debug(f"Begin method execution:\t\t{str(func.__name__)}")
+        if METHOD_BREADCRUMBS:
+            LOGGER.info(f"Begin method execution:\t\t{str(func.__name__)}")
         ret = func(*args, **kwargs)
-        LOGGER.debug(f"End method execution:\t\t{str(func.__name__)}")
+        if METHOD_BREADCRUMBS:
+            LOGGER.info(f"End method execution:\t\t{str(func.__name__)}")
         return ret
 
     return add_entry_exit_logs
