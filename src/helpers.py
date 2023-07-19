@@ -8,6 +8,18 @@ from os import environ
 ENV_PREFIX = "env::"
 pretty = pprint.PrettyPrinter(indent=2)
 
+# logging.basicConfig(level=logging.INFO, format="{asctime} {name:25s} {levelname:8s} {message}", style="{")
+LOG_LEVEL = logging.INFO
+
+
+def set_logger_level(log_level: int):
+    global LOG_LEVEL
+    LOG_LEVEL = log_level
+    logging.basicConfig(level=LOG_LEVEL, format="{asctime} {name:25s} {levelname:8s} {message}", style="{", force=True)
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 def logged_method(func):
     @wraps(func)
@@ -104,15 +116,6 @@ def timed_method(func):
 #     "request_bytes": sanitize_metric_name("io.confluent.kafka.server/request_bytes"),
 #     "response_bytes": sanitize_metric_name("io.confluent.kafka.server/response_bytes"),
 # }
-
-logging.basicConfig(level=logging.INFO, format="{asctime} {name:25s} {levelname:8s} {message}", style="{")
-LOGGER = logging.getLogger("ChargebackHandler")
-
-
-@logged_method
-def set_logger_level(log_level: int):
-    global LOGGER
-    LOGGER.setLevel(log_level)
 
 
 if __name__ == "__main__":

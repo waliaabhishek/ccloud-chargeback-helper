@@ -1,10 +1,6 @@
 import datetime
 import decimal
-
-from helpers import LOGGER, logged_method
-
-decimal.getcontext().prec = 2
-
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -18,8 +14,11 @@ from data_processing.data_handlers.prom_metrics_api_handler import (
     PrometheusMetricsDataHandler,
 )
 from data_processing.data_handlers.types import AbstractDataHandler
+from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ChargebackColumnNames:

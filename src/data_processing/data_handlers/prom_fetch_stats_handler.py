@@ -1,10 +1,14 @@
 import datetime
+import logging
 from dataclasses import InitVar, dataclass, field
-from urllib import parse
 from enum import Enum, auto
+from urllib import parse
+
 import requests
 
-from helpers import LOGGER, logged_method
+from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MetricsAPIPrometheusStatusQueries:

@@ -1,4 +1,5 @@
 import datetime
+import logging
 from dataclasses import InitVar, dataclass, field
 from time import sleep
 from typing import Dict
@@ -10,8 +11,10 @@ from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
-from helpers import LOGGER, logged_method
+from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

@@ -1,4 +1,5 @@
 import datetime
+import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import List, Tuple
@@ -8,9 +9,11 @@ import pandas as pd
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.types import AbstractDataHandler
-from helpers import LOGGER, logged_method
+from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract
+
+LOGGER = logging.getLogger(__name__)
 
 
 class BillingAPIColumnNames:

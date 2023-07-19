@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
@@ -6,7 +7,10 @@ from time import sleep
 from typing import Dict, List, Tuple
 
 import psutil
+
 from helpers import logged_method, sanitize_metric_name
+
+LOGGER = logging.getLogger(__name__)
 
 # class DirType(Enum):
 #     MetricsData = auto()

@@ -1,7 +1,11 @@
+import logging
 from datetime import datetime
+
 from flask import Flask
 
 from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 internal_api = Flask(__name__)
 

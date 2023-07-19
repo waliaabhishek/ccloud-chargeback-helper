@@ -1,4 +1,5 @@
 import datetime
+import logging
 import pprint
 from dataclasses import InitVar, dataclass, field
 from typing import Dict
@@ -7,10 +8,11 @@ from dateutil import parser
 
 from ccloud.ccloud_api.environments import CCloudEnvironmentList
 from ccloud.connections import CCloudBase
-from helpers import LOGGER, logged_method
+from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
 
 pp = pprint.PrettyPrinter(indent=2)
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

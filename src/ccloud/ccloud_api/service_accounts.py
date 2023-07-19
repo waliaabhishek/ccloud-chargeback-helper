@@ -1,12 +1,15 @@
-from dataclasses import InitVar, dataclass, field
 import datetime
+import logging
+from dataclasses import InitVar, dataclass, field
 from typing import Dict
 
 from dateutil import parser
 
 from ccloud.connections import CCloudBase
-from helpers import LOGGER, logged_method
+from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

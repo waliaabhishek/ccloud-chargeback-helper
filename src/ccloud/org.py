@@ -1,10 +1,10 @@
-from copy import deepcopy
 import datetime
+import logging
+from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from typing import Dict, List
 
 import pandas as pd
-
 
 from ccloud.connections import CCloudConnection, EndpointURL
 from data_processing.data_handlers.billing_api_handler import CCloudBillingHandler
@@ -12,10 +12,13 @@ from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandle
 from data_processing.data_handlers.chargeback_handler import CCloudChargebackHandler
 from data_processing.data_handlers.prom_fetch_stats_handler import PrometheusStatusMetricsDataHandler, ScrapeType
 from data_processing.data_handlers.prom_metrics_api_handler import PrometheusMetricsDataHandler
-from helpers import LOGGER, check_pair, logged_method, sanitize_id
+from helpers import logged_method, sanitize_id
 from internal_data_probe import set_current_exposed_date, set_readiness
 from prometheus_processing.custom_collector import TimestampedCollector
 from prometheus_processing.notifier import NotifierAbstract, Observer
+
+LOGGER = logging.getLogger(__name__)
+
 
 scrape_status_metrics = TimestampedCollector(
     "confluent_cloud_custom_scrape_status",

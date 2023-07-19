@@ -1,3 +1,4 @@
+import logging
 from dataclasses import InitVar, dataclass, field
 from enum import Enum, auto
 from time import sleep
@@ -7,7 +8,9 @@ from urllib import parse
 import requests
 from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
-from helpers import LOGGER, logged_method
+from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EndpointURL(Enum):

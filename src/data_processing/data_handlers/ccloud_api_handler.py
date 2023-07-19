@@ -1,4 +1,5 @@
 import datetime
+import logging
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -11,7 +12,9 @@ from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
-from helpers import LOGGER, logged_method
+from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

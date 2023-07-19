@@ -1,17 +1,20 @@
+import logging
+import threading
 from argparse import Namespace
 from dataclasses import dataclass, field
 from enum import Enum, auto
-import logging
-import threading
 from time import sleep
 from typing import Dict
+
 import prometheus_client
 import yaml
 
-from ccloud.org import CCloudOrgList
-from helpers import LOGGER, env_parse_replace, logged_method, set_logger_level, timed_method
 import internal_data_probe
+from ccloud.org import CCloudOrgList
+from helpers import env_parse_replace, logged_method, set_logger_level
 from storage_mgmt import COMMON_THREAD_RUNNER, current_memory_usage
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)

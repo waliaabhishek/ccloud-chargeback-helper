@@ -1,8 +1,12 @@
 import datetime
+import logging
 
 from prometheus_client import Gauge
-from helpers import LOGGER, logged_method
+
+from helpers import logged_method
 from prometheus_processing.notifier import NotifierAbstract
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TimestampedCollector(NotifierAbstract, Gauge):

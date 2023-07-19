@@ -1,4 +1,5 @@
 import datetime
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import NoneType
@@ -6,7 +7,9 @@ from typing import Tuple
 
 import pandas as pd
 
-from helpers import LOGGER, logged_method
+from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass

@@ -1,4 +1,5 @@
 import datetime
+import logging
 from dataclasses import InitVar, dataclass, field
 from typing import Dict
 from urllib import parse
@@ -8,7 +9,9 @@ import requests
 
 from ccloud.connections import CCloudBase
 from data_processing.data_handlers.types import AbstractDataHandler
-from helpers import LOGGER, logged_method
+from helpers import logged_method
+
+LOGGER = logging.getLogger(__name__)
 
 
 class MetricsAPIPrometheusQueries:
