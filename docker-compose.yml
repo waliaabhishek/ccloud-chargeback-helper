@@ -55,7 +55,7 @@ services:
     image: prom/prometheus:v2.44.0
     container_name: prometheus_feeder
     entrypoint: /bin/sh
-    tty: true
+    # tty: true
     command:
       - -c 
       - "chmod +x /collector/collector.sh && /collector/collector.sh"
@@ -70,7 +70,7 @@ services:
       # This is the datastore location for the above prometheus server so that the aggregated dataset can be stored there. 
       - ./deployables/datastore/prometheus_for_chargeback:/prometheus
     depends_on:
-      - ccloud_chargeback_handler
+      - grafana
   grafana:
     image: grafana/grafana:10.0.1
     container_name: grafana
@@ -85,4 +85,4 @@ services:
       # Grafana dashboards location
       - ./deployables/assets/grafana/provisioning/:/etc/grafana/provisioning
     depends_on:
-      - prometheus_feeder
+      - ccloud_chargeback_handler
