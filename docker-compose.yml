@@ -1,21 +1,88 @@
-version: "2.3"
+version: "3"
 services:
-  chargeback_model:
-    image: ccloud_chargeback_model
-    container_name: chargeback_model
+  ccloud_chargeback_handler:
+    image: ccloud_chargeback_handler
+    container_name: ccloud_chargeback_handler
     # cpus: 1
     restart: "no"
     volumes:
-    # The Output folder is the folder where you want it to aggregate the Metrics API data.
-    # The folder structure will be auto created on the first run. You can then add the Billing CSV to the Billing folder for the specific org(if using multiple) to get the split output.
-      - ./output:/usr/src/app/output
     # This is the folder which you can use to override the pre-coded config file. The internally available file still needs the environment variables to be configured with the API Keys for access. 
     # No credentials are hard coded into the code at all, so if you do not provide any access credentials, the code will not work.
-      - ./config:/user_config
+      - ./deployables/assets/chargeback_handler/config/config_internal.yaml:/user_config/config.yaml
+    command:
+    # The below command switch will alllow you to specify your custom config file.
+    # The /user_config/config.yaml file is the default config file which is used if no config file is specified.
+    - "--config-file"
+    - "/user_config/config.yaml"
     environment:
+        # The below environment variables are required for the code to work.
+        # Billing API Key & Secret Injection
       - CCLOUD_BILLING_API_KEY=${CCLOUD_BILLING_API_KEY}
       - CCLOUD_BILLING_API_SECRET=${CCLOUD_BILLING_API_SECRET}
-    # command: [ # The below command switch will alllow you to specify your custom config file. 
-    #            # The internally sourced config file relies on the ENV vars and only fetches the Chargeback related requests
-    #           "--config-file","/user_config/config.yaml",
-    # ]
+      # Metrics API server 
+      - METRICS_API_SERVER_URL=${METRICS_API_SERVER_URL}
+      - METRICS_API_SERVER_ENABLE_AUTH=${METRICS_API_SERVER_ENABLE_AUTH}
+      - METRICS_API_SERVER_AUTH_TYPE=${METRICS_API_SERVER_AUTH_TYPE}
+      - METRICS_API_SERVER_AUTH_USERNAME=${METRICS_API_SERVER_AUTH_USERNAME}
+      - METRICS_API_SERVER_AUTH_PASSWORD=${METRICS_API_SERVER_AUTH_PASSWORD}
+      - CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090
+    ports:
+      # Exposed_port:Internal_port
+      - 8000:8000
+      - 8001:8001
+    depends_on:
+      - prometheus_for_chargeback
+  prometheus_for_chargeback:
+    image: prom/prometheus:v2.44.0
+    container_name: prometheus_for_chargeback
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=2y"
+      - "--storage.tsdb.retention.size=1TB"
+      # # Enable debug for prometheus pod
+      # # - "--log.level=debug"
+    ports:
+      # Exposed_port:Internal_port
+      - 9091:9090
+    volumes:
+      # Prom Config file (The file is empty as the scrape is executed via promtool)
+      - ./deployables/assets/prometheus_for_chargeback/prometheus_chargeback.yml:/etc/prometheus/prometheus.yml
+      # This is the datastore location so that you do not lose data when the container is restarted.
+      - ./deployables/datastore/prometheus_for_chargeback:/prometheus
+      # - ./deployables/assets/prometheus_for_chargeback/collector.sh:/collector/collector.sh
+  prometheus_feeder:
+    image: prom/prometheus:v2.44.0
+    container_name: prometheus_feeder
+    entrypoint: /bin/sh
+    # tty: true
+    command:
+      - -c 
+      - "chmod +x /collector/collector.sh && /collector/collector.sh"
+    environment:
+      - CHARGEBACK_METRICS_URL=http://ccloud_chargeback_handler:8000
+      - CHARGEBACK_READINESS_PROBE_URL=http://ccloud_chargeback_handler:8001
+    volumes:
+      # Promtool executable to collect old timestamped metrics and feed them to the prometheus server for compaction and aggregation.
+      # This needs the Prometheus server datastore to be attached to this container so that it can create the chunks in there. 
+      # The chunks are then read by the Prometheus server and aggregated.
+      - ./deployables/assets/prometheus_for_chargeback/collector.sh:/collector/collector.sh
+      # This is the datastore location for the above prometheus server so that the aggregated dataset can be stored there. 
+      - ./deployables/datastore/prometheus_for_chargeback:/prometheus
+    depends_on:
+      - grafana
+  grafana:
+    image: grafana/grafana:10.0.1
+    container_name: grafana
+    environment:
+      - "GF_SECURITY_ADMIN_USER=admin"
+      - "GF_SECURITY_ADMIN_PASSWORD=password"
+      - "GF_USERS_ALLOW_SIGN_UP=false"
+    ports:
+      # Exposed_port:Internal_port
+      - 3000:3000
+    volumes:
+      # Grafana dashboards location
+      - ./deployables/assets/grafana/provisioning/:/etc/grafana/provisioning
+    depends_on:
+      - ccloud_chargeback_handler

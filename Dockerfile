@@ -1,14 +1,10 @@
-FROM python:3.10
+FROM python:3.11
 
-WORKDIR /usr/src/app
+WORKDIR /app
 
 COPY requirements.txt .
-COPY src/*.py ./
-COPY src/ccloud/*.py ./ccloud/
-COPY src/ccloud/core_api/*.py ./ccloud/core_api/
-COPY src/ccloud/telemetry_api/*.py ./ccloud/telemetry_api/
-COPY src/data_processing/*.py ./data_processing/
-COPY config/config_internal.yaml ./config/config.yaml
+COPY src/  ./
+COPY deployables/assets/chargeback_handler/config/config_internal.yaml ./config/config.yaml
 RUN pip install --no-cache-dir -r ./requirements.txt
 
 ENTRYPOINT [ "python", "main.py" ]

@@ -1,13 +1,15 @@
-from dataclasses import dataclass, field
-from time import sleep, time
+import datetime
+import logging
+from dataclasses import InitVar, dataclass, field
 from typing import Dict
-from urllib import parse
-
-import requests
 
 from dateutil import parser
+
 from ccloud.connections import CCloudBase
-from prometheus_processing.metrics_server import TimestampedGauge
+from helpers import logged_method
+from prometheus_processing.custom_collector import TimestampedCollector
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,64 +21,73 @@ class CCloudServiceAccount:
     updated_at: str
 
 
-sa_prom_metrics = TimestampedGauge(
+sa_prom_metrics = TimestampedCollector(
     "confluent_cloud_sa",
     "Environment Details for every Environment created within CCloud",
-    ["sa_id", "created_at"],
-    timestamp=time(),
+    ["sa_id", "display_name"],
+    in_begin_timestamp=datetime.datetime.now(),
 )
+# sa_prom_status_metrics = TimestampedCollector(
+#     "confluent_cloud_sa_scrape_status",
+#     "CCloud Service Accounts scrape status",
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
 @dataclass(kw_only=True)
 class CCloudServiceAccountList(CCloudBase):
+    exposed_timestamp: InitVar[datetime.datetime] = field(init=True)
     sa: Dict[str, CCloudServiceAccount] = field(default_factory=dict, init=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
-        self.url = self._ccloud_connection.get_endpoint_url(key=self._ccloud_connection.uri.service_accounts)
+        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.service_accounts)
+        LOGGER.debug(f"Service Account URL: {self.url}")
         self.read_all()
-        self.expose_prometheus_metrics()
+        LOGGER.debug("Exposing Prometheus Metrics for Service Accounts")
+        self.expose_prometheus_metrics(exposed_timestamp=exposed_timestamp)
+        LOGGER.info("CCloud Service Accounts initialized successfully")
 
-    def expose_prometheus_metrics(self):
+    @logged_method
+    def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
+        LOGGER.debug("Exposing Prometheus Metrics for Service Accounts for timestamp: " + str(exposed_timestamp))
+        self.force_clear_prom_metrics()
+        sa_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.sa.items():
-            sa_prom_metrics.labels(v.resource_id, v.created_at).set(1)
+            if v.created_at >= exposed_timestamp:
+                sa_prom_metrics.labels(v.resource_id, v.name).set(1)
+        # sa_prom_status_metrics.set_timestamp(curr_timestamp=exposed_timestamp).set(1)
+
+    @logged_method
+    def force_clear_prom_metrics(self):
+        sa_prom_metrics.clear()
 
     def __str__(self) -> str:
         for item in self.sa.values():
             print("{:<15} {:<40} {:<50}".format(item.resource_id, item.name, item.description))
 
     # Read ALL Service Account details from Confluent Cloud
+    @logged_method
     def read_all(self, params={"page_size": 100}):
-        resp = requests.get(url=self.url, auth=self.http_connection, params=params)
-        if resp.status_code == 200:
-            out_json = resp.json()
-            if out_json is not None and out_json["data"] is not None:
-                for item in out_json["data"]:
-                    self.__add_to_cache(
-                        CCloudServiceAccount(
-                            resource_id=item["id"],
-                            name=item["display_name"],
-                            description=item["description"],
-                            created_at=parser.isoparse(item["metadata"]["created_at"]),
-                            updated_at=parser.isoparse(item["metadata"]["updated_at"]),
-                        )
-                    )
-                    print(f"Found SA: {item['id']}; Name {item['display_name']}")
-            if "next" in out_json["metadata"]:
-                query_params = parse.parse_qs(parse.urlsplit(out_json["metadata"]["next"]).query)
-                params["page_token"] = str(query_params["page_token"][0])
-                self.read_all(params)
-        elif resp.status_code == 429:
-            print(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
-            sleep(45)
-            print("Timer up. Resuming CCloud API scrape.")
-        else:
-            raise Exception("Could not connect to Confluent Cloud. Please check your settings. " + resp.text)
+        LOGGER.debug("Reading all Service Accounts from Confluent Cloud")
+        for item in self.read_from_api(params=params):
+            self.__add_to_cache(
+                CCloudServiceAccount(
+                    resource_id=item["id"],
+                    name=item["display_name"],
+                    description=item["description"],
+                    created_at=parser.isoparse(item["metadata"]["created_at"]),
+                    updated_at=parser.isoparse(item["metadata"]["updated_at"]),
+                )
+            )
+            LOGGER.debug(f"Found Service Account: {item['id']}; Name {item['display_name']}")
 
+    @logged_method
     def __add_to_cache(self, ccloud_sa: CCloudServiceAccount) -> None:
         self.sa[ccloud_sa.resource_id] = ccloud_sa
 
     # Read/Find one SA from the cache
+    @logged_method
     def find_sa(self, sa_name):
         for item in self.sa.values():
             if sa_name == item.name:

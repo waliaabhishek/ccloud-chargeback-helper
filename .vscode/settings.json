@@ -4,19 +4,31 @@
     "basepath",
     "CCME",
     "CHARGEBACK",
+    "CKUS",
     "cname",
+    "CSUS",
     "dataframe",
     "dataframes",
     "dateutil",
     "inplace",
     "isin",
+    "isoparse",
     "itertuples",
     "Ksqldb",
     "ksqldbcm",
+    "kwagrs",
+    "lksql",
+    "loglevel",
     "metricsapi",
     "mgmt",
+    "millis",
     "pname",
     "psutil",
-    "ptype"
-  ]
+    "ptype",
+    "pydatetime",
+    "Threadable",
+    "timerange",
+    "timeslot"
+  ],
+  "python.analysis.typeCheckingMode": "off"
 }

@@ -1,9 +1,0 @@
-version: "2.3"
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    ports:
-      - 9090:9090
-    volumes:
-      - ./prometheus/prometheus-config/:/etc/prometheus

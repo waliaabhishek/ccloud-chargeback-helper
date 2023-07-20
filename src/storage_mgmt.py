@@ -1,47 +1,56 @@
+import logging
 import os
-import shutil
 import threading
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from json import dumps, load
 from time import sleep
 from typing import Dict, List, Tuple
+
 import psutil
-from helpers import ensure_path, sanitize_metric_name
+
+from helpers import logged_method, sanitize_metric_name
+
+LOGGER = logging.getLogger(__name__)
+
+# class DirType(Enum):
+#     MetricsData = auto()
+#     BillingsData = auto()
+#     OutputData = auto()
+#     PersistenceStats = auto()
+
+# code_run_stats = TimestampedCollector(
+#     "python_custom_memory_used_bytes",
+#     "Total memory consumed by the process.",
+#     [],
+#     in_begin_timestamp=datetime.datetime.now(),
+# )
 
 
-class DirType(Enum):
-    MetricsData = auto()
-    BillingsData = auto()
-    OutputData = auto()
-    PersistenceStats = auto()
+# @dataclass(kw_only=True)
+# class StoragePathManagement:
+#     basepath: str = field(default=os.getcwd())
+#     base_dir: str = field(default="output")
+
+#     def __generate_path(self, org_id: str, dir_type: DirType):
+#         return os.path.join(self.basepath, self.base_dir, org_id, dir_type.name, "")
+
+#     def ensure_path(self, org_id: str, dir_type: List[DirType]):
+#         for item in dir_type:
+#             ensure_path(self.__generate_path(org_id=org_id, dir_type=item))
+
+#     def delete_path(self, org_id: str, dir_type: DirType):
+#         full_path = self.__generate_path(org_id=org_id, dir_type=dir_type)
+#         if os.path.exists(full_path) and full_path.startswith(os.path.join(self.basepath, self.base_dir)):
+#             shutil.rmtree(full_path)
+
+#     def get_path(self, org_id: str, dir_type=DirType, ensure_exists: bool = False):
+#         if ensure_exists:
+#             self.ensure_path(org_id=org_id, dir_type=[dir_type])
+#         return self.__generate_path(org_id=org_id, dir_type=dir_type)
 
 
-@dataclass(kw_only=True)
-class StoragePathManagement:
-    basepath: str = field(default=os.getcwd())
-    base_dir: str = field(default="output")
-
-    def __generate_path(self, org_id: str, dir_type: DirType):
-        return os.path.join(self.basepath, self.base_dir, org_id, dir_type.name, "")
-
-    def ensure_path(self, org_id: str, dir_type: List[DirType]):
-        for item in dir_type:
-            ensure_path(self.__generate_path(org_id=org_id, dir_type=item))
-
-    def delete_path(self, org_id: str, dir_type: DirType):
-        full_path = self.__generate_path(org_id=org_id, dir_type=dir_type)
-        if os.path.exists(full_path) and full_path.startswith(os.path.join(self.basepath, self.base_dir)):
-            shutil.rmtree(full_path)
-
-    def get_path(self, org_id: str, dir_type=DirType, ensure_exists: bool = False):
-        if ensure_exists:
-            self.ensure_path(org_id=org_id, dir_type=[dir_type])
-        return self.__generate_path(org_id=org_id, dir_type=dir_type)
-
-
-STORAGE_PATH = StoragePathManagement()
-STORAGE_PATH.ensure_path(org_id="common", dir_type=[])
+# STORAGE_PATH = StoragePathManagement()
+# STORAGE_PATH.ensure_path(org_id="common", dir_type=[])
 
 
 @dataclass
@@ -62,6 +71,10 @@ class ThreadableRunner:
 
     def get_new_thread(self, target_func, tick_duration_secs: int):
         temp = threading.Thread(target=target_func, args=(self, tick_duration_secs))
+        return temp
+
+    def invoke_custom_func(self, target_func, *args):
+        temp = threading.Thread(target=target_func, args=(self, *args))
         return temp
 
 
@@ -108,6 +121,7 @@ class PersistenceStore(ThreadableRunner):
                 self.persistence_path[org_id] = temp
             self.rehydrate_persistence_status(org_id=org_id)
 
+    @logged_method
     def rehydrate_persistence_status(self, org_id: str = "common"):
         org_details = self.persistence_path[org_id]
         path_str = org_details["path"]
@@ -118,6 +132,7 @@ class PersistenceStore(ThreadableRunner):
             org_details["data"].pop(item)
         # print(org_details["data"])
 
+    @logged_method
     def add_data_to_persistence_store(self, org_id: str, key: Tuple, value: str):
         if not org_id in self.persistence_path.keys():
             self.add_persistence_path(org_id=org_id, ensure_exists=True)
@@ -139,6 +154,7 @@ class PersistenceStore(ThreadableRunner):
         #     with self.object_lock:
         #         self.persistence_path[org_id]["sync_needed"] = True
 
+    @logged_method
     def is_dataset_present(self, org_id: str, key: Tuple, value: dict) -> bool:
         temp_key = self.__encode_key(key=key)
         if org_id in self.persistence_path.keys():
@@ -148,6 +164,7 @@ class PersistenceStore(ThreadableRunner):
                     return True
         return False
 
+    @logged_method
     def write_file(self, force_write: bool = False):
         with self.object_lock:
             for org_id, v in self.persistence_path.items():
@@ -155,6 +172,7 @@ class PersistenceStore(ThreadableRunner):
                     with open(v["path"], "w") as f:
                         f.write(dumps(v["data"], indent=1))
 
+    @logged_method
     def __find_datasets_to_evict(self, org_id: str) -> List[str]:
         if self.historical_data_to_maintain == -1:
             return []
@@ -170,26 +188,34 @@ class PersistenceStore(ThreadableRunner):
         # return temp[self.historical_data_to_maintain :]
 
 
+@logged_method
 def sync_to_file(persistence_object: PersistenceStore, flush_to_file: int = 5):
     while persistence_object.sync_runner_status.is_set():
         persistence_object.write_file()
         sleep(flush_to_file)
 
 
+@logged_method
 def current_memory_usage(persistence_object: ThreadableRunner, evaluation_interval: int = 5):
     while persistence_object.sync_runner_status.is_set():
-        print(f"Current Memory Utilization: {psutil.Process().memory_info().rss / (1024 * 1024)}")
+        mem_used = psutil.Process().memory_info().rss
+        print(f"Current Memory Utilization: {mem_used / (2**20)}")
+        # curr_ts = datetime.datetime.utcnow().replace(
+        #     hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
+        # )
+        # code_run_stats.set_timestamp(curr_timestamp=curr_ts)
+        # code_run_stats.set(mem_used)
         sleep(evaluation_interval)
 
 
 # This will be use to store status for writing Metrics datasets to disk.
-METRICS_PERSISTENCE_STORE = PersistenceStore(data_type="Metrics")
+# METRICS_PERSISTENCE_STORE = PersistenceStore(data_type="Metrics")
 
 # BILLING_PERSISTENCE_STORE = PersistenceStore(
 #     out_path=os.path.join(STORAGE_PATH[DirType.PersistenceStats], f"Billing_{DirType.PersistenceStats.name}.json"),
 #     historical_data_to_maintain=-1,
 # )
 # This will be use to store status for writing chargeback datasets to disk.
-CHARGEBACK_PERSISTENCE_STORE = PersistenceStore(data_type="Chargeback", historical_data_to_maintain=-1)
+# CHARGEBACK_PERSISTENCE_STORE = PersistenceStore(data_type="Chargeback", historical_data_to_maintain=-1)
 # This will be use to store status for writing chargeback datasets to disk.
-BILLING_PERSISTENCE_STORE = PersistenceStore(data_type="Billing", historical_data_to_maintain=-1)
+# BILLING_PERSISTENCE_STORE = PersistenceStore(data_type="Billing", historical_data_to_maintain=-1)
