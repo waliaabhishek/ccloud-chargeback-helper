@@ -123,10 +123,22 @@ class CCloudConnectorList(CCloudBase):
         connector_name=str(connector_config["name"]).strip().replace(" ", "")
         LOGGER.debug("Found connector config for connector " + connector_config["name"])
         owner_id = None
-        auth_mode = connector_config["kafka.auth.mode"]
+        api_key_prop = "kafka.api.key"
+        sa_prop = "kafka.service.account.id"
+        auth_mode = connector_config.get("kafka.auth.mode", "NOT_FOUND")
+        if auth_mode == "NOT_FOUND":
+            LOGGER.warn(f"Connector {connector_config['name']} has no authentication mode set. Trying to find a matching auth mode.")
+            if connector_config.get(api_key_prop, None) is not None:
+                auth_mode = "KAFKA_API_KEY"
+            elif connector_config.get(sa_prop, None) is not None:
+                auth_mode = "SERVICE_ACCOUNT"
+            else:
+                err_str = f"Connector {connector_config['name']} has no authentication mode set and does not have '{api_key_prop}' or '{sa_prop}' property set. Code cannot proceed."
+                LOGGER.debug(f"Connector response received: \n{connector_details}")
+                raise Exception(err_str)
         match auth_mode:
             case "KAFKA_API_KEY":
-                api_key = connector_config["kafka.api.key"]
+                api_key = connector_config[api_key_prop]
                 # Check if all the API_KEY value is protected or not
                 if not all([ch == "*" for ch in api_key]):
                     # Locate the API Key details
@@ -145,7 +157,7 @@ class CCloudConnectorList(CCloudBase):
                         f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership defaulted to {owner_id}."
                     )
             case "SERVICE_ACCOUNT":
-                owner_id = connector_config["kafka.service.account.id"]
+                owner_id = connector_config[sa_prop]
         self.__add_to_cache(
             CCloudConnector(
                 env_id=kafka_cluster.env_id,
