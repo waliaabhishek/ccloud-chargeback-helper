@@ -1,7 +1,7 @@
 version: "3"
 services:
   ccloud_chargeback_handler:
-    image: abhiwalia/ccloud_chargeback_handler:latest
+    image: abhiwalia/ccloud_chargeback_handler:v1.0.1
     container_name: ccloud_chargeback_handler
     # cpus: 1
     restart: "no"
