@@ -60,7 +60,7 @@ class CCloudOrg(Observer):
         # So we step back by 1 hour, so that the current hour slice is returned.
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) + datetime.timedelta(days=-70, hours=+1)
+        ) + datetime.timedelta(days=-200, hours=+1)
         LOGGER.debug(f"Starting Exposed Metrics Datetime: {self.exposed_metrics_datetime}")
         set_current_exposed_date(exposed_date=self.exposed_metrics_datetime)
 
