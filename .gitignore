@@ -6,5 +6,5 @@ __pycache__/
 testing/
 src/to_be_deleted/
 deployables/datastore/
-.local-my-env
+.*-my-env
 docker-compose.local.yml
