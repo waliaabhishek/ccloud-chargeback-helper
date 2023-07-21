@@ -1,3 +1,9 @@
+# The Codebase when started will start at today - {CCLOUD_LOOKBACK_DAYS} for the chargeback calculation. 
+# You can change this value as per your needs. For demo purposes - this can be turned to as short as you like. 
+# Just remember that the chargeback calculation stops about 2 days before the current date to allow for CCloud 
+# billing data to be finalized and Metrics data to be available. 
+CCLOUD_LOOKBACK_DAYS=200
+
 CCLOUD_BILLING_API_KEY=<Your_API_Key>                                   #e.g. 1234567890
 # CCLOUD_BILLING_API_KEY=1234567890
 
@@ -19,3 +25,4 @@ METRICS_API_SERVER_AUTH_PASSWORD=<Your_Metrics_API_Prom_Server_Pass>    #e.g. pa
 # METRICS_API_SERVER_AUTH_PASSWORD=password
 
 CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090             #Do NOT change this if you will be using the provided docker-compose file
+

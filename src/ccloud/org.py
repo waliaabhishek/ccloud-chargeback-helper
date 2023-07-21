@@ -58,9 +58,10 @@ class CCloudOrg(Observer):
 
         # This following action is required as for the first run we need to derive the start date.
         # So we step back by 1 hour, so that the current hour slice is returned.
+        lookback_days = int(in_org_details.get("ccloud_details", {}).get("total_lookback_days", 200)) * -1
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
-        ) + datetime.timedelta(days=-200, hours=+1)
+        ) + datetime.timedelta(days=lookback_days, hours=+1)
         LOGGER.debug(f"Starting Exposed Metrics Datetime: {self.exposed_metrics_datetime}")
         set_current_exposed_date(exposed_date=self.exposed_metrics_datetime)
 

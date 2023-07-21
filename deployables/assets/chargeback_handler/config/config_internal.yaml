@@ -16,6 +16,7 @@ config:
         metrics_api:
           api_key: env::CCLOUD_BILLING_API_KEY
           api_secret: env::CCLOUD_BILLING_API_SECRET
+        total_lookback_days: env::CCLOUD_LOOKBACK_DAYS
       prometheus_details:
         metrics_api_datastore:
           prometheus_url: env::METRICS_API_SERVER_URL

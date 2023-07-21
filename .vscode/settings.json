@@ -19,6 +19,7 @@
     "kwagrs",
     "lksql",
     "loglevel",
+    "lookback",
     "metricsapi",
     "mgmt",
     "millis",
