@@ -4,25 +4,30 @@
 # billing data to be finalized and Metrics data to be available. 
 CCLOUD_LOOKBACK_DAYS=200
 
-CCLOUD_BILLING_API_KEY=<Your_API_Key>                                   #e.g. 1234567890
+CCLOUD_BILLING_API_KEY=<Your_API_Key>
 # CCLOUD_BILLING_API_KEY=1234567890
 
-CCLOUD_BILLING_API_SECRET=<YOUR_API_SECRET>                             #e.g. asdfghjklpoiuytrewq1234567890
+CCLOUD_BILLING_API_SECRET=<YOUR_API_SECRET>
 #  CCLOUD_BILLING_API_SECRET=asdfghjklpoiuytrewq1234567890
 
-METRICS_API_SERVER_URL=<Your_Metrics_API_Prometheus_Server>             #e.g. http://localhost:9090
+# If you do not have a Metrics API Prometheus instance, copy value from CHARGEBACK_SERVER_URL below.
+# This will ensure that Metrics API server is found , but no data is available.
+# Code will try to work around that.
+METRICS_API_SERVER_URL=<Your_Metrics_API_Prometheus_Server>
 #  METRICS_API_SERVER_URL=http://localhost:9090
 
-METRICS_API_SERVER_ENABLE_AUTH=<True/False>                             #True if your metrics server is protected by basic auth else False
+METRICS_API_SERVER_ENABLE_AUTH=<True/False>
 # METRICS_API_SERVER_ENABLE_AUTH=True
 
-METRICS_API_SERVER_AUTH_TYPE=HTTPBasicAuth                              #HTTPBasic is the only supported auth type as of now. Do NOT change this
+#HTTPBasic is the only supported auth type as of now. Do NOT change this
+METRICS_API_SERVER_AUTH_TYPE=HTTPBasicAuth                              
 
-METRICS_API_SERVER_AUTH_USERNAME=<Your_Metrics_API_Prom_Server_User>    #e.g. admin
+METRICS_API_SERVER_AUTH_USERNAME=<Your_Metrics_API_Prom_Server_User>
 # METRICS_API_SERVER_AUTH_USERNAME=admin
 
-METRICS_API_SERVER_AUTH_PASSWORD=<Your_Metrics_API_Prom_Server_Pass>    #e.g. password
+METRICS_API_SERVER_AUTH_PASSWORD=<Your_Metrics_API_Prom_Server_Pass>
 # METRICS_API_SERVER_AUTH_PASSWORD=password
 
-CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090             #Do NOT change this if you will be using the provided docker-compose file
+#Do NOT change this if you will be using the provided docker-compose file
+CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090             
 
