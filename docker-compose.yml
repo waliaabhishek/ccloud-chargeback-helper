@@ -16,7 +16,8 @@ services:
     - "/user_config/config.yaml"
     environment:
         # The below environment variables are required for the code to work.
-        # Billing API Key & Secret Injection
+        # Lookback days + Billing API Key & Secret Injection
+      - CCLOUD_LOOKBACK_DAYS=${CCLOUD_LOOKBACK_DAYS}
       - CCLOUD_BILLING_API_KEY=${CCLOUD_BILLING_API_KEY}
       - CCLOUD_BILLING_API_SECRET=${CCLOUD_BILLING_API_SECRET}
       # Metrics API server 
