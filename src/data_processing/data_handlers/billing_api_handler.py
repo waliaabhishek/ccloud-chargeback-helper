@@ -158,11 +158,15 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
             temp_data = [
                 {
                     BILLING_API_COLUMNS.calc_timestamp: x,
-                    BILLING_API_COLUMNS.env_id: item["resource"]["environment"]["id"],
-                    BILLING_API_COLUMNS.cluster_id: item["resource"]["id"],
-                    BILLING_API_COLUMNS.cluster_name: item["resource"]["display_name"],
-                    BILLING_API_COLUMNS.product_name: item["product"],
-                    BILLING_API_COLUMNS.product_type: item["line_type"],
+                    BILLING_API_COLUMNS.env_id: item.get("resource", {})
+                    .get("environment", {})
+                    .get("id", f"MISSING_DATA_{idx}"),
+                    BILLING_API_COLUMNS.cluster_id: item.get("resource", {}).get("id", f"MISSING_DATA_{idx}"),
+                    BILLING_API_COLUMNS.cluster_name: item.get("resource", {}).get(
+                        "display_name", f"MISSING_DATA_{idx}"
+                    ),
+                    BILLING_API_COLUMNS.product_name: item.get("product", f"MISSING_DATA_{idx}"),
+                    BILLING_API_COLUMNS.product_type: item.get("line_type", f"MISSING_DATA_{idx}"),
                     BILLING_API_COLUMNS.quantity: item["quantity"],
                     BILLING_API_COLUMNS.orig_amt: item["original_amount"],
                     BILLING_API_COLUMNS.total: item["amount"],
@@ -171,7 +175,7 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                     BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"]) / 24,
                     BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / 24,
                 }
-                for x in temp_date_range
+                for idx, x in enumerate(temp_date_range)
             ]
             if temp_data is not None:
                 if self.billing_dataset is not None:
