@@ -17,6 +17,7 @@
     "Ksqldb",
     "ksqldbcm",
     "kwagrs",
+    "levelname",
     "lksql",
     "loglevel",
     "lookback",

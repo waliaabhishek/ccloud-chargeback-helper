@@ -10,6 +10,9 @@ CCLOUD_BILLING_API_KEY=<Your_API_Key>
 CCLOUD_BILLING_API_SECRET=<YOUR_API_SECRET>
 #  CCLOUD_BILLING_API_SECRET=asdfghjklpoiuytrewq1234567890
 
+#Do NOT change this if you will be using the provided docker-compose file
+CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090             
+
 # If you do not have a Metrics API Prometheus instance, copy value from CHARGEBACK_SERVER_URL below.
 # This will ensure that Metrics API server is found , but no data is available.
 # Code will try to work around that.
@@ -28,6 +31,9 @@ METRICS_API_SERVER_AUTH_USERNAME=<Your_Metrics_API_Prom_Server_User>
 METRICS_API_SERVER_AUTH_PASSWORD=<Your_Metrics_API_Prom_Server_Pass>
 # METRICS_API_SERVER_AUTH_PASSWORD=password
 
-#Do NOT change this if you will be using the provided docker-compose file
-CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090             
-
+# Log Level for the codebase
+# Available Options - ERROR, WARNING, INFO, DEBUG
+LOG_LEVEL="INFO"
+# Enable method breadcrumbs - Allows you to see which method was the last one executed before an error
+# Available Options - True, False
+ENABLE_METHOD_BREADCRUMBS=False
