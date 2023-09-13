@@ -167,13 +167,13 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
                     ),
                     BILLING_API_COLUMNS.product_name: item.get("product", f"MISSING_DATA_{idx}"),
                     BILLING_API_COLUMNS.product_type: item.get("line_type", f"MISSING_DATA_{idx}"),
-                    BILLING_API_COLUMNS.quantity: item["quantity"],
-                    BILLING_API_COLUMNS.orig_amt: item["original_amount"],
-                    BILLING_API_COLUMNS.total: item["amount"],
-                    BILLING_API_COLUMNS.price: item["price"],
-                    BILLING_API_COLUMNS.calc_split_quantity: Decimal(item["quantity"]) / 24,
-                    BILLING_API_COLUMNS.calc_split_amt: Decimal(item["original_amount"]) / 24,
-                    BILLING_API_COLUMNS.calc_split_total: Decimal(item["amount"]) / 24,
+                    BILLING_API_COLUMNS.quantity: item.get("quantity", 1),
+                    BILLING_API_COLUMNS.orig_amt: item.get("original_amount", 0),
+                    BILLING_API_COLUMNS.total: item.get("amount", 0),
+                    BILLING_API_COLUMNS.price: item.get("price", 0),
+                    BILLING_API_COLUMNS.calc_split_quantity: Decimal(item.get("quantity", 1)) / 24,
+                    BILLING_API_COLUMNS.calc_split_amt: Decimal(item.get("original_amount", 0)) / 24,
+                    BILLING_API_COLUMNS.calc_split_total: Decimal(item.get("amount", 0)) / 24,
                 }
                 for idx, x in enumerate(temp_date_range)
             ]
