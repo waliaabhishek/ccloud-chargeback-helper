@@ -1,22 +1,22 @@
 version: "3"
 services:
   ccloud_chargeback_handler:
-    image: abhiwalia/ccloud_chargeback_handler:1.0.3
+    image: abhiwalia/ccloud_chargeback_handler:1.0.4
     container_name: ccloud_chargeback_handler
     # cpus: 1
     restart: "no"
     volumes:
-    # This is the folder which you can use to override the pre-coded config file. The internally available file still needs the environment variables to be configured with the API Keys for access. 
-    # No credentials are hard coded into the code at all, so if you do not provide any access credentials, the code will not work.
+      # This is the folder which you can use to override the pre-coded config file. The internally available file still needs the environment variables to be configured with the API Keys for access. 
+      # No credentials are hard coded into the code at all, so if you do not provide any access credentials, the code will not work.
       - ./deployables/assets/chargeback_handler/config/config_internal.yaml:/user_config/config.yaml
     command:
-    # The below command switch will alllow you to specify your custom config file.
-    # The /user_config/config.yaml file is the default config file which is used if no config file is specified.
-    - "--config-file"
-    - "/user_config/config.yaml"
+      # The below command switch will alllow you to specify your custom config file.
+      # The /user_config/config.yaml file is the default config file which is used if no config file is specified.
+      - "--config-file"
+      - "/user_config/config.yaml"
     environment:
-        # The below environment variables are required for the code to work.
-        # Lookback days + Billing API Key & Secret Injection
+      # The below environment variables are required for the code to work.
+      # Lookback days + Billing API Key & Secret Injection
       - CCLOUD_LOOKBACK_DAYS=${CCLOUD_LOOKBACK_DAYS}
       - CCLOUD_BILLING_API_KEY=${CCLOUD_BILLING_API_KEY}
       - CCLOUD_BILLING_API_SECRET=${CCLOUD_BILLING_API_SECRET}
@@ -27,6 +27,8 @@ services:
       - METRICS_API_SERVER_AUTH_USERNAME=${METRICS_API_SERVER_AUTH_USERNAME}
       - METRICS_API_SERVER_AUTH_PASSWORD=${METRICS_API_SERVER_AUTH_PASSWORD}
       - CHARGEBACK_SERVER_URL=http://prometheus_for_chargeback:9090
+      - LOG_LEVEL=${LOG_LEVEL}
+      - ENABLE_METHOD_BREADCRUMBS=${ENABLE_METHOD_BREADCRUMBS}
     ports:
       # Exposed_port:Internal_port
       - 8000:8000

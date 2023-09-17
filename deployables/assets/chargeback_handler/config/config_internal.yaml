@@ -2,8 +2,8 @@ config:
   system:
     days_in_memory: 7
     output_dir_name: "output"
-    log_level: "INFO"
-    enable_method_breadcrumbs: False
+    log_level: env::LOG_LEVEL
+    enable_method_breadcrumbs: env:ENABLE_METHOD_BREADCRUMBS
   org_details:
     - id: CCloud Org 1
       ccloud_details:

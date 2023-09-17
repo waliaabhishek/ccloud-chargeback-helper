@@ -48,7 +48,7 @@ def get_app_props(in_config: Dict):
             case "ERROR":
                 LOGGER.info("Setting loglevel to ERROR")
                 loglevel = logging.ERROR
-            case other:
+            case _:
                 LOGGER.info(f"Cannot understand log level {logLvl}. Setting loglevel to INFO")
                 loglevel = logging.INFO
         set_logger_level(loglevel)
