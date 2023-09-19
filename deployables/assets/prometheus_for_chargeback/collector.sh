@@ -1,5 +1,6 @@
 #!/bin/sh
-# set -x #echo on
+#set -x 
+#echo on
 
 READINESS_PROBE="/is_ready"
 CURRENT_TS_PROBE="/current_timestamp"
@@ -31,10 +32,9 @@ check_ts_vicinity () {
     VICINITY_CUTOFF=$(( `date '+%s'` - $(( 24 * 60 * 60 * 5 )) ))
     if [ ${TS_VALUE} -gt ${VICINITY_CUTOFF} ]
     then
-        echo "Scrape timestamp is getting close, Scrape interval increased to 10 minutes."
-        return 600
+        echo 600
     else
-        return 1
+        echo 1
     fi
 }
 
@@ -50,8 +50,7 @@ check_ts_vicinity () {
 while true
 do
     check_readiness
-    `check_ts_vicinity`
-    SCRAPE_INTERVAL=$?
+    SCRAPE_INTERVAL=`check_ts_vicinity`
     echo "Scraping Interval set to ${SCRAPE_INTERVAL}"
     rm -f index.html index2.html
     wget -T 60 ${SCRAPE_URL}
