@@ -1,6 +1,7 @@
 {
   "cSpell.words": [
     "addl",
+    "Appender",
     "basepath",
     "CCME",
     "CHARGEBACK",
@@ -21,6 +22,7 @@
     "lksql",
     "loglevel",
     "lookback",
+    "lsrc",
     "metricsapi",
     "mgmt",
     "millis",

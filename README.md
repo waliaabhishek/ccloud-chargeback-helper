@@ -1,11 +1,12 @@
 # Confluent Cloud Chargeback Helper/Calculator
 
-Confluent Cloud has a lot of objects and a very detailed API model. There are 2 core API's available with Confluent Cloud:
+Confluent Cloud has a lot of objects and a very detailed API model. There are 2 core API's available with Confluent
+Cloud:
 
 1. [Confluent Cloud Core Objects API](https://docs.confluent.io/cloud/current/api.html) : This API provides the details of current objects present in the Confluent ecosystem.
 2. [Confluent Cloud Metrics API](https://api.telemetry.confluent.cloud/docs/descriptors/datasets/cloud) : This API provides us with the plethora of Metrics available from various systems in Confluent Cloud.
 
-The billing data is also available out of the box with Confluent Cloud API and is pretty detailed by itself. So what does this code do in that case ? This codebase aggregates data from the various API endpoints that are available with Confluent Cloud, co-relates them and produces meaningful detailed datasets.
+The billing data is also available out of the box with Confluent Cloud API and is pretty detailed by itself. So what does this code do in that case? This codebase aggregates data from the various API endpoints that are available with Confluent Cloud, co-relates them and produces meaningful detailed datasets.
 
 The Billing API data only has data which is granular upto 1 day at a time. These datasets are divided into per hour chunks by this code, co-related to data for same interval from Metrics API (indirectly - more on that in sometime). This co-related data is identified to the the matching Objects (Service Accounts, users, API Keys, kafka Clusters etc) and a enriched dataset is generated.
 
@@ -36,11 +37,11 @@ Before getting into more details about the architecture, let's go through a quic
 
    ```
    confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role MetricsViewer
-   confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role OrganizationAdmin
+   confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role BillingAdmin
    ```
 
-   MetricsViewer permission is required for this account to be able to pull the Objects API data.
-   [OrganizationAdmin permission](https://docs.confluent.io/cloud/current/billing/overview.html#retrieve-invoices-and-costs) is required for this account to be able to pull the Billing API data.
+   MetricsViewer permission is required for this account to be able to pull the Objects API as well as the Metrics API data.
+   BillingAdmin permission is required for this account to be able to pull the Billing API data.
 
 4. Create an API Key associated with this account
    ```

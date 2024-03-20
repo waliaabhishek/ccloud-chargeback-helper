@@ -7,4 +7,5 @@ testing/
 src/to_be_deleted/
 deployables/datastore/
 .*-my-env
-docker-compose.local.yml
+*.env
+docker-compose.*.yml

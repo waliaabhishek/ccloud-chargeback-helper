@@ -112,7 +112,9 @@ class PersistenceStore(ThreadableRunner):
             with self.object_lock:
                 temp["path"] = os.path.join(
                     STORAGE_PATH.get_path(
-                        org_id=org_id, dir_type=DirType.PersistenceStats, ensure_exists=ensure_exists
+                        org_id=org_id,
+                        dir_type=DirType.PersistenceStats,
+                        ensure_exists=ensure_exists,
                     ),
                     f"{self.data_type}_{DirType.PersistenceStats.name}.json",
                 )

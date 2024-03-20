@@ -5,14 +5,14 @@ from time import sleep
 from typing import Dict
 
 import requests
-
 from ccloud.ccloud_api.api_keys import CCloudAPIKeyList
 from ccloud.ccloud_api.clusters import CCloudCluster, CCloudClusterList
 from ccloud.ccloud_api.service_accounts import CCloudServiceAccountList
 from ccloud.ccloud_api.user_accounts import CCloudUserAccountList
 from ccloud.connections import CCloudBase
-from helpers import logged_method
 from prometheus_processing.custom_collector import TimestampedCollector
+
+from helpers import logged_method
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +53,9 @@ class CCloudConnectorList(CCloudBase):
 
     def __post_init__(self, exposed_timestamp: datetime.datetime) -> None:
         super().__post_init__()
-        self.url = self.in_ccloud_connection.get_endpoint_url(key=self.in_ccloud_connection.uri.list_connector_names)
+        self.url = self.in_ccloud_connection.get_endpoint_url(
+            key=self.in_ccloud_connection.uri.list_connector_names
+        )
         LOGGER.debug(f"Kafka Connector URL: {self.url}")
         self.url_get_connector_config = self.in_ccloud_connection.get_endpoint_url(
             key=self.in_ccloud_connection.uri.get_connector_config
@@ -66,49 +68,62 @@ class CCloudConnectorList(CCloudBase):
 
     @logged_method
     def expose_prometheus_metrics(self, exposed_timestamp: datetime.datetime):
-        LOGGER.debug("Exposing Prometheus Metrics for Kafka Connector for timestamp: " + str(exposed_timestamp))
+        LOGGER.debug(
+            "Exposing Prometheus Metrics for Kafka Connector for timestamp: "
+            + str(exposed_timestamp)
+        )
         self.force_clear_prom_metrics()
         kafka_connectors_prom_metrics.set_timestamp(curr_timestamp=exposed_timestamp)
         for _, v in self.connectors.items():
             # TODO: created datetime is missing from connector creation date.
-            kafka_connectors_prom_metrics.labels(v.connector_id, v.cluster_id, v.env_id).set(1)
+            kafka_connectors_prom_metrics.labels(
+                v.connector_id, v.cluster_id, v.env_id
+            ).set(1)
 
     @logged_method
     def force_clear_prom_metrics(self):
         kafka_connectors_prom_metrics.clear()
 
     @logged_method
-    def __str__(self):
-        for v in self.cluster.values():
-            print(
-                "{:<15} {:<15} {:<25} {:<10} {:<25} {:<50}".format(
-                    v.env_id, v.cluster_id, v.cluster_name, v.cloud, v.availability, v.bootstrap_url
-                )
-            )
-
-    @logged_method
     def read_all(self):
         LOGGER.debug("Reading all Kafka Connector from Confluent Cloud")
         for kafka_cluster in self.ccloud_kafka_clusters.clusters.values():
-            LOGGER.info("Checking Environment " + kafka_cluster.env_id + " for any provisioned connectors.")
-            for connector_item in self.read_all_connector_details(kafka_cluster=kafka_cluster):
+            LOGGER.info(
+                "Checking Environment "
+                + kafka_cluster.env_id
+                + " for any provisioned connectors."
+            )
+            for connector_item in self.read_all_connector_details(
+                kafka_cluster=kafka_cluster
+            ):
                 LOGGER.debug(
                     f'Found Connector {connector_item["status"]["name"]} linked to Kafka Cluster ID {kafka_cluster.cluster_id} with Cluster Name {kafka_cluster.cluster_name}'
                 )
-                self.read_connector_config(kafka_cluster=kafka_cluster, connector_details=connector_item)
+                self.read_connector_config(
+                    kafka_cluster=kafka_cluster, connector_details=connector_item
+                )
 
     def read_all_connector_details(self, kafka_cluster: CCloudCluster, params={}):
-        temp_url = self.url.format(environment_id=kafka_cluster.env_id, kafka_cluster_id=kafka_cluster.cluster_id)
+        temp_url = self.url.format(
+            environment_id=kafka_cluster.env_id,
+            kafka_cluster_id=kafka_cluster.cluster_id,
+        )
         LOGGER.debug(f"Reading from CCloud API: {temp_url}")
-        resp = requests.get(url=temp_url, auth=self.http_connection, timeout=10, params=params)
+        resp = requests.get(
+            url=temp_url, auth=self.http_connection, timeout=10, params=params
+        )
         if resp.status_code == 200:
-            LOGGER.debug(f"Successfully fetched the Connector details for Kafka Cluster {kafka_cluster.cluster_id}")
+            LOGGER.debug(
+                f"Successfully fetched the Connector details for Kafka Cluster {kafka_cluster.cluster_id}"
+            )
             out_json = resp.json()
             # if out_json is not None and out_json["data"] is not None:
             for item in out_json.values():
                 yield item
         elif resp.status_code == 429:
-            LOGGER.info(f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}")
+            LOGGER.info(
+                f"CCloud API Per-Minute Limit exceeded. Sleeping for 45 seconds. Error stack: {resp.text}"
+            )
             sleep(45)
             LOGGER.info("Timer up. Resuming CCloud API scrape.")
         elif resp.status_code >= 400:
@@ -117,25 +132,27 @@ class CCloudConnectorList(CCloudBase):
             )
 
     @logged_method
-    def read_connector_config(self, kafka_cluster: dict, connector_details:dict):
+    def read_connector_config(self, kafka_cluster: dict, connector_details: dict):
         connector_id = str(connector_details["id"]["id"]).strip().replace(" ", "")
         connector_config = connector_details["info"]["config"]
-        connector_name=str(connector_config["name"]).strip().replace(" ", "")
+        connector_name = str(connector_config["name"]).strip().replace(" ", "")
         LOGGER.debug("Found connector config for connector " + connector_config["name"])
         owner_id = None
         api_key_prop = "kafka.api.key"
         sa_prop = "kafka.service.account.id"
         auth_mode = connector_config.get("kafka.auth.mode", "NOT_FOUND")
         if auth_mode == "NOT_FOUND":
-            LOGGER.warn(f"Connector {connector_config['name']} has no authentication mode set. Trying to find a matching auth mode.")
+            LOGGER.warn(
+                f"Connector {connector_config['name']} has no authentication mode set. Trying to find a matching auth mode."
+            )
             if connector_config.get(api_key_prop, None) is not None:
                 auth_mode = "KAFKA_API_KEY"
             elif connector_config.get(sa_prop, None) is not None:
                 auth_mode = "SERVICE_ACCOUNT"
             else:
-                err_str = f"Connector {connector_config['name']} has no authentication mode set and does not have '{api_key_prop}' or '{sa_prop}' property set. Code cannot proceed."
-                LOGGER.debug(f"Connector response received: \n{connector_details}")
-                raise Exception(err_str)
+                auth_mode = "UNKNOWN"
+                err_str = f"Connector {connector_config['name']} has no authentication mode set and does not have '{api_key_prop}' or '{sa_prop}' property set. Code will try to use approximate path."
+                LOGGER.warning(f"Connector response received: \n{connector_details}")
         match auth_mode:
             case "KAFKA_API_KEY":
                 api_key = connector_config[api_key_prop]
@@ -145,19 +162,27 @@ class CCloudConnectorList(CCloudBase):
                     if self.ccloud_api_keys.api_keys.get(api_key) is not None:
                         owner_id = self.ccloud_api_keys.api_keys[api_key].owner_id
                     else:
-                        LOGGER.warn(f"Connector API Key Not found in the Active API Keys. Connector {connector_config['name']} returned {api_key} as the executioner.")
+                        LOGGER.warn(
+                            f"Connector API Key Not found in the Active API Keys. Connector {connector_config['name']} returned {api_key} as the executioner."
+                        )
                         owner_id = "connector_api_key_cannot_be_mapped"
                         LOGGER.debug(
                             f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding holder. Connector Ownership defaulted to {owner_id}."
                         )
                 else:
-                    LOGGER.warn(f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}.")
+                    LOGGER.warn(
+                        f"Connector API Key Masked. Found API Key {api_key} for Connector {connector_config['name']}."
+                    )
                     owner_id = "connector_api_key_masked"
                     LOGGER.debug(
                         f"API Key is unavailable for Mapping Connector {connector_config['name']} to its corresponding Service Account. Connector Ownership defaulted to {owner_id}."
                     )
             case "SERVICE_ACCOUNT":
                 owner_id = connector_config[sa_prop]
+            case "UNKNOWN":
+                # The connector API does not provide accurate results and it really varies on connector configuration.
+                # This is a catch-all for any unknown auth mode.
+                owner_id = connector_id
         self.__add_to_cache(
             CCloudConnector(
                 env_id=kafka_cluster.env_id,

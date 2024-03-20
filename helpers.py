@@ -28,6 +28,10 @@ def set_breadcrumb_flag(breadcrumbs: bool):
 
 
 def logged_method(func):
+    """
+    This Method allows you to add breadcrumbs to logging for the method.
+    :rtype: object
+    """
     @wraps(func)
     def add_entry_exit_logs(*args, **kwargs):
         if METHOD_BREADCRUMBS:

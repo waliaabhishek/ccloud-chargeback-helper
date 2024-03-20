@@ -84,7 +84,8 @@ class CCloudBillingHandler(AbstractDataHandler, CCloudBase):
         It also tracks the currently exported timestamp in Observer as well as update it to the Notifier.
 
         Args:
-            notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on timestamp is complete and the dataset should be refreshed for the next timestamp.
+            notifier (NotifierAbstract): This objects is used to get updates from the notifier that the collection for on
+            timestamp is complete and the dataset should be refreshed for the next timestamp.
         """
         curr_ts = pd.date_range(self.curr_export_datetime, freq="1H", periods=2)[0]
         notifier.set_timestamp(curr_timestamp=self.curr_export_datetime)

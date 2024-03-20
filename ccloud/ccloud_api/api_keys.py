@@ -21,7 +21,7 @@ class CCloudAPIKey:
     api_key_description: str
     owner_id: str
     cluster_id: str
-    created_at: str
+    created_at: datetime.datetime
 
 
 api_key_prom_metrics = TimestampedCollector(

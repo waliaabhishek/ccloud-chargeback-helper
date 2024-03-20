@@ -99,19 +99,20 @@ class AbstractDataHandler(ABC):
         """
         start_date = pd.to_datetime(start_datetime)
         end_date = pd.to_datetime(end_datetime)
-        if not isinstance(dataset, NoneType):
-            if not dataset.empty:
-                return (
-                    dataset[
-                        (dataset.index.get_level_values(ts_column_name) >= start_date)
-                        & (dataset.index.get_level_values(ts_column_name) < end_date)
-                    ],
-                    False,
-                )
-            else:
-                return (dataset, False)
-        else:
+
+        if isinstance(dataset, NoneType):
             return (None, True)
+
+        if dataset.empty:
+            return (dataset, False)
+
+        return (
+            dataset[
+                (dataset.index.get_level_values(ts_column_name) >= start_date)
+                & (dataset.index.get_level_values(ts_column_name) < end_date)
+            ],
+            False,
+        )
 
     @logged_method
     def calculate_effective_dates(
@@ -166,14 +167,14 @@ class AbstractDataHandler(ABC):
         Returns:
             _type_: _description_
         """
-        if not isinstance(dataset, NoneType):
-            if not dataset.empty:
-                temp_ds = dataset.index.get_level_values(ts_column_name)
-                return (dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)], False)
-            else:
-                return (dataset, False)
-        else:
+        if isinstance(dataset, NoneType):
             return (None, True)
+
+        if dataset.empty:
+            return (dataset, False)
+
+        temp_ds = dataset.index.get_level_values(ts_column_name)
+        return (dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)], False)
 
     @logged_method
     def execute_requests(self, exposed_timestamp: datetime.datetime):

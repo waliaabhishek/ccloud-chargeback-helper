@@ -49,7 +49,7 @@ class CCloudOrg(Observer):
         LOGGER.debug(f"Sanitizing Org ID {in_org_details['id']}")
         self.org_id = sanitize_id(in_org_details["id"])
         LOGGER.debug(f"Initializing CCloudOrg for Org ID: {self.org_id}")
-        # This start date is calculated from the now time to rewind back 365 days as that is the
+        # This start date is calculated from the now time to rewind back "x" days as that is the
         # time limit of the billing dataset which is available to us. We will need the metrics handler
         # to try and get the data from that far back as well.
         # start_date = datetime.datetime.utcnow().replace(
@@ -225,7 +225,7 @@ class CCloudOrgList:
             temp = CCloudOrg(
                 in_org_details=org_item,
                 in_days_in_memory=in_days_in_memory,
-                org_id=org_item["id"] if org_item["id"] else req_count,
+                org_id=str(org_item["id"]) if org_item["id"] else str(req_count),
             )
             self.__add_org_to_cache(ccloud_org=temp)
         LOGGER.debug("Initialization Complete.")

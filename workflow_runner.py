@@ -4,15 +4,19 @@ from argparse import Namespace
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from time import sleep
-from typing import Dict
+from typing import Dict, List
 
 import prometheus_client
 import yaml
 
 import internal_data_probe
 from ccloud.org import CCloudOrgList
-from helpers import env_parse_replace, logged_method, set_breadcrumb_flag, set_logger_level
-from storage_mgmt import COMMON_THREAD_RUNNER, current_memory_usage
+from helpers import (
+    env_parse_replace,
+    logged_method,
+    set_breadcrumb_flag,
+    set_logger_level,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +26,7 @@ class AppProps:
     days_in_memory: int = field(default=30)
     relative_output_dir: str = field(default="output")
     loglevel: str = field(default="INFO")
+
 
 @logged_method
 def get_app_props(in_config: Dict):
@@ -34,8 +39,8 @@ def get_app_props(in_config: Dict):
         LOGGER.debug("System Configuration found. Using values from config file.")
         config: Dict = in_config["system"]
         LOGGER.debug("Parsing loglevel from config file")
-        logLvl = config.get("log_level", "INFO").upper()
-        match logLvl:
+        log_lvl: str = config.get("log_level", "INFO").upper()
+        match log_lvl:
             case "DEBUG":
                 LOGGER.info("Setting loglevel to DEBUG")
                 loglevel = logging.DEBUG
@@ -49,7 +54,9 @@ def get_app_props(in_config: Dict):
                 LOGGER.info("Setting loglevel to ERROR")
                 loglevel = logging.ERROR
             case _:
-                LOGGER.info(f"Cannot understand log level {logLvl}. Setting loglevel to INFO")
+                LOGGER.info(
+                    f"Cannot understand log level {log_lvl}. Setting loglevel to INFO"
+                )
                 loglevel = logging.INFO
         set_logger_level(loglevel)
         breadcrumbs = config.get("enable_method_breadcrumbs", False)
@@ -68,6 +75,7 @@ class WorkflowStage(Enum):
     CALCULATE_OUTPUT = auto()
     SLEEP = auto()
 
+
 @logged_method
 def try_parse_config_file(config_yaml_path: str) -> Dict:
     LOGGER.debug("Trying to parse Configuration File: " + config_yaml_path)
@@ -79,18 +87,21 @@ def try_parse_config_file(config_yaml_path: str) -> Dict:
     LOGGER.debug("Successfully parsed Environment Variables")
     return core_config
 
+
 @logged_method
 def run_gather_cycle(ccloud_orgs: CCloudOrgList):
     # This will try to refresh and read all the data that might be new from the last gather phase.
     # Org Object has built in safeguard to prevent repetitive gathering for the same datasets.
     # for Cloud Objects --> 30 minutes is the minimum.
-    # for Metrics API objects --> persistence store knows what all has been cached and written to disk and will not be gathered again.
-    # for billing CSV files --> if the data is already read in memory, it wont be read in again.
+    # for Metrics API objects --> persistence store knows what all has been cached and written to disk and will not be
+    # gathered again. For billing CSV files --> if the data is already read in memory, it won't be read in again.
     ccloud_orgs.execute_requests()
+
 
 @logged_method
 def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
     ccloud_orgs.run_calculations()
+
 
 @logged_method
 def execute_workflow(arg_flags: Namespace):
@@ -102,8 +113,7 @@ def execute_workflow(arg_flags: Namespace):
     LOGGER.debug("Setting up Core App Properties")
     get_app_props(core_config["config"])
 
-
-    thread_configs = [
+    thread_configs: List = [
         # [COMMON_THREAD_RUNNER, current_memory_usage, 5],
         # [METRICS_PERSISTENCE_STORE, sync_to_file, METRICS_PERSISTENCE_STORE.flush_to_disk_interval_sec],
         # [CHARGEBACK_PERSISTENCE_STORE, sync_to_file, CHARGEBACK_PERSISTENCE_STORE.flush_to_disk_interval_sec],
@@ -112,7 +122,9 @@ def execute_workflow(arg_flags: Namespace):
 
     threads_list = list()
     for _, item in enumerate(thread_configs):
-        threads_list.append(item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2]))
+        threads_list.append(
+            item[0].get_new_thread(target_func=item[1], tick_duration_secs=item[2])
+        )
 
     try:
         LOGGER.info("Starting all threads")
@@ -122,16 +134,17 @@ def execute_workflow(arg_flags: Namespace):
         LOGGER.debug("Starting Prometheus Server")
         prometheus_client.start_http_server(8000)
 
-        LOGGER.debug("Starting Internal API Server for sharing state")
-        threading.Thread(target=internal_data_probe.internal_api.run, kwargs={"host": "0.0.0.0", "port": 8001}).start()
-
-        # threading.Thread(target=internal_data_probe.internal_api.run, kwargs={"host": "0.0.0.0", "port": 8001}).start()
+        LOGGER.debug("Starting Internal API Server for state sharing and readiness")
+        threading.Thread(
+            target=internal_data_probe.internal_api.run,
+            kwargs={"host": "0.0.0.0", "port": 8001},
+        ).start()
 
         # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
         # Those will include the first run for all the data gather step as well.
-        # There are some safeguards already implemented to prevent request choking, so, it should be safe in most use cases.
+        # There are some safeguards already implemented to prevent request choking, it should be safe in most use cases.
         LOGGER.info("Initializing Core CCloudOrgList Object")
-        ccloud_orgs = CCloudOrgList(
+        CCloudOrgList(
             in_orgs=core_config["config"]["org_details"],
             in_days_in_memory=APP_PROPS.days_in_memory,
         )
