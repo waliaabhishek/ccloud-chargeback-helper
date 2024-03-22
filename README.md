@@ -37,10 +37,11 @@ Before getting into more details about the architecture, let's go through a quic
 
    ```
    confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role MetricsViewer
+   confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role OrganizationAdmin
    confluent iam rbac role-binding create --principal User:<sa_id_generated_above>  --role BillingAdmin
    ```
 
-   MetricsViewer permission is required for this account to be able to pull the Objects API as well as the Metrics API data.
+   OrganizationAdmin permission is required for this account to be able to pull the Objects API as well as the Metrics API data. The long term goal is to reduce the permissions as much as possible but the role scope restrictions dont allow us to get the information we need currently. (MetricsViewer alone at this point as the role cannot view the Auth users for connectors - hence preventing chargeback by principal.)
    BillingAdmin permission is required for this account to be able to pull the Billing API data.
 
 4. Create an API Key associated with this account
