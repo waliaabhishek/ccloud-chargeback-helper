@@ -22,11 +22,11 @@ wf_args.add_argument(
 arg_flags = parser.parse_args()
 
 # Load dev.env file if in development mode
-if os.environ.get("IS_DEV") == "True":
+if os.getenv("IS_DEV", "False") == "True":
     dotenv.load_dotenv(dotenv.find_dotenv("dev.env"))
 
 # Set the log level based on the environment variable
-if os.environ.get("DEBUG") == "True":
+if os.getenv("DEBUG", "False") == "True":
     logging.basicConfig(
         level=logging.DEBUG,
         format="{asctime} {name:25s} {levelname:8s} {message}",
