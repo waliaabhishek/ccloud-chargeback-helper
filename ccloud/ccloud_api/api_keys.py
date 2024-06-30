@@ -129,12 +129,17 @@ class CCloudAPIKeyList(CCloudBase):
         return output
 
     @logged_method
-    def find_sa_count_for_clusters(self, cluster_id: str) -> Dict[str, int]:
+    def find_sa_count_for_clusters(self, cluster_id: str | None) -> Dict[str, int]:
         out = {}
-        for item in self.api_keys.values():
-            if item.cluster_id == cluster_id:
+        if cluster_id is None:
+            for item in self.api_keys.values():
                 count = out.get(item.owner_id, int(0))
                 out[item.owner_id] = count + 1
+        else:
+            for item in self.api_keys.values():
+                if item.cluster_id == cluster_id:
+                    count = out.get(item.owner_id, int(0))
+                    out[item.owner_id] = count + 1
         return out
 
     @logged_method
