@@ -11,8 +11,7 @@ def AuditLogReadChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
-    # Find all active Service Accounts/Users in the system.
+    GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
     """
     active_identities = list(cb_handler_input.ccloud_objects_handler.cc_sa.sa.keys()) + list(
         cb_handler_input.ccloud_objects_handler.cc_users.users.keys()

@@ -9,8 +9,8 @@ def UnknownDatatypeChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org
-    # Find all active Service Accounts/Users in the system.
+    GOAL: Split Audit Log read cost across all the Service Accounts + Users that are created in the Org.
+    Find all active Service Accounts/Users in the system.
     """
     calc_data = ChargebackExecutorOutputObject(
         principal=cb_input_row.row_cluster_id,

@@ -9,9 +9,9 @@ def SchemaRegistryGenericChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Cost will be equally spread across all owners of API Keys in this CCloud Environment
-    Condition - If lsrc keys exist, then split cost across all lsrc keys active in the environment
-    Condition - If no lsrc keys exist, then split cost across all keys active in the environment
+    GOAL: Cost will be equally spread across all owners of API Keys in this CCloud Environment.
+    Condition - If lsrc keys exist, then split cost across all lsrc keys active in the environment.
+    Condition - If no lsrc keys exist, then split cost across all keys active in the environment.
     """
     # Check for active API Keys for Schema Registry in the environment
     active_identities = set(

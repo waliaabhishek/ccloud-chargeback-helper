@@ -12,9 +12,9 @@ def KafkaNumCKUChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Split into 2 Categories --
-    #       Shared Charge -- Some flat percentage of the cost Divided across all clients active in that duration.
-    #       Usage Charge  -- Some flat percentage of the cost split variably by the amount of data produced + consumed by the SA/User
+    GOAL: Split into 2 Categories --
+        Shared Charge -- Some flat percentage of the cost Divided across all clients active in that duration.
+        Usage Charge  -- Some flat percentage of the cost split variably by the amount of data produced + consumed by the SA/User
     """
     common_charge_ratio = 0.30
     usage_charge_ratio = 0.70

@@ -9,7 +9,7 @@ def ClusterLinkingGenericChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
+    GOAL: Cost will be assumed by the Logical Cluster ID listed in the Billing API
     """
     calc_data = ChargebackExecutorOutputObject(
         principal=cb_input_row.row_cluster_id,

@@ -12,8 +12,8 @@ def KafkaNetworkReadChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Split cost across all the consumers to that cluster as a ratio of consumption performed.
-    # Read Depends in the Response_Bytes Metric Only
+    GOAL: Split cost across all the consumers to that cluster as a ratio of consumption performed.
+    Read Depends in the Response_Bytes Metric Only
     """
 
     response_bytes_column_name = METRICS_API_PROMETHEUS_QUERIES.response_bytes_name

@@ -9,9 +9,9 @@ def KSQLNumCSUChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Cost will be assumed by the ksql Service Account/User being used by the ksqldb cluster
-    # There will be only one active Identity but we will still loop on the identity for consistency
-    # The conditions are checking for the specific ksqldb cluster in an environment and trying to find its owner.
+    GOAL: Cost will be assumed by the ksql Service Account/User being used by the ksqldb cluster.
+    There will be only one active Identity but we will still loop on the identity for consistency.
+    The conditions are checking for the specific ksqldb cluster in an environment and trying to find its owner.
     """
     active_identities = set(
         [

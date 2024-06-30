@@ -9,8 +9,8 @@ def KafkaPartitionChargeback(
     cb_append_function,
 ):
     """
-    # GOAL: Split cost across all the API Key holders for the specific Cluster
-    # Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
+    GOAL: Split cost across all the API Key holders for the specific Cluster
+    Find all active Service Accounts/Users For kafka Cluster using the API Keys in the system.
     """
     sa_count = cb_handler_input.ccloud_objects_handler.cc_api_keys.find_sa_count_for_clusters(
         cluster_id=cb_input_row.row_cluster_id

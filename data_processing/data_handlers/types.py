@@ -173,7 +173,7 @@ class AbstractDataHandler(ABC):
         if dataset.empty:
             return (dataset, False)
 
-        temp_ds = dataset.index.get_level_values(ts_column_name)
+        # temp_ds = dataset.index.get_level_values(ts_column_name)
         return (dataset[(dataset.index.get_level_values(ts_column_name) == time_slice)], False)
 
     @logged_method
