@@ -141,38 +141,50 @@ class CCloudOrg(Observer):
             hour=0, minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) - datetime.timedelta(days=2)
         next_ts_in_dt = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime, is_notifier_update=True)
-        if next_ts_in_dt < self.exposed_end_date:
-            if next_ts_in_dt == self.exposed_metrics_datetime:
-                LOGGER.debug(
-                    f"Next Fetch Date is same as the current fetch date. Clearing out the stats to prevent republishing of the same data."
-                )
-                notifier.clear()
-                self.objects_handler.force_clear_prom_metrics()
-                self.chargeback_handler.force_clear_prom_metrics()
-            else:
-                set_readiness(readiness_flag=False)
-                notifier.clear()
-                notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
-                # self.expose_prometheus_metrics(ts_filter=next_ts)
-                LOGGER.info(f"Refreshing CCloud Existing Objects Data")
-                self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                notifier.labels("ccloud_objects").set(1)
-                LOGGER.info(f"Gathering Metrics API Data")
-                self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                LOGGER.info(f"Checking for new Billing CSV Files")
-                self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                LOGGER.info("Calculating next dataset for chargeback")
-                self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
-                notifier.labels("billing_chargeback").set(1)
-                self.exposed_metrics_datetime = next_ts_in_dt
-                LOGGER.info(f"Fetch Date: {next_ts_in_dt}")
-                set_current_exposed_date(exposed_date=next_ts_in_dt)
-                set_readiness(readiness_flag=True)
-        else:
+
+        if next_ts_in_dt >= self.exposed_end_date:
             LOGGER.info(
                 f"""Chargeback calculation is fully caught up to the point where it needs to be. 
                 More processing will continue after the day passes and the data for the day is finalized in the Billing API."""
             )
+            return
+
+        if next_ts_in_dt == self.exposed_metrics_datetime:
+            LOGGER.debug(
+                f"Next Fetch Date is same as the current fetch date. Clearing out the stats to prevent republishing of the same data."
+            )
+            notifier.clear()
+            self.objects_handler.force_clear_prom_metrics()
+            self.chargeback_handler.force_clear_prom_metrics()
+            return
+
+        # if next_ts_in_dt < self.exposed_end_date:
+        if next_ts_in_dt == self.exposed_metrics_datetime:
+            LOGGER.debug(
+                f"Next Fetch Date is same as the current fetch date. Clearing out the stats to prevent republishing of the same data."
+            )
+            notifier.clear()
+            self.objects_handler.force_clear_prom_metrics()
+            self.chargeback_handler.force_clear_prom_metrics()
+        else:
+            set_readiness(readiness_flag=False)
+            notifier.clear()
+            notifier.set_timestamp(curr_timestamp=next_ts_in_dt)
+            # self.expose_prometheus_metrics(ts_filter=next_ts)
+            LOGGER.info(f"Refreshing CCloud Existing Objects Data")
+            self.objects_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            notifier.labels("ccloud_objects").set(1)
+            LOGGER.info(f"Gathering Metrics API Data")
+            self.metrics_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            LOGGER.info(f"Checking for new Billing CSV Files")
+            self.billing_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            LOGGER.info("Calculating next dataset for chargeback")
+            self.chargeback_handler.execute_requests(exposed_timestamp=next_ts_in_dt)
+            notifier.labels("billing_chargeback").set(1)
+            self.exposed_metrics_datetime = next_ts_in_dt
+            LOGGER.info(f"Fetch Date: {next_ts_in_dt}")
+            set_current_exposed_date(exposed_date=next_ts_in_dt)
+            set_readiness(readiness_flag=True)
 
     @logged_method
     def locate_next_fetch_date(
