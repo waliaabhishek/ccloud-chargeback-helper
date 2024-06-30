@@ -11,7 +11,9 @@ import pandas as pd
 class ChargebackExecutorInputObject:
     input_time_slice: datetime.datetime
     billing_dataframe: pd.DataFrame
-    metrics_dataframe: pd.DataFrame
+    principal_metrics_dataframe: pd.DataFrame
+    topic_metrics_dataframe: pd.DataFrame
+    flink_metrics_dataframe: pd.DataFrame
     row_timestamp: datetime.datetime
     row_env_id: str
     row_cluster_id: str

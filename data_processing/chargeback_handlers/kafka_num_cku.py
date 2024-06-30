@@ -53,9 +53,9 @@ def KafkaNumCKUChargeback(
     # filter metrics for data that has some consumption > 0 , and then find all rows with index
     # with that timestamp and that specific kafka cluster.
     try:
-        metric_rows = cb_input_row.metrics_dataframe[
-            (cb_input_row.metrics_dataframe[METRICS_API_COLUMNS.timestamp] == df_time_slice)
-            & (cb_input_row.metrics_dataframe[METRICS_API_COLUMNS.cluster_id] == cb_input_row.row_cluster_id)
+        metric_rows = cb_input_row.principal_metrics_dataframe[
+            (cb_input_row.principal_metrics_dataframe[METRICS_API_COLUMNS.timestamp] == df_time_slice)
+            & (cb_input_row.principal_metrics_dataframe[METRICS_API_COLUMNS.cluster_id] == cb_input_row.row_cluster_id)
         ]
     except KeyError:
         metric_rows = pd.DataFrame()

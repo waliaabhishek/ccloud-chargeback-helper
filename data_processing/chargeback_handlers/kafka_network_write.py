@@ -22,7 +22,9 @@ def KafkaNetworkWriteChargeback(
     # filter metrics for data that has some consumption > 0 , and then find all rows with index
     # with that timestamp and that specific kafka cluster.
     try:
-        subset = cb_input_row.metrics_dataframe[cb_input_row.metrics_dataframe[request_bytes_column_name] > 0][
+        subset = cb_input_row.principal_metrics_dataframe[
+            cb_input_row.principal_metrics_dataframe[request_bytes_column_name] > 0
+        ][
             [
                 METRICS_API_COLUMNS.timestamp,
                 METRICS_API_COLUMNS.cluster_id,

@@ -21,9 +21,11 @@ from data_processing.chargeback_handlers.kafka_partition import KafkaPartitionCh
 from data_processing.chargeback_handlers.ksql_num_csu import KSQLNumCSUChargeback
 from data_processing.chargeback_handlers.schema_registry_generic import SchemaRegistryGenericChargeback
 from data_processing.chargeback_handlers.types import ChargebackExecutorOutputObject, ChargebackExecutorInputObject
+from data_processing.chargeback_handlers.unknown_data_type import UnknownDatatypeChargeback
 from data_processing.data_handlers.billing_api_handler import BILLING_API_COLUMNS, CCloudBillingHandler
 from data_processing.data_handlers.ccloud_api_handler import CCloudObjectsHandler
 from data_processing.data_handlers.prom_metrics_api_handler import (
+    MetricCategory,
     PrometheusMetricsDataHandler,
 )
 from data_processing.data_handlers.types import AbstractDataHandler
@@ -70,6 +72,8 @@ chargeback_prom_metrics = TimestampedCollector(
 CHARGEBACK_EXECUTORS = {
     # This is a dict of all the chargeback executors that are available
     # The key is the product type and the value is the class that handles the chargeback
+    "DEFAULT": UnknownDatatypeChargeback,
+    "UNKNOWN": UnknownDatatypeChargeback,
     "KAFKA_BASE": KafkaBaseChargeback,
     "KAFKA_NETWORK_READ": KafkaNetworkReadChargeback,
     "KAFKA_NETWORK_WRITE": KafkaNetworkWriteChargeback,
@@ -88,6 +92,7 @@ CHARGEBACK_EXECUTORS = {
     "SCHEMA_REGISTRY": SchemaRegistryGenericChargeback,
     "KSQL_NUM_CSU": KSQLNumCSUChargeback,
     "KSQL_NUM_CSUS": KSQLNumCSUChargeback,
+    "FLINK_NUM_CFUS": UnknownDatatypeChargeback,
 }
 
 
@@ -314,7 +319,21 @@ class CCloudChargebackHandler(AbstractDataHandler):
         )
 
         billing_data = self.billing_dataset.get_dataset_for_time_slice(time_slice=time_slice)
-        metrics_data = self.metrics_dataset.get_dataset_for_time_slice(time_slice=time_slice)
+        principal_metrics_data = self.metrics_dataset.get_dataset_for_time_slice(
+            time_slice=time_slice,
+            api_dataset=self.metrics_dataset.metrics_dataset,
+            metrics_category=MetricCategory.PRINCIPAL,
+        )
+        topic_metrics_data = self.metrics_dataset.get_dataset_for_time_slice(
+            time_slice=time_slice,
+            api_dataset=self.metrics_dataset.metrics_dataset,
+            metrics_category=MetricCategory.TOPIC,
+        )
+        flink_metrics_data = self.metrics_dataset.get_dataset_for_time_slice(
+            time_slice=time_slice,
+            api_dataset=self.metrics_dataset.metrics_dataset,
+            metrics_category=MetricCategory.FLINK,
+        )
         for bill_row in billing_data.itertuples(index=True, name="BillingRow"):
             row_ts, row_env, row_cid, row_pname, row_ptype = (
                 bill_row.Index[0].to_pydatetime(),
@@ -332,7 +351,9 @@ class CCloudChargebackHandler(AbstractDataHandler):
             row_input_object = ChargebackExecutorInputObject(
                 input_time_slice=time_slice,
                 billing_dataframe=billing_data,
-                metrics_dataframe=metrics_data,
+                principal_metrics_dataframe=principal_metrics_data,
+                topic_metrics_dataframe=topic_metrics_data,
+                flink_metrics_dataframe=flink_metrics_data,
                 row_timestamp=row_ts,
                 row_env_id=row_env,
                 row_cluster_id=row_cid,
@@ -349,7 +370,8 @@ class CCloudChargebackHandler(AbstractDataHandler):
                 LOGGER.warning(
                     f"No Chargeback calculation available for {row_ptype}. Please request for it to be added. The data might be an inaccurate split for {row_ptype}"
                 )
-                continue
+                LOGGER.warning(f"Trying to calculate with Default handler. The output might be inaccurate")
+                chargeback_executor = CHARGEBACK_EXECUTORS.get("DEFAULT", None)
 
             chargeback_executor(
                 cb_handler_input=handlers_base,
