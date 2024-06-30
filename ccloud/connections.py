@@ -24,6 +24,8 @@ class URIDetails:
     clusters = "/cmk/v2/clusters"
     service_accounts = "/iam/v2/service-accounts"
     user_accounts = "/iam/v2/users"
+    identity_providers = "/iam/v2/identity-providers"
+    identity_pools = "/iam/v2/identity-providers/{provider_id}/identity-pools"
     api_keys = "/iam/v2/api-keys"
     list_connector_names = (
         "/connect/v1/environments/{environment_id}/clusters/{kafka_cluster_id}/connectors?expand=info,status,id"
@@ -79,22 +81,27 @@ class CCloudBase:
 
     @logged_method
     def override_auth_type_from_yaml(self, auth_dict: Dict):
+        is_auth_enabled = auth_dict.get("enable_auth", False)
+
+        LOGGER.debug(f"Enable Auth Flag is found in the config with value {is_auth_enabled}.")
         LOGGER.debug(f"Trying to override auth type")
-        if auth_dict.get("enable_auth", False):
-            LOGGER.debug(f"Enable Auth Flag is found in the config with value {auth_dict.get('enable_auth', False)}.")
-            if auth_dict.get("auth_type") == "HTTPBasicAuth":
-                LOGGER.debug(f"Setting Auth Type as HTTPBasicAuth")
-                self.http_connection = HTTPBasicAuth(**auth_dict.get("auth_args"))
-            elif auth_dict.get("auth_type") == "HTTPDigestAuth":
-                LOGGER.debug(f"Setting Auth Type as HTTPDigestAuth")
-                self.http_connection = HTTPDigestAuth(**auth_dict.get("auth_args"))
-            else:
-                # Other AUTH Types are not implemented yet.
-                LOGGER.debug(f"Unsupported Auth Type received. Value: {auth_dict.get('enable_auth', False)}")
-                LOGGER.debug(f"Setting Auth Type as None")
-                self.http_connection = None
-        else:
+
+        if not is_auth_enabled:
             LOGGER.debug(f"Enable Auth Flag is set to false.")
+            self.http_connection = None
+            return
+
+        if auth_dict.get("auth_type") == "HTTPBasicAuth":
+            LOGGER.debug(f"Setting Auth Type as HTTPBasicAuth")
+            self.http_connection = HTTPBasicAuth(**auth_dict.get("auth_args"))
+        elif auth_dict.get("auth_type") == "HTTPDigestAuth":
+            LOGGER.debug(f"Setting Auth Type as HTTPDigestAuth")
+            self.http_connection = HTTPDigestAuth(**auth_dict.get("auth_args"))
+        else:
+            # Other AUTH Types are not implemented yet.
+            # TODO: Implement other Auth Types
+            LOGGER.debug(f"Unsupported Auth Type received. Value: {auth_dict.get('auth_type', False)}")
+            LOGGER.debug(f"Setting Auth Type as None")
             self.http_connection = None
 
     @logged_method
