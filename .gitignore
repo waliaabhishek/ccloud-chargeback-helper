@@ -9,3 +9,4 @@ deployables/datastore/
 .*-my-env
 *.env
 docker-compose.*.yml
+config.*.yaml
