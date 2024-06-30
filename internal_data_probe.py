@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from enum import Enum, auto
 
 from flask import Flask
 
@@ -9,8 +10,47 @@ LOGGER = logging.getLogger(__name__)
 
 internal_api = Flask(__name__)
 
+
+class CodeCurrentStatusValues(Enum):
+    STARTING = auto()
+    BACKFILLING = auto()
+    LIVE = auto()
+    BACKFILL_MISSING_DATA = auto()
+
+
 READINESS_FLAG = False
 CURRENT_EXPOSED_DATE: datetime = None
+CURRENT_STATUS: str = None
+
+
+@logged_method
+def get_current_status():
+    global CURRENT_STATUS
+    return str(CURRENT_STATUS.name)
+
+
+@logged_method
+def set_starting():
+    global CURRENT_STATUS
+    CURRENT_STATUS = CodeCurrentStatusValues.STARTING
+
+
+@logged_method
+def set_backfilling():
+    global CURRENT_STATUS
+    CURRENT_STATUS = CodeCurrentStatusValues.BACKFILLING
+
+
+@logged_method
+def set_backfill_missing_data():
+    global CURRENT_STATUS
+    CURRENT_STATUS = CodeCurrentStatusValues.BACKFILL_MISSING_DATA
+
+
+@logged_method
+def set_live():
+    global CURRENT_STATUS
+    CURRENT_STATUS = CodeCurrentStatusValues.LIVE
 
 
 @logged_method

@@ -106,6 +106,7 @@ def run_calculate_cycle(ccloud_orgs: CCloudOrgList):
 @logged_method
 def execute_workflow(arg_flags: Namespace):
     LOGGER.info("Starting Workflow Runner")
+    internal_data_probe.set_starting()
     LOGGER.debug("Debug Mode is ON")
     LOGGER.debug("Parsing config file")
     core_config = try_parse_config_file(config_yaml_path=arg_flags.config_file)
