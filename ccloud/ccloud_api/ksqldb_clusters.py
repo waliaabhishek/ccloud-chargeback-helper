@@ -74,6 +74,10 @@ class CCloudKsqldbClusterList(CCloudBase):
     def force_clear_prom_metrics(self):
         ksqldb_prom_metrics.clear()
 
+    # def __str__(self) -> str:
+    #     for item in self.ksqldb_clusters.values():
+    #         print("{:<15} {:<40} {:<15}".format(item.cluster_id, item.cluster_name, item.owner_id))
+
     # This method will help reading all the API Keys that are already provisioned.
     # Please note that the API Secrets cannot be read back again, so if you do not have
     # access to the secret , you will need to generate new api key/secret pair.
