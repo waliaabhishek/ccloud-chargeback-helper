@@ -32,6 +32,7 @@ def logged_method(func):
     This Method allows you to add breadcrumbs to logging for the method.
     :rtype: object
     """
+
     @wraps(func)
     def add_entry_exit_logs(*args, **kwargs):
         if METHOD_BREADCRUMBS:
@@ -47,7 +48,7 @@ def logged_method(func):
 @logged_method
 def get_env_var(var_name: str):
     if environ.get(var_name.strip()) is None:
-        raise Exception("Cannot find environment variable " + var_name)
+        raise Exception(f"Cannot find environment variable {var_name}")
     else:
         return environ[var_name]
 
