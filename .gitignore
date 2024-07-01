@@ -8,5 +8,6 @@ src/to_be_deleted/
 deployables/datastore/
 .*-my-env
 *.env
+!configs/examples/.env
 docker-compose.*.yml
 config.*.yaml

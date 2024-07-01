@@ -1,0 +1,50 @@
+---
+config:
+  chargeback:
+    system:
+      days_in_memory: 7
+      output_dir_name: "output"
+      logging:
+        log_level: env::LOG_LEVEL
+        enable_method_breadcrumbs: env:ENABLE_METHOD_BREADCRUMBS
+      exposed_ports:
+        metrics_export: 8000
+        readiness_api: 8001
+  ccloud_org_details:
+    - id: "CCloud Org 1"
+      config:
+        total_lookback_days: env::CCLOUD_LOOKBACK_DAYS
+        ccloud_api:
+          auth:
+            api_key: env::CCLOUD_BILLING_API_KEY
+            api_secret: env::CCLOUD_BILLING_API_SECRET
+        billing_api:
+          auth:
+            api_key: env::CCLOUD_BILLING_API_KEY
+            api_secret: env::CCLOUD_BILLING_API_SECRET
+        metrics_api:
+          auth:
+            api_key: env::CCLOUD_BILLING_API_KEY
+            api_secret: env::CCLOUD_BILLING_API_SECRET
+        flink:
+          auth:
+            - compute_pool_id: "lfcp-*******"
+              resource_api_key: "********"
+              resource_api_secret: "********"
+      connectivity:
+        chargeback_metrics:
+          url: env::CHARGEBACK_METRICS_URL
+        chargeback_readiness:
+          url: env::CHARGEBACK_READINESS_PROBE_URL
+        prometheus_server:
+          url: env::CHARGEBACK_SERVER_URL
+        metrics_api_datastore_server:
+          url: env::CHARGEBACK_SERVER_URL
+          auth:
+            enabled: env::METRICS_API_SERVER_ENABLE_AUTH
+            type: env::METRICS_API_SERVER_AUTH_TYPE
+            args:
+              username: env::METRICS_API_SERVER_AUTH_USERNAME
+              password: env::METRICS_API_SERVER_AUTH_PASSWORD
+            connection_params:
+              verify: False
