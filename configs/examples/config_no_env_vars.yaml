@@ -1,0 +1,50 @@
+---
+config:
+  chargeback:
+    system:
+      days_in_memory: 7
+      output_dir_name: "output"
+      logging:
+        log_level: "INFO"
+        enable_method_breadcrumbs: False
+      exposed_ports:
+        metrics_export: 8000
+        readiness_api: 8001
+  ccloud_org_details:
+    - id: "CCloud Org 1"
+      config:
+        total_lookback_days: 200
+        ccloud_api:
+          auth:
+            api_key: "ABCDEFG12345"
+            api_secret: "asdfgh"
+        billing_api:
+          auth:
+            api_key: "ABCDEFG12345"
+            api_secret: "asdfghjklpoiuytrewq1234567890"
+        metrics_api:
+          auth:
+            api_key: "ABCDEFG12345"
+            api_secret: "asdfghjklpoiuytrewq1234567890"
+        flink:
+          auth:
+            - compute_pool_id: "lfcp-*******"
+              resource_api_key: "********"
+              resource_api_secret: "********"
+      connectivity:
+        chargeback_metrics:
+          url: "http://ccloud_chargeback_handler:8000"
+        chargeback_readiness:
+          url: "http://ccloud_chargeback_handler:8001"
+        prometheus_server:
+          url: "http://prometheus_for_chargeback:9090"
+        metrics_api_datastore_server:
+          url: "http://prometheus_for_chargeback:9090"
+          auth:
+            enabled: False
+            type: "HTTPBasicAuth"
+            args:
+              username: "admin"
+              password: "password"
+            connection_params:
+              verify: False

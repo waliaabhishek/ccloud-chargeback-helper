@@ -81,7 +81,7 @@ class CCloudBase:
 
     @logged_method
     def override_auth_type_from_yaml(self, auth_dict: Dict):
-        is_auth_enabled = auth_dict.get("enable_auth", False)
+        is_auth_enabled = auth_dict.get("enabled", False)
 
         LOGGER.debug(f"Enable Auth Flag is found in the config with value {is_auth_enabled}.")
         LOGGER.debug(f"Trying to override auth type")
@@ -91,12 +91,12 @@ class CCloudBase:
             self.http_connection = None
             return
 
-        if auth_dict.get("auth_type") == "HTTPBasicAuth":
+        if auth_dict.get("type") == "HTTPBasicAuth":
             LOGGER.debug(f"Setting Auth Type as HTTPBasicAuth")
-            self.http_connection = HTTPBasicAuth(**auth_dict.get("auth_args"))
-        elif auth_dict.get("auth_type") == "HTTPDigestAuth":
+            self.http_connection = HTTPBasicAuth(**auth_dict.get("args"))
+        elif auth_dict.get("type") == "HTTPDigestAuth":
             LOGGER.debug(f"Setting Auth Type as HTTPDigestAuth")
-            self.http_connection = HTTPDigestAuth(**auth_dict.get("auth_args"))
+            self.http_connection = HTTPDigestAuth(**auth_dict.get("args"))
         else:
             # Other AUTH Types are not implemented yet.
             # TODO: Implement other Auth Types

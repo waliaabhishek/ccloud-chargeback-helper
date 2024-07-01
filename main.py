@@ -15,8 +15,8 @@ wf_args = parser.add_argument_group("workflow-args", "Workflow Selection Argumen
 wf_args.add_argument(
     "--config-file",
     type=str,
-    default="./config/config_internal.yaml",
-    help="Provide the path to the config file. Default is ./config/config_internal.yaml.",
+    default="./configs/config_with_no_env_vars.yaml",
+    help="Provide the path to the config file. Default is ./configs/config_with_no_env_vars.yaml",
 )
 
 arg_flags = parser.parse_args()

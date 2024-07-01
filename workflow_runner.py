@@ -32,42 +32,46 @@ class AppProps:
 def get_app_props(in_config: Dict):
     global APP_PROPS
 
-    if not in_config["system"]:
+    system_config: Dict = in_config.get("chargeback", {}).get("system", {})
+
+    if not system_config:
         LOGGER.warning("No System Configuration found. Using default values.")
         APP_PROPS = AppProps()
-    else:
-        LOGGER.debug("System Configuration found. Using values from config file.")
-        config: Dict = in_config["system"]
-        LOGGER.debug("Parsing loglevel from config file")
-        log_lvl: str = config.get("log_level", "INFO").upper()
-        match log_lvl:
-            case "DEBUG":
-                LOGGER.info("Setting loglevel to DEBUG")
-                loglevel = logging.DEBUG
-            case "INFO":
-                LOGGER.info("Setting loglevel to INFO")
-                loglevel = logging.INFO
-            case "WARNING":
-                LOGGER.info("Setting loglevel to WARNING")
-                loglevel = logging.WARNING
-            case "ERROR":
-                LOGGER.info("Setting loglevel to ERROR")
-                loglevel = logging.ERROR
-            case _:
-                LOGGER.info(
-                    f"Cannot understand log level {log_lvl}. Setting loglevel to INFO"
-                )
-                loglevel = logging.INFO
-        set_logger_level(loglevel)
-        breadcrumbs = config.get("enable_method_breadcrumbs", False)
-        breadcrumbs = bool(breadcrumbs if breadcrumbs is True else False)
-        set_breadcrumb_flag(breadcrumbs)
-        LOGGER.info("Parsing Core Application Properties")
-        APP_PROPS = AppProps(
-            days_in_memory=config.get("days_in_memory", 7),
-            relative_output_dir=config.get("output_dir_name", "output"),
-            loglevel=loglevel,
-        )
+        set_breadcrumb_flag(False)
+        set_logger_level(logging.INFO)
+        return
+
+    LOGGER.debug("System Configuration found. Using values from config file.")
+    LOGGER.debug("Parsing loglevel from config file")
+    log_lvl: str = system_config.get("logging",{}).get("log_level", "INFO").upper()
+    match log_lvl:
+        case "DEBUG":
+            LOGGER.info("Setting loglevel to DEBUG")
+            loglevel = logging.DEBUG
+        case "INFO":
+            LOGGER.info("Setting loglevel to INFO")
+            loglevel = logging.INFO
+        case "WARNING":
+            LOGGER.info("Setting loglevel to WARNING")
+            loglevel = logging.WARNING
+        case "ERROR":
+            LOGGER.info("Setting loglevel to ERROR")
+            loglevel = logging.ERROR
+        case _:
+            LOGGER.info(
+                f"Cannot understand log level {log_lvl}. Setting loglevel to INFO"
+            )
+            loglevel = logging.INFO
+    set_logger_level(loglevel)
+    breadcrumbs = system_config.get("logging", {}).get("enable_method_breadcrumbs", False)
+    breadcrumbs = bool(breadcrumbs if breadcrumbs is True else False)
+    set_breadcrumb_flag(breadcrumbs)
+    LOGGER.info("Parsing Core Application Properties")
+    APP_PROPS = AppProps(
+        days_in_memory=system_config.get("days_in_memory", 7),
+        relative_output_dir=system_config.get("output_dir_name", "output"),
+        loglevel=loglevel,
+    )
 
 
 class WorkflowStage(Enum):
@@ -132,22 +136,27 @@ def execute_workflow(arg_flags: Namespace):
         for item in threads_list:
             item.start()
 
+        ports_config: Dict = core_config.get("chargeback", {}).get("system", {}).get("exposed_ports", {})
+
         LOGGER.debug("Starting Prometheus Server")
-        prometheus_client.start_http_server(8000)
+        prometheus_client.start_http_server(ports_config.get("metrics_export", 8000))
 
         LOGGER.debug("Starting Internal API Server for state sharing and readiness")
         threading.Thread(
             target=internal_data_probe.internal_api.run,
-            kwargs={"host": "0.0.0.0", "port": 8001},
+            kwargs={"host": "0.0.0.0", "port": ports_config.get("readiness_api", 8001)},
         ).start()
 
         # This step will initialize the CCloudOrg structure along with all the internal Objects in it.
         # Those will include the first run for all the data gather step as well.
         # There are some safeguards already implemented to prevent request choking, it should be safe in most use cases.
         LOGGER.info("Initializing Core CCloudOrgList Object")
+        if not core_config.get("config", {}).get("ccloud_org_details", {}):
+            LOGGER.error("No CCloud Org Details found in config file. Exiting.")
+            raise ValueError("No CCloud Org Details found in config file.")
+
         CCloudOrgList(
             in_orgs=core_config["config"]["org_details"],
-            in_days_in_memory=APP_PROPS.days_in_memory,
         )
 
         LOGGER.info("Initialization Complete.")

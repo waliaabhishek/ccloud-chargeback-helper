@@ -30,10 +30,10 @@ scrape_status_metrics = TimestampedCollector(
 
 @dataclass(kw_only=True)
 class CCloudOrg(Observer):
-    in_org_details: InitVar[List | None] = None
-    in_days_in_memory: InitVar[int] = field(default=7)
+    in_org_details: InitVar[Dict] = field(init=True)
     org_id: str
 
+    days_in_memory: int = field(default=7)
     objects_handler: CCloudObjectsHandler = field(init=False)
     metrics_handler: PrometheusMetricsDataHandler = field(init=False)
     status_metrics_handler: PrometheusStatusMetricsDataHandler = field(init=False)
@@ -44,10 +44,10 @@ class CCloudOrg(Observer):
     exposed_end_date: datetime.datetime = field(init=False)
     reset_counter: int = field(default=0, init=False)
 
-    def __post_init__(self, in_org_details, in_days_in_memory) -> None:
+    def __post_init__(self, in_org_details: Dict) -> None:
         Observer.__init__(self)
-        LOGGER.debug(f"Sanitizing Org ID {in_org_details['id']}")
-        self.org_id = sanitize_id(in_org_details["id"])
+        LOGGER.debug(f"Sanitizing Org ID {self.org_id}")
+        self.org_id = sanitize_id(self.org_id)
         LOGGER.debug(f"Initializing CCloudOrg for Org ID: {self.org_id}")
         # This start date is calculated from the now time to rewind back "x" days as that is the
         # time limit of the billing dataset which is available to us. We will need the metrics handler
@@ -56,9 +56,14 @@ class CCloudOrg(Observer):
         #     minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         # ) + datetime.timedelta(days=-30, hours=+1)
 
+        # Ensure Mandatory values are present
+        self.validate_essentials(in_org_details=in_org_details)
+
         # This following action is required as for the first run we need to derive the start date.
         # So we step back by 1 hour, so that the current hour slice is returned.
-        lookback_days = int(in_org_details.get("ccloud_details", {}).get("total_lookback_days", 200)) * -1
+        self.org_config: Dict = in_org_details.get("config", {})
+        self.org_connectivity: Dict = in_org_details.get("connectivity", {})
+        lookback_days = int(self.org_config.get("total_lookback_days", 200)) * -1
         self.exposed_metrics_datetime = datetime.datetime.utcnow().replace(
             minute=0, second=0, microsecond=0, tzinfo=datetime.timezone.utc
         ) + datetime.timedelta(days=lookback_days, hours=+1)
@@ -77,8 +82,10 @@ class CCloudOrg(Observer):
         # This is used for checking when was the last scrape stored in Prometheus
         # and where to resume the scrape
         LOGGER.info(f"Initializing Prometheus Status Metrics Handler for Org ID: {self.org_id}")
+        if not self.org_connectivity.get("prometheus_server", {}).get("url"):
+            LOGGER.error("Prometheus Server URL not found in the Org Configuration. Exiting.")
         self.status_metrics_handler = PrometheusStatusMetricsDataHandler(
-            in_prometheus_url=in_org_details["prometheus_details"]["chargeback_datastore"]["prometheus_url"],
+            in_prometheus_url=self.org_connectivity.get("prometheus_server", {}).get("url"),
         )
 
         next_fetch_date = self.locate_next_fetch_date(start_date=self.exposed_metrics_datetime)
@@ -88,8 +95,8 @@ class CCloudOrg(Observer):
         # Initialize the CCloud Objects Handler
         self.objects_handler = CCloudObjectsHandler(
             in_ccloud_connection=CCloudConnection(
-                in_api_key=in_org_details["ccloud_details"]["ccloud_api"]["api_key"],
-                in_api_secret=in_org_details["ccloud_details"]["ccloud_api"]["api_secret"],
+                in_api_key=self.org_config["ccloud_api"]["auth"]["api_key"],
+                in_api_secret=self.org_config["ccloud_api"]["auth"]["api_secret"],
                 base_url=EndpointURL.API_URL,
             ),
             start_date=next_fetch_date,
@@ -99,8 +106,8 @@ class CCloudOrg(Observer):
         # Initialize the Billing API Handler
         self.billing_handler = CCloudBillingHandler(
             in_ccloud_connection=CCloudConnection(
-                in_api_key=in_org_details["ccloud_details"]["billing_api"]["api_key"],
-                in_api_secret=in_org_details["ccloud_details"]["billing_api"]["api_secret"],
+                in_api_key=self.org_config["billing_api"]["auth"]["api_key"],
+                in_api_secret=self.org_config["billing_api"]["auth"]["api_secret"],
                 base_url=EndpointURL.API_URL,
             ),
             start_date=next_fetch_date,
@@ -111,14 +118,12 @@ class CCloudOrg(Observer):
         # Initialize the Metrics Handler
         self.metrics_handler = PrometheusMetricsDataHandler(
             in_ccloud_connection=CCloudConnection(
-                in_api_key=in_org_details["ccloud_details"]["metrics_api"]["api_key"],
-                in_api_secret=in_org_details["ccloud_details"]["metrics_api"]["api_secret"],
+                in_api_key=self.org_config["metrics_api"]["auth"]["api_key"],
+                in_api_secret=self.org_config["metrics_api"]["auth"]["api_secret"],
             ),
-            in_prometheus_url=in_org_details["prometheus_details"]["metrics_api_datastore"]["prometheus_url"],
-            in_connection_kwargs=in_org_details["prometheus_details"]["metrics_api_datastore"]["connection_params"],
-            in_connection_auth=in_org_details.get("prometheus_details", dict())
-            .get("metrics_api_datastore", dict())
-            .get("auth", dict()),
+            in_prometheus_url=self.org_connectivity["metrics_api_datastore_server"]["url"],
+            in_connection_kwargs=self.org_connectivity["metrics_api_datastore_server"]["auth"]["connection_params"],
+            in_connection_auth=self.org_connectivity.get("metrics_api_datastore_server", {}).get("auth", {}),
             start_date=next_fetch_date,
         )
 
@@ -134,6 +139,57 @@ class CCloudOrg(Observer):
         LOGGER.debug(f"Attaching CCloudOrg to notifier {scrape_status_metrics._name} for Org ID: {self.org_id}")
         self.attach(notifier=scrape_status_metrics)
         # self.update(notifier=scrape_status_metrics)
+
+    @logged_method
+    def validate_essentials(self, in_org_details: Dict) -> bool:
+        """
+        Validate the essential configuration properties for the CCloudOrg
+        :param in_org_details: Dict
+        :return: bool
+        """
+        validations = []
+
+        if not in_org_details.get("config", {}).get("total_lookback_days"):
+            LOGGER.warning("Total Lookback Days not found in the Org Configuration. Using default value of 200 days.")
+
+        for item in ["ccloud_api", "billing_api", "metrics_api"]:
+            for item_type in ["api_key", "api_secret"]:
+                if not in_org_details.get("config", {}).get(item, {}).get("auth", {}).get(item_type, ""):
+                    LOGGER.error(
+                        f"CCloud {item_type} not found in the Org Configuration. Cannot proceed without mapping CCloud Objects."
+                    )
+                    validations.append(
+                        f"CCloud {item_type} missing for org {self.org_id} at config.ccloud_org_details.config.{item}.auth.{item_type}"
+                    )
+
+        for item in [
+            "chargeback_metrics",
+            "chargeback_readiness",
+            "prometheus_server",
+            "metrics_api_datastore_server",
+        ]:
+            if not in_org_details.get("connectivity", {}).get(item, {}).get("url", {}):
+                LOGGER.error("{item} URL not found in the Org Configuration. Cannot proceed without mapping.")
+                validations.append(
+                    f"{item} URL missing for org {self.org_id} at config.ccloud_org_details.connectivity.{item}.url"
+                )
+            if item == "metrics_api_datastore_server":
+                metrics_datastore_config = in_org_details.get("connectivity", {}).get(item, {})
+                if metrics_datastore_config.get("auth", {}).get("enabled", False):
+                    for auth_item in ["username", "password"]:
+                        if not metrics_datastore_config.get("auth", {}).get("args", {}).get(auth_item, ""):
+                            LOGGER.error(
+                                f"Metrics API datastore Auth is enabled but {auth_item} is not provided. Cannot proceed without mapping."
+                            )
+                            validations.append(
+                                f"Auth missing for org {self.org_id} at config.ccloud_org_details.connectivity.{item}.auth.{auth_item}"
+                            )
+
+        if not validations:
+            LOGGER.error(f"Validation failed for CCloudOrg ID {self.org_id}.")
+            for validation in validations:
+                LOGGER.error(f" - {validation}")
+            raise ValueError(f"Validation failed for CCloudOrg ID {self.org_id}. Exiting.")
 
     @logged_method
     def update(self, notifier: NotifierAbstract):
@@ -225,21 +281,27 @@ class CCloudOrg(Observer):
 
 @dataclass(kw_only=True)
 class CCloudOrgList:
-    in_orgs: InitVar[List | None] = None
-    in_days_in_memory: InitVar[int] = field(default=7)
+    in_orgs: InitVar[List[Dict] | None] = None
+    # in_days_in_memory: InitVar[int] = field(default=7)
 
     orgs: Dict[str, CCloudOrg] = field(default_factory=dict, init=False)
 
-    def __post_init__(self, in_orgs, in_days_in_memory) -> None:
+    def __post_init__(self, in_orgs) -> None:
         LOGGER.info("Initializing CCloudOrgList")
+        if not in_orgs or len(in_orgs) == 0:
+            LOGGER.error("No Orgs to Initialize. Skipping.")
+            raise ValueError("No Orgs to Initialize. No way to proceed further. Exiting.")
         req_count = 0
         for org_item in in_orgs:
+            if not org_item:
+                LOGGER.error("Org Item is empty. Skipping.")
+                continue
             temp = CCloudOrg(
                 in_org_details=org_item,
-                in_days_in_memory=in_days_in_memory,
-                org_id=str(org_item["id"]) if org_item["id"] else str(req_count),
+                org_id=str(org_item.get("id", "") if org_item.get("id", "") else str(req_count)),
             )
             self.__add_org_to_cache(ccloud_org=temp)
+            req_count += 1
         LOGGER.debug("Initialization Complete.")
         LOGGER.debug("marking readiness")
         set_readiness(readiness_flag=True)
