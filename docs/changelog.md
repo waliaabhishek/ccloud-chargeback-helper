@@ -18,5 +18,13 @@
 - Add a credential-free root `./demo` path with Docker Compose support for a
   deterministic rolling six-month Clean Confluent profile, a real API-only
   backend, and a React UI.
+- Expand the Clean demo with selectable Confluent Cloud and self-managed Kafka
+  tenants from one fictional company: a dense Confluent topology with four
+  environments, six Kafka clusters, 120 topics, 16 connectors, and
+  Schema Registry, ksqlDB, and Flink services, plus a self-managed topology
+  with two clusters, 24 topics, 10 identities, and four teams. Generated tags,
+  allocations, topic attribution, healthy pipeline status, exports, and
+  Confluent Cloud FOCUS Mapping Preview are available through the normal UI and
+  API using fully synthetic data without external provider calls.
 
 --8<-- "CHANGELOG.md"

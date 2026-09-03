@@ -498,3 +498,26 @@ def test_demo_compose_renders_non_default_numeric_users_and_internal_network() -
     assert services["demo-generator"]["user"] == "4242:4343"
     assert services["chitragupta"]["user"] == "4242:4343"
     assert config["networks"]["demo"]["internal"] is True
+
+
+def test_demo_compose_uses_the_application_generator_with_two_distinct_tenant_databases() -> None:
+    compose = yaml.safe_load((PROJECT_ROOT / COMPOSE_FILE).read_text(encoding="utf-8"))
+    config = yaml.safe_load((PROJECT_ROOT / "examples/demo/config.yaml").read_text(encoding="utf-8"))
+    tenants = list(config["tenants"].values())
+    connection_strings = {tenant["storage"]["connection_string"] for tenant in tenants}
+
+    assert compose["services"]["demo-generator"]["entrypoint"] == ["python", "-m", "demo.generator"]
+    assert [tenant["ecosystem"] for tenant in tenants] == ["confluent_cloud", "self_managed_kafka"]
+    assert len(connection_strings) == 2
+    assert all(connection_string.startswith("sqlite:////app/data/") for connection_string in connection_strings)
+
+
+def test_shipped_demo_config_validates_ccloud_topic_attribution_metrics() -> None:
+    from plugins.confluent_cloud.config import CCloudPluginConfig
+
+    config = yaml.safe_load((PROJECT_ROOT / "examples/demo/config.yaml").read_text(encoding="utf-8"))
+    ccloud = CCloudPluginConfig.from_plugin_settings(config["tenants"]["clean-confluent"]["plugin_settings"])
+
+    assert ccloud.topic_attribution.enabled is True
+    assert ccloud.metrics is not None
+    assert ccloud.metrics.url == "http://prometheus.invalid:9090"

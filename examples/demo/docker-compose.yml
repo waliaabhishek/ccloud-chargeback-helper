@@ -2,7 +2,7 @@ services:
   demo-generator:
     image: chitragupta-demo-backend:local
     user: "${DEMO_UID}:${DEMO_GID}"
-    entrypoint: ["python", "-m", "plugins.confluent_cloud.demo.generator"]
+    entrypoint: ["python", "-m", "demo.generator"]
     command:
       [
         "--config",

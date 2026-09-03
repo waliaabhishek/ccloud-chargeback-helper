@@ -30,6 +30,16 @@ _EXPECTED_TOPIC_NAMES = {
     "fulfillment.shipped.v1",
     "logistics.tracking.v1",
 }
+_EXPECTED_TEAMS = {
+    "orders",
+    "payments",
+    "fulfillment",
+    "customer",
+    "analytics",
+    "platform",
+    "security",
+    "data",
+}
 
 
 def _scenario() -> CleanDemoScenario:
@@ -158,32 +168,84 @@ def test_build_clean_demo_scenario_uses_six_calendar_month_window_with_clamping(
     }
 
 
-def test_clean_demo_scenario_contains_the_complete_fictional_topology_and_identity_kinds() -> None:
+def test_clean_demo_scenario_contains_the_approved_confluent_topology_and_identity_kinds() -> None:
     scenario = _scenario()
     resource_counts = Counter(resource.resource_type for resource in scenario.resources)
-    identity_types = {identity.identity_type for identity in scenario.identities}
+    identity_counts = Counter(identity.identity_type for identity in scenario.identities)
     topics = _resources_of_type(scenario, "topic")
 
     assert resource_counts == {
         "organization": 1,
-        "environment": 2,
-        "kafka_cluster": 2,
-        "topic": 6,
-        "connector": 2,
-        "schema_registry": 2,
-        "ksqldb_cluster": 1,
-        "flink_compute_pool": 1,
-        "flink_statement": 1,
+        "environment": 4,
+        "kafka_cluster": 6,
+        "topic": 120,
+        "connector": 16,
+        "schema_registry": 3,
+        "ksqldb_cluster": 3,
+        "flink_compute_pool": 2,
+        "flink_statement": 3,
     }
-    assert {topic.display_name for topic in topics} == _EXPECTED_TOPIC_NAMES
+    assert identity_counts == {
+        "service_account": 8,
+        "user": 8,
+        "identity_provider": 2,
+        "identity_pool": 2,
+        "api_key": 12,
+    }
+    assert {topic.display_name for topic in topics} >= _EXPECTED_TOPIC_NAMES
+    assert all(not topic.display_name.startswith("topic-") for topic in topics)
     assert {topic.resource_id for topic in topics} == {
         f"{topic.parent_id}:topic:{topic.display_name}" for topic in topics
     }
-    assert {"user", "service_account", "identity_provider", "identity_pool", "api_key"} <= identity_types
+    assert Counter(topic.parent_id for topic in topics) == {
+        "lkc-commerce": 14,
+        "lkc-logistics": 30,
+        "lkc-fulfillment": 28,
+        "lkc-customer": 22,
+        "lkc-platform": 18,
+        "lkc-data": 8,
+    }
+    assert {cluster.resource_id: cluster.parent_id for cluster in _resources_of_type(scenario, "kafka_cluster")} == {
+        "lkc-commerce": "env-commerce",
+        "lkc-logistics": "env-logistics",
+        "lkc-fulfillment": "env-fulfillment",
+        "lkc-customer": "env-commerce",
+        "lkc-platform": "env-analytics",
+        "lkc-data": "env-logistics",
+    }
+    assert Counter(connector.parent_id for connector in _resources_of_type(scenario, "connector")) == {
+        "lkc-commerce": 5,
+        "lkc-logistics": 5,
+        "lkc-fulfillment": 3,
+        "lkc-customer": 1,
+        "lkc-platform": 1,
+        "lkc-data": 1,
+    }
+    assert Counter(registry.parent_id for registry in _resources_of_type(scenario, "schema_registry")) == {
+        "env-commerce": 1,
+        "env-logistics": 1,
+        "env-fulfillment": 1,
+    }
+    assert {
+        resource.resource_id: (resource.parent_id, resource.metadata["kafka_cluster_id"])
+        for resource in _resources_of_type(scenario, "ksqldb_cluster")
+    } == {
+        "lksql-commerce": ("env-commerce", "lkc-commerce"),
+        "lksql-logistics": ("env-logistics", "lkc-logistics"),
+        "lksql-analytics": ("env-analytics", "lkc-platform"),
+    }
+    assert Counter(pool.parent_id for pool in _resources_of_type(scenario, "flink_compute_pool")) == {
+        "env-logistics": 1,
+        "env-analytics": 1,
+    }
+    assert Counter(statement.parent_id for statement in _resources_of_type(scenario, "flink_statement")) == {
+        "env-logistics": 2,
+        "env-analytics": 1,
+    }
     assert all(resource.resource_id != scenario.tenant_id for resource in scenario.resources)
 
 
-def test_clean_demo_scenario_contains_daily_billing_allocations_and_usable_pipeline_states() -> None:
+def test_clean_demo_scenario_contains_reconciled_service_network_and_shared_costs_with_healthy_pipeline_state() -> None:
     scenario = _scenario()
     dates = tuple(_EXPECTED_START + timedelta(days=offset) for offset in range(184))
     billing_per_day = Counter(line.timestamp.date() for line in scenario.billing_lines)
@@ -194,23 +256,21 @@ def test_clean_demo_scenario_contains_daily_billing_allocations_and_usable_pipel
         allocation_totals[_chargeback_billing_key(row)] += row.amount
 
     assert tuple(billing_per_day) == dates
-    assert set(billing_per_day.values()) == {10}
+    assert all(billing_per_day[day] > 0 for day in dates)
     assert set(pipeline_by_date) == set(dates)
     assert len(pipeline_by_date) == len(dates)
     assert all(state.has_usable_calculation for state in pipeline_by_date.values())
-    assert {line.product_category for line in scenario.billing_lines} == {
-        "KAFKA",
-        "CONNECT",
-        "SCHEMA_REGISTRY",
-        "KSQL",
-        "FLINK",
+    assert {"KAFKA", "CONNECT", "STREAM_GOVERNANCE", "KSQL", "FLINK"} <= {
+        line.product_category for line in scenario.billing_lines
     }
+    assert any("NETWORK" in line.product_type for line in scenario.billing_lines)
     assert all(line.total_cost.as_tuple().exponent >= -2 for line in scenario.billing_lines)
     assert all(
         row.allocation_detail in {"usage_ratio_allocation", "even_split_allocation"} for row in scenario.chargebacks
     )
     assert all("unallocated" not in row.identity_id.lower() for row in scenario.chargebacks)
     assert {billing_natural_key(line): line.total_cost for line in scenario.billing_lines} == dict(allocation_totals)
+    assert {row.cost_type.value for row in scenario.chargebacks} == {"usage", "shared"}
 
 
 def test_clean_demo_scenario_uses_utc_second_precision_timestamps() -> None:
@@ -241,7 +301,7 @@ def test_clean_demo_scenario_uses_utc_second_precision_timestamps() -> None:
     assert all(timestamp.microsecond == 0 for timestamp in timestamps)
 
 
-def test_clean_demo_scenario_assigns_deterministic_team_tags_to_tagged_resources_and_identities() -> None:
+def test_clean_demo_scenario_assigns_one_complete_team_tag_to_every_persisted_resource_and_identity() -> None:
     scenario = _scenario()
     resource_ids = {resource.resource_id for resource in scenario.resources}
     identity_ids = {identity.identity_id for identity in scenario.identities}
@@ -255,9 +315,40 @@ def test_clean_demo_scenario_assigns_deterministic_team_tags_to_tagged_resources
         for tag in scenario.entity_tags
     )
     assert {tag.tag_key for tag in scenario.entity_tags} == {"team"}
-    assert len({tag.tag_value for tag in scenario.entity_tags}) == 4
+    assert {tag.tag_value for tag in scenario.entity_tags} == _EXPECTED_TEAMS
     assert all(tag.created_by == "demo-generator" for tag in scenario.entity_tags)
     assert len(tag_keys) == len(scenario.entity_tags)
+    tagged_entities = {(tag.entity_type, tag.entity_id) for tag in scenario.entity_tags}
+    assert tagged_entities == {("resource", resource_id) for resource_id in resource_ids} | {
+        ("identity", identity_id) for identity_id in identity_ids
+    }
+
+
+def test_clean_demo_scenario_contains_complete_topic_attribution_and_preview_evidence() -> None:
+    scenario = _scenario()
+    topic_totals: defaultdict[tuple[datetime, str, str, str, str], Decimal] = defaultdict(Decimal)
+    billing_totals: dict[tuple[datetime, str, str, str, str], Decimal] = {}
+
+    for row in scenario.topic_attributions:
+        assert row.topic_name != "__UNATTRIBUTED__"
+        assert row.amount > 0
+        key = (row.timestamp, row.env_id, row.cluster_resource_id, row.product_category, row.product_type)
+        topic_totals[key] += row.amount
+    for line in scenario.billing_lines:
+        key = (line.timestamp, line.env_id, line.resource_id, line.product_category, line.product_type)
+        if key in topic_totals:
+            billing_totals[key] = line.total_cost
+
+    assert billing_totals == dict(topic_totals)
+    assert scenario.preview_source_capture.records
+    assert scenario.preview_source_capture.refresh_start <= scenario.preview_source_capture.refresh_end
+    assert len(scenario.allocation_lineage_runs) == len(scenario.pipeline_states)
+    assert {run.calculation_id for run in scenario.allocation_lineage_runs} == {
+        state.calculation_id for state in scenario.pipeline_states
+    }
+    organization = _only_resource(scenario, "organization")
+    assert scenario.organization_authority_id == organization.resource_id
+    assert organization.metadata["organization_binding_state"] == "bound"
 
 
 def test_validator_rejects_nonunique_or_tenant_colliding_organizations() -> None:
@@ -373,7 +464,7 @@ def test_validator_rejects_schema_registries_with_duplicate_or_inconsistent_envi
 
 def test_validator_rejects_ksqldb_without_a_matching_environment_kafka_association_and_owner() -> None:
     scenario = _scenario()
-    ksqldb = _only_resource(scenario, "ksqldb_cluster")
+    ksqldb = _resources_of_type(scenario, "ksqldb_cluster")[0]
     api_key = _identity_of_type(scenario, "api_key")
 
     _assert_invalid(_with_resource(scenario, ksqldb, replace(ksqldb, parent_id="env-missing")))
@@ -394,7 +485,7 @@ def test_validator_rejects_ksqldb_without_a_matching_environment_kafka_associati
 
 def test_validator_rejects_flink_pool_without_matching_environment_cloud_region_or_crn() -> None:
     scenario = _scenario()
-    pool = _only_resource(scenario, "flink_compute_pool")
+    pool = _resources_of_type(scenario, "flink_compute_pool")[0]
 
     _assert_invalid(_with_resource(scenario, pool, replace(pool, parent_id="env-missing")))
     _assert_invalid(_with_resource(scenario, pool, replace(pool, metadata={**pool.metadata, "cloud": ""})))
@@ -428,8 +519,12 @@ def test_validator_rejects_flink_pool_without_matching_environment_cloud_region_
 
 def test_validator_rejects_flink_statement_without_environment_pool_or_owner_relationships() -> None:
     scenario = _scenario()
-    statement = _only_resource(scenario, "flink_statement")
-    pool = _only_resource(scenario, "flink_compute_pool")
+    statement = _resources_of_type(scenario, "flink_statement")[0]
+    pool = next(
+        resource
+        for resource in _resources_of_type(scenario, "flink_compute_pool")
+        if resource.resource_id == statement.metadata["compute_pool_id"]
+    )
     api_key = _identity_of_type(scenario, "api_key")
 
     _assert_invalid(_with_resource(scenario, statement, replace(statement, parent_id=pool.resource_id)))
