@@ -61,6 +61,7 @@ def _fake_command_environment(
     command_log = tmp_path / "docker.log"
     date_log = tmp_path / "date.log"
     id_log = tmp_path / "id.log"
+    runtime_log = tmp_path / "runtime.log"
 
     _write_executable(
         fake_bin / "date",
@@ -99,6 +100,7 @@ esac
             """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\t%s\\t%s\\t%s\\n' "${DEMO_ANCHOR_DATE:-}" "${DEMO_UID:-}" "${DEMO_GID:-}" "$*" >>"$DEMO_DOCKER_LOG"
+printf '%s\\t%s\\n' "${DEMO_PROFILE:-}" "${DEMO_STATE_DIR:-}" >>"$DEMO_RUNTIME_LOG"
 
 case "$*" in
     "compose version")
@@ -135,6 +137,7 @@ esac
             """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\t%s\\t%s\\t%s\\n' "${DEMO_ANCHOR_DATE:-}" "${DEMO_UID:-}" "${DEMO_GID:-}" "$*" >>"$DEMO_DOCKER_LOG"
+printf '%s\\t%s\\n' "${DEMO_PROFILE:-}" "${DEMO_STATE_DIR:-}" >>"$DEMO_RUNTIME_LOG"
 
 case "$*" in
     "version")
@@ -181,6 +184,7 @@ esac
             "DEMO_DATE_LOG": str(date_log),
             "DEMO_DOCKER_LOG": str(command_log),
             "DEMO_ID_LOG": str(id_log),
+            "DEMO_RUNTIME_LOG": str(runtime_log),
             "DEMO_FAKE_ANCHOR": anchor,
             "DEMO_FAKE_UID": uid,
             "DEMO_FAKE_GID": gid,
@@ -222,6 +226,17 @@ def _date_calls(date_log: Path) -> list[str]:
     return date_log.read_text(encoding="utf-8").splitlines()
 
 
+def _runtime_values(environment: dict[str, str]) -> list[tuple[str, str]]:
+    runtime_log = Path(environment["DEMO_RUNTIME_LOG"])
+    if not runtime_log.exists():
+        return []
+    values: list[tuple[str, str]] = []
+    for line in runtime_log.read_text(encoding="utf-8").splitlines():
+        profile, state_dir = line.split("\t", maxsplit=1)
+        values.append((profile, state_dir))
+    return values
+
+
 def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
     return f"{result.stdout}{result.stderr}"
 
@@ -257,8 +272,60 @@ def test_demo_rejects_arguments_before_invoking_docker(tmp_path: Path) -> None:
     result = _run_demo(workspace, environment, "--profile", "showcase")
 
     assert result.returncode != 0
-    assert _combined_output(result).strip() == "Usage: ./demo"
+    assert _combined_output(result).strip() == "Usage: ./demo [--showcase]"
     assert _docker_calls(command_log) == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "profile", "runtime_state_dir", "created_state_dir"),
+    [
+        ((), "clean", "../../.demo/state/clean", ".demo/state/clean"),
+        (("--showcase",), "showcase", "../../.demo/state/showcase", ".demo/state/showcase"),
+    ],
+)
+def test_demo_exports_one_selected_profile_and_creates_only_its_state_directory(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    profile: str,
+    runtime_state_dir: str,
+    created_state_dir: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log, _date_log = _fake_command_environment(tmp_path, anchor="2026-09-02")
+
+    result = _run_demo(workspace, environment, *arguments)
+    calls = _docker_calls(command_log)
+    runtime_values = _runtime_values(environment)
+
+    assert result.returncode == 0
+    assert len(calls) == len(runtime_values)
+    for command in (
+        _selected_command("plugin", BUILD_COMMAND),
+        _selected_command("plugin", GENERATOR_COMMAND),
+        _selected_command("plugin", FINAL_UP_COMMAND),
+    ):
+        matching_values = [
+            runtime
+            for (_anchor, _uid, _gid, recorded_command), runtime in zip(calls, runtime_values, strict=True)
+            if recorded_command == command
+        ]
+        assert matching_values == [(profile, runtime_state_dir)]
+    assert (workspace / created_state_dir).is_dir()
+    other_profile = "showcase" if profile == "clean" else "clean"
+    assert not (workspace / ".demo" / "state" / other_profile).exists()
+
+
+def test_demo_compose_passes_the_selected_profile_and_state_mount_to_generator_and_api() -> None:
+    compose = yaml.safe_load((PROJECT_ROOT / COMPOSE_FILE).read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    generator_command = services["demo-generator"]["command"]
+    assert "--profile" in generator_command
+    assert "DEMO_PROFILE" in generator_command[generator_command.index("--profile") + 1]
+    for service_name in ("demo-generator", "chitragupta"):
+        assert any(
+            "DEMO_STATE_DIR" in mount and mount.endswith(":/app/data:rw") for mount in services[service_name]["volumes"]
+        )
 
 
 def test_demo_reports_when_docker_is_missing(tmp_path: Path) -> None:

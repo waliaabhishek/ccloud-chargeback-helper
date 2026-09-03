@@ -24,8 +24,12 @@ from plugins.confluent_cloud.demo.scenario import (
 )
 from plugins.confluent_cloud.demo.scenario import (
     CleanDemoScenario,
+    ConfluentDemoScenario,
+    ShowcaseDemoScenario,
     build_clean_demo_scenario,
+    build_showcase_demo_scenario,
     validate_clean_demo_scenario,
+    validate_showcase_demo_scenario,
 )
 from plugins.confluent_cloud.models.billing import CCloudBillingLineItem
 from plugins.confluent_cloud.storage.module import CCloudStorageModule
@@ -52,8 +56,18 @@ class GenerationResult(StrEnum):
     REUSED = "reused"
 
 
-Scenario = CleanDemoScenario | CleanSelfManagedKafkaScenario
+Scenario = ConfluentDemoScenario | CleanSelfManagedKafkaScenario
 BillingLine = CCloudBillingLineItem | CoreBillingLineItem
+
+
+class DemoProfile(StrEnum):
+    """Supported deterministic demo data profiles."""
+
+    CLEAN = "clean"
+    SHOWCASE = "showcase"
+
+
+_VALIDATION_BATCH_SIZE = 2048
 
 
 def _at_midnight(day: date) -> datetime:
@@ -206,12 +220,59 @@ def _pipeline_fields(state: PipelineState) -> tuple[object, ...]:
 
 
 def _expected_counts(scenario: Scenario) -> tuple[dict[str, tuple[int, int, int]], dict[str, tuple[int, int, int]]]:
-    resource_counter = Counter(resource.resource_type for resource in scenario.resources)
-    identity_counter = Counter(identity.identity_type for identity in scenario.identities)
+    resource_counts: dict[str, tuple[int, int, int]] = {}
+    resources_by_type: dict[str, list[Any]] = {}
+    for resource in scenario.resources:
+        resources_by_type.setdefault(resource.resource_type, []).append(resource)
+    for resource_type, resources in resources_by_type.items():
+        resource_counts[resource_type] = (
+            len(resources),
+            sum(resource.status.value == "active" for resource in resources),
+            sum(resource.status.value == "deleted" for resource in resources),
+        )
+    identity_counts: dict[str, tuple[int, int, int]] = {}
+    identities_by_type: dict[str, list[Any]] = {}
+    for identity in scenario.identities:
+        identities_by_type.setdefault(identity.identity_type, []).append(identity)
+    for identity_type, identities in identities_by_type.items():
+        identity_counts[identity_type] = (
+            len(identities),
+            sum(identity.deleted_at is None for identity in identities),
+            sum(identity.deleted_at is not None for identity in identities),
+        )
     return (
-        {resource_type: (count, count, 0) for resource_type, count in resource_counter.items()},
-        {identity_type: (count, count, 0) for identity_type, count in identity_counter.items()},
+        resource_counts,
+        identity_counts,
     )
+
+
+def _validate_scenario(scenario: Scenario) -> None:
+    """Dispatch profile-specific pure validation before persistence or reuse."""
+    if isinstance(scenario, ShowcaseDemoScenario):
+        validate_showcase_demo_scenario(scenario)
+    elif isinstance(scenario, CleanDemoScenario):
+        validate_clean_demo_scenario(scenario)
+    elif isinstance(scenario, CleanSelfManagedKafkaScenario):
+        validate_clean_self_managed_kafka_scenario(scenario)
+    else:
+        raise TypeError(f"unsupported demo scenario: {type(scenario).__name__}")
+
+
+def _build_scenario(
+    *,
+    ecosystem: str,
+    tenant_id: str,
+    anchor_date: date,
+    profile: DemoProfile,
+) -> Scenario:
+    """Build the selected profile for one configured tenant."""
+    if ecosystem == CCLOUD_ECOSYSTEM:
+        if profile is DemoProfile.SHOWCASE:
+            return build_showcase_demo_scenario(tenant_id=tenant_id, anchor_date=anchor_date)
+        return build_clean_demo_scenario(tenant_id=tenant_id, anchor_date=anchor_date)
+    if ecosystem == SELF_MANAGED_ECOSYSTEM:
+        return build_clean_self_managed_kafka_scenario(tenant_id=tenant_id, anchor_date=anchor_date)
+    raise ValueError(f"unsupported demo ecosystem: {ecosystem!r}")
 
 
 def _validate_persisted_scenario(
@@ -219,50 +280,108 @@ def _validate_persisted_scenario(
     tenant_name: str,
     scenario: Scenario,
 ) -> None:
-    if isinstance(scenario, CleanDemoScenario):
+    """Validate stored state through bounded repository reads."""
+    if isinstance(scenario, (CleanDemoScenario, ShowcaseDemoScenario)):
         ecosystem = CCLOUD_ECOSYSTEM
-        validate_clean_demo_scenario(scenario)
     else:
         ecosystem = SELF_MANAGED_ECOSYSTEM
-        validate_clean_self_managed_kafka_scenario(scenario)
+    _validate_scenario(scenario)
+    profile_name = "Showcase" if isinstance(scenario, ShowcaseDemoScenario) else "Clean"
     expected_resource_counts, expected_identity_counts = _expected_counts(scenario)
     if _resource_counts(uow, ecosystem, scenario.tenant_id) != expected_resource_counts:
-        raise ValueError("persisted Clean resources do not match the expected topology")
+        raise ValueError(f"persisted {profile_name} resources do not match the expected topology")
     if _identity_counts(uow, ecosystem, scenario.tenant_id) != expected_identity_counts:
-        raise ValueError("persisted Clean identities do not match the expected topology")
+        raise ValueError(f"persisted {profile_name} identities do not match the expected topology")
 
     for expected_resource in scenario.resources:
         actual_resource = uow.resources.get(ecosystem, scenario.tenant_id, expected_resource.resource_id)
         if actual_resource != expected_resource:
-            raise ValueError("persisted Clean resources do not match the expected topology")
+            raise ValueError(f"persisted {profile_name} resources do not match the expected topology")
     for expected_identity in scenario.identities:
         actual_identity = uow.identities.get(ecosystem, scenario.tenant_id, expected_identity.identity_id)
         if actual_identity != expected_identity:
-            raise ValueError("persisted Clean identities do not match the expected topology")
+            raise ValueError(f"persisted {profile_name} identities do not match the expected topology")
 
-    actual_tags, tag_total = uow.tags.find_tags_for_tenant(scenario.tenant_id, limit=10_000)
+    actual_tags, tag_total = uow.tags.find_tags_for_tenant(
+        scenario.tenant_id,
+        limit=max(1, len(scenario.entity_tags)),
+    )
     if tag_total != len(scenario.entity_tags) or {_tag_fields(tag) for tag in actual_tags} != {
         _tag_fields(tag) for tag in scenario.entity_tags
     }:
-        raise ValueError("persisted entity tags do not match the expected Clean assignments")
+        if profile_name == "Clean":
+            raise ValueError("persisted entity tags do not match the expected Clean assignments")
+        raise ValueError("persisted entity tags do not match the expected Showcase assignments")
 
-    actual_billing, billing_total = uow.billing.find_by_filters(ecosystem, scenario.tenant_id, limit=10_000)
-    if billing_total != len(scenario.billing_lines) or sorted(
-        _billing_fields(cast("BillingLine", line)) for line in actual_billing
-    ) != sorted(_billing_fields(line) for line in scenario.billing_lines):
-        raise ValueError("persisted billing does not match the expected Clean lines")
+    _one_billing, billing_total = uow.billing.find_by_filters(ecosystem, scenario.tenant_id, limit=1)
+    if billing_total != len(scenario.billing_lines):
+        if profile_name == "Clean":
+            raise ValueError("persisted billing does not match the expected Clean lines")
+        raise ValueError("persisted billing does not match the expected Showcase lines")
+    expected_billing_by_date: dict[date, Counter[tuple[object, ...]]] = {}
+    for line in scenario.billing_lines:
+        expected_billing_by_date.setdefault(line.timestamp.date(), Counter())[_billing_fields(line)] += 1
+    traversed_billing = 0
+    for tracking_date, expected_rows in expected_billing_by_date.items():
+        actual_rows = uow.billing.find_by_date(ecosystem, scenario.tenant_id, tracking_date)
+        traversed_billing += len(actual_rows)
+        actual_counter = Counter(_billing_fields(cast("BillingLine", line)) for line in actual_rows)
+        if actual_counter != expected_rows:
+            if profile_name == "Clean":
+                raise ValueError("persisted billing does not match the expected Clean lines")
+            raise ValueError("persisted billing does not match the expected Showcase lines")
+    if traversed_billing != billing_total:
+        if profile_name == "Clean":
+            raise ValueError("persisted billing does not match the expected Clean lines")
+        raise ValueError("persisted Showcase billing contains unexpected dates")
 
-    actual_chargebacks, chargeback_total = uow.chargebacks.find_by_filters(ecosystem, scenario.tenant_id, limit=10_000)
-    if chargeback_total != len(scenario.chargebacks) or sorted(
-        _chargeback_fields(row) for row in actual_chargebacks
-    ) != sorted(_chargeback_fields(row) for row in scenario.chargebacks):
-        raise ValueError("persisted chargebacks do not match the expected Clean allocations")
-
-    actual_topics, topic_total = uow.topic_attributions.find_by_filters(ecosystem, scenario.tenant_id, limit=10_000)
-    if topic_total != len(scenario.topic_attributions) or sorted(_topic_fields(row) for row in actual_topics) != sorted(
-        _topic_fields(row) for row in scenario.topic_attributions
+    _one_chargeback, chargeback_total = uow.chargebacks.find_by_filters(ecosystem, scenario.tenant_id, limit=1)
+    if chargeback_total != len(scenario.chargebacks):
+        if profile_name == "Clean":
+            raise ValueError("persisted chargebacks do not match the expected Clean allocations")
+        raise ValueError("persisted Showcase chargebacks do not match the expected allocations")
+    expected_chargebacks = Counter(_chargeback_fields(row) for row in scenario.chargebacks)
+    streamed_chargebacks = 0
+    for row in uow.chargebacks.iter_by_filters(
+        ecosystem,
+        scenario.tenant_id,
+        batch_size=_VALIDATION_BATCH_SIZE,
     ):
-        raise ValueError("persisted topic attributions do not match the expected Clean overlay")
+        key = _chargeback_fields(row)
+        if expected_chargebacks[key] <= 0:
+            if profile_name == "Clean":
+                raise ValueError("persisted chargebacks do not match the expected Clean allocations")
+            raise ValueError("persisted Showcase chargebacks do not match the expected allocations")
+        expected_chargebacks[key] -= 1
+        streamed_chargebacks += 1
+    if streamed_chargebacks != chargeback_total or +expected_chargebacks:
+        if profile_name == "Clean":
+            raise ValueError("persisted chargebacks do not match the expected Clean allocations")
+        raise ValueError("persisted Showcase chargebacks do not match the expected allocations")
+
+    _one_topics, topic_total = uow.topic_attributions.find_by_filters(ecosystem, scenario.tenant_id, limit=1)
+    if topic_total != len(scenario.topic_attributions):
+        if profile_name == "Clean":
+            raise ValueError("persisted topic attributions do not match the expected Clean overlay")
+        raise ValueError("persisted Showcase topic attributions do not match the expected overlay")
+    expected_topics = Counter(_topic_fields(row) for row in scenario.topic_attributions)
+    streamed_topics = 0
+    for topic_row in uow.topic_attributions.iter_by_filters(
+        ecosystem,
+        scenario.tenant_id,
+        batch_size=_VALIDATION_BATCH_SIZE,
+    ):
+        key = _topic_fields(topic_row)
+        if expected_topics[key] <= 0:
+            if profile_name == "Clean":
+                raise ValueError("persisted topic attributions do not match the expected Clean overlay")
+            raise ValueError("persisted Showcase topic attributions do not match the expected overlay")
+        expected_topics[key] -= 1
+        streamed_topics += 1
+    if streamed_topics != topic_total or +expected_topics:
+        if profile_name == "Clean":
+            raise ValueError("persisted topic attributions do not match the expected Clean overlay")
+        raise ValueError("persisted Showcase topic attributions do not match the expected overlay")
 
     actual_states = uow.pipeline_state.find_by_range(ecosystem, scenario.tenant_id, date.min, date.max)
     if sorted(_pipeline_fields(state) for state in actual_states) != sorted(
@@ -322,7 +441,7 @@ def _persist_scenario(uow: UnitOfWork, tenant_name: str, scenario: Scenario) -> 
     )
 
 
-def _persist_ccloud_preview(backend: SQLModelBackend, scenario: CleanDemoScenario) -> None:
+def _persist_ccloud_preview(backend: SQLModelBackend, scenario: ConfluentDemoScenario) -> None:
     captured_at = _at_midnight(scenario.anchor_date + timedelta(days=1)) + timedelta(hours=1)
     with backend.create_preview_evidence_unit_of_work() as uow:
         source_attempt = uow.source_readiness.begin_attempt(
@@ -363,7 +482,7 @@ def _persist_ccloud_preview(backend: SQLModelBackend, scenario: CleanDemoScenari
         uow.commit()
 
 
-def _validate_ccloud_preview(backend: SQLModelBackend, scenario: CleanDemoScenario) -> None:
+def _validate_ccloud_preview(backend: SQLModelBackend, scenario: ConfluentDemoScenario) -> None:
     scope = PreviewEvidenceScope(
         CCLOUD_ECOSYSTEM,
         scenario.tenant_id,
@@ -405,6 +524,7 @@ def _persist_or_validate_tenant(
     tenant_name: str,
     tenant_config: TenantConfig,
     scenario: Scenario,
+    profile: DemoProfile,
 ) -> GenerationResult:
     ecosystem, tenant_id, storage_module = _tenant_parts(tenant_config)
     connection_string = tenant_config.storage.connection_string.get_secret_value()
@@ -425,53 +545,67 @@ def _persist_or_validate_tenant(
             else:
                 persisted_dates = uow.chargebacks.get_distinct_dates(ecosystem, tenant_id)
                 if not persisted_dates:
+                    if isinstance(scenario, ShowcaseDemoScenario):
+                        raise ValueError("nonempty Showcase state has no persisted chargeback dates")
                     raise ValueError("nonempty Clean state has no persisted chargeback dates")
                 persisted_anchor = max(persisted_dates)
         if persisted_anchor != scenario.anchor_date:
-            if ecosystem == CCLOUD_ECOSYSTEM:
-                scenario = build_clean_demo_scenario(tenant_id=tenant_id, anchor_date=persisted_anchor)
-            else:
-                scenario = build_clean_self_managed_kafka_scenario(tenant_id=tenant_id, anchor_date=persisted_anchor)
+            scenario = _build_scenario(
+                ecosystem=ecosystem,
+                tenant_id=tenant_id,
+                anchor_date=persisted_anchor,
+                profile=profile,
+            )
         if empty:
-            if ecosystem == CCLOUD_ECOSYSTEM:
-                validate_clean_demo_scenario(cast("CleanDemoScenario", scenario))
-            else:
-                validate_clean_self_managed_kafka_scenario(cast("CleanSelfManagedKafkaScenario", scenario))
+            _validate_scenario(scenario)
             with backend.create_unit_of_work() as uow:
                 _persist_scenario(uow, tenant_name, scenario)
                 uow.commit()
             if ecosystem == CCLOUD_ECOSYSTEM:
-                _persist_ccloud_preview(backend, cast("CleanDemoScenario", scenario))
+                _persist_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
             with backend.create_read_only_unit_of_work() as uow:
                 _validate_persisted_scenario(uow, tenant_name, scenario)
             if ecosystem == CCLOUD_ECOSYSTEM:
-                _validate_ccloud_preview(backend, cast("CleanDemoScenario", scenario))
+                _validate_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
             return GenerationResult.GENERATED
 
         with backend.create_read_only_unit_of_work() as uow:
             _validate_persisted_scenario(uow, tenant_name, scenario)
         if ecosystem == CCLOUD_ECOSYSTEM:
-            _validate_ccloud_preview(backend, cast("CleanDemoScenario", scenario))
+            _validate_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
         return GenerationResult.REUSED
     finally:
         backend.dispose()
 
 
-def generate_or_reuse_clean_demo(*, config_path: Path, anchor_date: date) -> dict[str, GenerationResult]:
+def generate_or_reuse_demo(
+    *,
+    config_path: Path,
+    anchor_date: date,
+    profile: DemoProfile = DemoProfile.CLEAN,
+) -> dict[str, GenerationResult]:
     """Generate or validate the two deterministic demo tenant databases."""
     settings = load_config(config_path)
     selected = _select_demo_tenants(settings)
     results: dict[str, GenerationResult] = {}
     for tenant_name, tenant_config in selected:
-        if tenant_config.ecosystem == CCLOUD_ECOSYSTEM:
-            scenario: Scenario = build_clean_demo_scenario(tenant_id=tenant_config.tenant_id, anchor_date=anchor_date)
-        else:
-            scenario = build_clean_self_managed_kafka_scenario(
-                tenant_id=tenant_config.tenant_id,
-                anchor_date=anchor_date,
-            )
-        results[tenant_name] = _persist_or_validate_tenant(tenant_name, tenant_config, scenario)
+        scenario = _build_scenario(
+            ecosystem=tenant_config.ecosystem,
+            tenant_id=tenant_config.tenant_id,
+            anchor_date=anchor_date,
+            profile=profile,
+        )
+        results[tenant_name] = _persist_or_validate_tenant(tenant_name, tenant_config, scenario, profile)
     return results
+
+
+def generate_or_reuse_clean_demo(*, config_path: Path, anchor_date: date) -> dict[str, GenerationResult]:
+    """Compatibility wrapper for the default Clean demo profile."""
+    return generate_or_reuse_demo(
+        config_path=config_path,
+        anchor_date=anchor_date,
+        profile=DemoProfile.CLEAN,
+    )
 
 
 def _parse_anchor(value: str) -> date:
@@ -486,9 +620,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate deterministic demo state")
     parser.add_argument("--config", type=Path, required=True, help="Path to the demo YAML configuration")
     parser.add_argument("--anchor", type=_parse_anchor, required=True, help="UTC anchor date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--profile",
+        type=DemoProfile,
+        choices=tuple(DemoProfile),
+        default=DemoProfile.CLEAN,
+        help="Deterministic demo profile to generate",
+    )
     args = parser.parse_args(argv)
     try:
-        results = generate_or_reuse_clean_demo(config_path=args.config, anchor_date=args.anchor)
+        results = generate_or_reuse_demo(config_path=args.config, anchor_date=args.anchor, profile=args.profile)
     except Exception as exc:
         print(f"Demo generation failed: {exc}", file=sys.stderr)
         return 1

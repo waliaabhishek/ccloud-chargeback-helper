@@ -9,10 +9,12 @@ services:
         "/app/config/config.yaml",
         "--anchor",
         "${DEMO_ANCHOR_DATE:-}",
+        "--profile",
+        "${DEMO_PROFILE:-clean}",
       ]
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
-      - ../../.demo/state/clean:/app/data:rw
+      - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw
     networks:
       - demo
     restart: "no"
@@ -27,7 +29,7 @@ services:
       ["--config-file", "/app/config/config.yaml", "--mode", "api"]
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
-      - ../../.demo/state/clean:/app/data:rw
+      - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw
     ports:
       - "127.0.0.1:8080:8080"
     networks:

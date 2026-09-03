@@ -1,24 +1,32 @@
 from __future__ import annotations
 
 import calendar
+import math
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import Any, NoReturn
 from uuid import UUID
 
 from core.engine.allocation_lineage import build_allocation_lineage_capture
 from core.engine.topic_attribution_models import TopicAttributionRowOutputContext, build_reconciled_topic_rows
-from core.models import ChargebackRow, CoreIdentity, CoreResource, CostType, EntityTag, PipelineState, ResourceStatus
+from core.models import (
+    ChargebackRow,
+    CoreIdentity,
+    CoreResource,
+    CostType,
+    EntityTag,
+    MetricRow,
+    PipelineState,
+    ResourceStatus,
+)
+from core.models.topic_attribution import TopicAttributionRow
 from core.preview.evidence_capture import NativeSourceWindow
 from core.storage.interface import AllocationLineageRunCapture
 from plugins.confluent_cloud.crn import parse_ccloud_crn
 from plugins.confluent_cloud.models.billing import CCloudBillingLineItem, CCloudCostSourceRecord
 from plugins.confluent_cloud.source_capture import CCloudNativeSourceEvidenceCapture
-
-if TYPE_CHECKING:
-    from core.models.topic_attribution import TopicAttributionRow
 
 ECOSYSTEM = "confluent_cloud"
 ORGANIZATION_ID = "11111111-1111-4111-8111-111111111111"
@@ -198,11 +206,31 @@ _SEASONALITY: tuple[Decimal, ...] = (
     Decimal("0.98"),
     Decimal("1.06"),
 )
+_SHOWCASE_LINE_TYPES: tuple[str, str] = ("KAFKA_PARTITION", "KAFKA_REST_PRODUCE")
+_SHOWCASE_LIVE_TOPIC_ID = "lkc-customer:topic:showcase-live-orders"
+_SHOWCASE_LEGACY_TOPIC_ID = "lkc-data:topic:showcase-legacy-orders"
+_SHOWCASE_LIVE_IDENTITY_ID = "sa-showcase-live"
+_SHOWCASE_LEGACY_IDENTITY_ID = "sa-showcase-legacy"
+_SHOWCASE_TOPIC_NAMES = {
+    _SHOWCASE_LIVE_TOPIC_ID: "showcase-live-orders",
+    _SHOWCASE_LEGACY_TOPIC_ID: "showcase-legacy-orders",
+}
+_SHOWCASE_PRINCIPAL_TYPES = frozenset({"service_account", "user", "principal", "identity_pool"})
+_SHOWCASE_SCOPE_LABELS = (
+    "tenant_active_topic_count",
+    "tenant_active_principal_count",
+    "environment_active_topic_count",
+    "environment_active_principal_count",
+    "cluster_active_topic_count",
+    "cluster_active_principal_count",
+)
+_SHOWCASE_METRIC_KEYS = ("received_bytes", "sent_bytes", "retained_bytes", "partition_count")
+_SHOWCASE_VALIDATION_DAYS = 90
 
 
 @dataclass(frozen=True)
-class CleanDemoScenario:
-    """Pure, deterministic logical state for the Clean Confluent demo."""
+class ConfluentDemoScenario:
+    """Profile-neutral deterministic logical state for a Confluent demo."""
 
     tenant_id: str
     anchor_date: date
@@ -218,6 +246,18 @@ class CleanDemoScenario:
     allocation_lineage_runs: tuple[AllocationLineageRunCapture, ...]
     organization_authority_id: str
     organization_authority_at: datetime
+
+
+@dataclass(frozen=True)
+class CleanDemoScenario(ConfluentDemoScenario):
+    """Pure, deterministic logical state for the Clean Confluent demo."""
+
+
+@dataclass(frozen=True)
+class ShowcaseDemoScenario(ConfluentDemoScenario):
+    """Additive analytical source conditions layered on the Clean profile."""
+
+    source_metrics: tuple[MetricRow, ...]
 
 
 def _subtract_calendar_months(value: date, months: int) -> date:
@@ -1082,6 +1122,379 @@ def _build_lineage_runs(
     return tuple(runs)
 
 
+def _showcase_cutover(start_date: date) -> date:
+    """Return the deterministic lifecycle cutover inside the generated window."""
+    return start_date + timedelta(days=90)
+
+
+def _showcase_resources_and_identities(
+    tenant_id: str,
+    clean: CleanDemoScenario,
+    cutover: date,
+) -> tuple[tuple[CoreResource, ...], tuple[CoreIdentity, ...]]:
+    """Append one active and one deleted topic/principal pair to Clean state."""
+    cutover_at = _at_midnight(cutover)
+    legacy_deleted_at = cutover_at
+    legacy_last_seen_at = cutover_at - timedelta(seconds=1)
+    resources = list(clean.resources)
+    resources.extend(
+        (
+            _resource(
+                tenant_id=tenant_id,
+                resource_id=_SHOWCASE_LIVE_TOPIC_ID,
+                resource_type="topic",
+                display_name=_SHOWCASE_TOPIC_NAMES[_SHOWCASE_LIVE_TOPIC_ID],
+                parent_id="lkc-customer",
+                created_at=cutover_at,
+            ),
+            replace(
+                _resource(
+                    tenant_id=tenant_id,
+                    resource_id=_SHOWCASE_LEGACY_TOPIC_ID,
+                    resource_type="topic",
+                    display_name=_SHOWCASE_TOPIC_NAMES[_SHOWCASE_LEGACY_TOPIC_ID],
+                    parent_id="lkc-data",
+                    created_at=_at_midnight(clean.start_date - timedelta(days=30)),
+                ),
+                status=ResourceStatus.DELETED,
+                deleted_at=legacy_deleted_at,
+                last_seen_at=legacy_last_seen_at,
+            ),
+        )
+    )
+
+    identities = list(clean.identities)
+    identities.extend(
+        (
+            _identity(
+                tenant_id=tenant_id,
+                identity_id=_SHOWCASE_LIVE_IDENTITY_ID,
+                identity_type="service_account",
+                display_name="Showcase Live Workload",
+                created_at=cutover_at,
+                metadata={"description": "Synthetic Showcase lifecycle workload"},
+            ),
+            replace(
+                _identity(
+                    tenant_id=tenant_id,
+                    identity_id=_SHOWCASE_LEGACY_IDENTITY_ID,
+                    identity_type="service_account",
+                    display_name="Showcase Legacy Workload",
+                    created_at=_at_midnight(clean.start_date - timedelta(days=30)),
+                    metadata={"description": "Synthetic Showcase legacy workload"},
+                ),
+                deleted_at=legacy_deleted_at,
+                last_seen_at=legacy_last_seen_at,
+            ),
+        )
+    )
+    return tuple(resources), tuple(identities)
+
+
+def _showcase_line_amount(
+    cluster_id: str,
+    product_type: str,
+    day_offset: int,
+    day_count: int,
+    anchor_date: date,
+    tracking_date: date,
+) -> Decimal | None:
+    """Return the deterministic amount for one non-balancing Showcase line."""
+    if cluster_id == "lkc-data" and product_type == "KAFKA_REST_PRODUCE":
+        return None
+    if cluster_id == "lkc-customer" and product_type == "KAFKA_REST_PRODUCE":
+        if tracking_date == anchor_date:
+            return Decimal("50000.00")
+        if tracking_date >= anchor_date - timedelta(days=30):
+            return Decimal("1000.00")
+        return Decimal("250.00")
+    if cluster_id == "lkc-commerce":
+        return Decimal("80.00" if product_type == "KAFKA_PARTITION" else "120.00")
+    if cluster_id == "lkc-logistics":
+        if product_type == "KAFKA_PARTITION":
+            return Decimal(80 + day_offset * 2)
+        return Decimal("150.00")
+    if cluster_id == "lkc-fulfillment":
+        if product_type == "KAFKA_PARTITION":
+            return Decimal(500 - day_offset)
+        return Decimal("200.00")
+    if cluster_id == "lkc-customer":
+        if product_type == "KAFKA_PARTITION":
+            return Decimal("100.00" if day_offset < day_count // 2 else "300.00")
+        return Decimal("100.00")
+    if cluster_id == "lkc-platform":
+        if product_type == "KAFKA_PARTITION":
+            return Decimal("500.00" if day_offset < day_count // 2 else "150.00")
+        return Decimal("160.00")
+    if cluster_id == "lkc-data":
+        return Decimal("180.00" if product_type == "KAFKA_PARTITION" else "240.00")
+    raise ValueError(f"unknown Showcase cluster: {cluster_id}")
+
+
+def _showcase_line_identity(cluster_id: str, product_type: str, tracking_date: date, cutover: date) -> str:
+    if cluster_id == "lkc-customer" and product_type == "KAFKA_REST_PRODUCE":
+        return _SHOWCASE_LIVE_IDENTITY_ID if tracking_date >= cutover else "sa-customer"
+    if cluster_id == "lkc-data" and product_type == "KAFKA_PARTITION":
+        return _SHOWCASE_LEGACY_IDENTITY_ID if tracking_date < cutover else _SHOWCASE_LIVE_IDENTITY_ID
+    return {
+        "lkc-commerce": "sa-commerce",
+        "lkc-logistics": "sa-logistics",
+        "lkc-fulfillment": "sa-fulfillment",
+        "lkc-customer": "sa-customer",
+        "lkc-platform": "sa-platform",
+        "lkc-data": "sa-data",
+    }[cluster_id]
+
+
+def _showcase_line_topic(cluster_id: str, product_type: str, tracking_date: date, cutover: date) -> str:
+    if cluster_id == "lkc-customer" and product_type == "KAFKA_REST_PRODUCE":
+        return (
+            _SHOWCASE_TOPIC_NAMES[_SHOWCASE_LIVE_TOPIC_ID]
+            if tracking_date >= cutover
+            else dict(_TOPIC_NAMES)[cluster_id][0]
+        )
+    if cluster_id == "lkc-data" and product_type == "KAFKA_PARTITION" and tracking_date < cutover:
+        return _SHOWCASE_TOPIC_NAMES[_SHOWCASE_LEGACY_TOPIC_ID]
+    return dict(_TOPIC_NAMES)[cluster_id][0]
+
+
+def _showcase_line_cohort(cluster_id: str, product_type: str) -> str:
+    if cluster_id == "lkc-customer" and product_type == "KAFKA_REST_PRODUCE":
+        return "anomaly"
+    if cluster_id == "lkc-data" and product_type == "KAFKA_PARTITION":
+        return "lifecycle"
+    return {
+        "lkc-commerce": "stable",
+        "lkc-logistics": "increasing",
+        "lkc-fulfillment": "decreasing",
+        "lkc-customer": "step-increase",
+        "lkc-platform": "step-decrease",
+        "lkc-data": "balancing",
+    }[cluster_id]
+
+
+def _showcase_line(
+    tenant_id: str,
+    tracking_date: date,
+    cluster_id: str,
+    product_type: str,
+    amount: Decimal,
+    identities_by_id: dict[str, CoreIdentity],
+    resources_by_id: dict[str, CoreResource],
+    cutover: date,
+) -> tuple[CCloudBillingLineItem, ChargebackRow, TopicAttributionRow]:
+    """Build one reconciled Showcase billing, allocation, and topic row."""
+    cluster = resources_by_id[cluster_id]
+    environment_id = str(cluster.parent_id)
+    timestamp = _at_midnight(tracking_date)
+    quantity = (amount / Decimal("0.01")).quantize(_QUANTITY_PRECISION, rounding=ROUND_HALF_UP)
+    line = CCloudBillingLineItem(
+        ecosystem=ECOSYSTEM,
+        tenant_id=tenant_id,
+        timestamp=timestamp,
+        env_id=environment_id,
+        resource_id=cluster_id,
+        product_category="KAFKA",
+        product_type=product_type,
+        quantity=quantity,
+        unit_price=Decimal("0.01"),
+        total_cost=(quantity * Decimal("0.01")).quantize(_CENT, rounding=ROUND_HALF_UP),
+        currency="USD",
+        granularity="daily",
+        metadata={},
+    )
+    identity_id = _showcase_line_identity(cluster_id, product_type, tracking_date, cutover)
+    identity = identities_by_id[identity_id]
+    if not _active_for(identity, timestamp):
+        raise ValueError("Showcase allocation identity is outside its lifetime")
+    allocation_method = "usage_ratio"
+    allocation_detail = "usage_ratio_allocation"
+    chargeback = ChargebackRow(
+        ecosystem=ECOSYSTEM,
+        tenant_id=tenant_id,
+        timestamp=timestamp,
+        resource_id=cluster_id,
+        product_category="KAFKA",
+        product_type=product_type,
+        identity_id=identity_id,
+        cost_type=CostType.USAGE,
+        amount=line.total_cost,
+        allocation_method=allocation_method,
+        allocation_detail=allocation_detail,
+        tags={},
+        metadata={"env_id": environment_id},
+    )
+    topic = _showcase_line_topic(cluster_id, product_type, tracking_date, cutover)
+    attribution = TopicAttributionRow(
+        ecosystem=ECOSYSTEM,
+        tenant_id=tenant_id,
+        timestamp=timestamp,
+        env_id=environment_id,
+        cluster_resource_id=cluster_id,
+        topic_name=topic,
+        product_category="KAFKA",
+        product_type=product_type,
+        attribution_method="bytes_ratio",
+        amount=line.total_cost,
+        metadata={},
+    )
+    return line, chargeback, attribution
+
+
+def _build_showcase_billing_and_allocations(
+    tenant_id: str,
+    clean: CleanDemoScenario,
+    resources: tuple[CoreResource, ...],
+    identities: tuple[CoreIdentity, ...],
+) -> tuple[tuple[CCloudBillingLineItem, ...], tuple[ChargebackRow, ...], tuple[TopicAttributionRow, ...]]:
+    """Append twelve deterministic, reconciled billing rows per generated day."""
+    day_count = (clean.anchor_date - clean.start_date).days + 1
+    cutover = _showcase_cutover(clean.start_date)
+    resources_by_id = {resource.resource_id: resource for resource in resources}
+    identities_by_id = {identity.identity_id: identity for identity in identities}
+    clean_totals = {
+        tracking_date: sum(
+            (line.total_cost for line in clean.billing_lines if line.timestamp.date() == tracking_date),
+            Decimal("0"),
+        )
+        for tracking_date in (clean.start_date + timedelta(days=offset) for offset in range(day_count))
+    }
+    rows: list[tuple[date, str, str, Decimal | None]] = []
+    for day_offset in range(day_count):
+        tracking_date = clean.start_date + timedelta(days=day_offset)
+        for cluster_id, *_ in _CLUSTERS:
+            for product_type in _SHOWCASE_LINE_TYPES:
+                rows.append(
+                    (
+                        tracking_date,
+                        cluster_id,
+                        product_type,
+                        _showcase_line_amount(
+                            cluster_id,
+                            product_type,
+                            day_offset,
+                            day_count,
+                            clean.anchor_date,
+                            tracking_date,
+                        ),
+                    )
+                )
+    baseline_dates = {clean.anchor_date - timedelta(days=offset) for offset in range(30, 0, -1)}
+    non_balancing_totals: defaultdict[date, Decimal] = defaultdict(Decimal)
+    for tracking_date, _cluster_id, _product_type, amount in rows:
+        if amount is not None:
+            non_balancing_totals[tracking_date] += amount
+    target = max(
+        clean_totals[tracking_date] + non_balancing_totals[tracking_date] for tracking_date in baseline_dates
+    ) + Decimal("100.00")
+
+    billing: list[CCloudBillingLineItem] = []
+    chargebacks: list[ChargebackRow] = []
+    attributions: list[TopicAttributionRow] = []
+    for tracking_date, cluster_id, product_type, amount in rows:
+        if amount is None:
+            amount = target - clean_totals[tracking_date] - non_balancing_totals[tracking_date]
+            if tracking_date not in baseline_dates:
+                amount = max(amount, Decimal("100.00"))
+        if amount <= 0:
+            raise ValueError("Showcase balancing amount must be positive")
+        line, chargeback, attribution = _showcase_line(
+            tenant_id,
+            tracking_date,
+            cluster_id,
+            product_type,
+            amount,
+            identities_by_id,
+            resources_by_id,
+            cutover,
+        )
+        billing.append(line)
+        chargebacks.append(chargeback)
+        attributions.append(attribution)
+    return tuple(billing), tuple(chargebacks), tuple(attributions)
+
+
+def _showcase_metric_values(topic: CoreResource, day_offset: int) -> dict[str, float]:
+    """Return deterministic unit-economics and partition-efficiency values."""
+    if topic.display_name == "customer.profile.v1":
+        return {
+            "received_bytes": 0.0,
+            "sent_bytes": 0.0,
+            "retained_bytes": 0.0,
+            "partition_count": 1.0,
+        }
+    if topic.resource_id == _SHOWCASE_LIVE_TOPIC_ID:
+        return {
+            "received_bytes": 80_000.0,
+            "sent_bytes": 60_000.0,
+            "retained_bytes": 140_000.0,
+            "partition_count": 64.0,
+        }
+    if topic.display_name == "orders.created.v1":
+        return {
+            "received_bytes": 250_000_000.0,
+            "sent_bytes": 200_000_000.0,
+            "retained_bytes": 450_000_000.0,
+            "partition_count": 2.0,
+        }
+    base = 5_000_000.0 + float((day_offset % 7) * 100_000)
+    return {
+        "received_bytes": base,
+        "sent_bytes": base / 2,
+        "retained_bytes": base * 1.5,
+        "partition_count": 4.0,
+    }
+
+
+def _build_showcase_source_metrics(
+    resources: tuple[CoreResource, ...],
+    identities: tuple[CoreIdentity, ...],
+    chargebacks: tuple[ChargebackRow, ...],
+    anchor_date: date,
+) -> tuple[MetricRow, ...]:
+    """Build the final ninety complete days of raw source metric rows."""
+    resources_by_id = {resource.resource_id: resource for resource in resources}
+    metrics: list[MetricRow] = []
+    final_start = anchor_date - timedelta(days=_SHOWCASE_VALIDATION_DAYS - 1)
+    final_days = tuple(final_start + timedelta(days=offset) for offset in range(_SHOWCASE_VALIDATION_DAYS))
+    scope_counts_by_date = _showcase_scope_counts_by_date(resources, identities, chargebacks, final_days)
+    topics = tuple(resource for resource in resources if resource.resource_type == "topic")
+    topic_scopes = {topic.resource_id: _showcase_scope_ids(topic, resources_by_id) for topic in topics}
+    for day_offset, tracking_date in enumerate(final_days):
+        timestamp = _at_midnight(tracking_date)
+        scope_counts = scope_counts_by_date[tracking_date]
+        for topic in topics:
+            if not _active_for(topic, timestamp):
+                continue
+            cluster = resources_by_id[str(topic.parent_id)]
+            environment_id = str(cluster.parent_id)
+            cluster_id, _topic_environment_id = topic_scopes[topic.resource_id]
+            if cluster_id is None:
+                raise ValueError("Showcase source metric topic cluster scope is invalid")
+            values = _showcase_metric_values(topic, day_offset)
+            labels = {
+                "tenant_id": topic.tenant_id,
+                "environment_id": environment_id,
+                "cluster_id": cluster.resource_id,
+                "topic": str(topic.display_name),
+                "tenant_active_topic_count": str(scope_counts.tenant_active_topic_count),
+                "tenant_active_principal_count": str(scope_counts.tenant_active_principal_count),
+                "environment_active_topic_count": str(
+                    scope_counts.environment_active_topic_counts.get(environment_id, 0)
+                ),
+                "environment_active_principal_count": str(
+                    scope_counts.environment_active_principal_counts.get(environment_id, 0)
+                ),
+                "cluster_active_topic_count": str(scope_counts.cluster_active_topic_counts.get(cluster_id, 0)),
+                "cluster_active_principal_count": str(scope_counts.cluster_active_principal_counts.get(cluster_id, 0)),
+            }
+            metrics.extend(
+                MetricRow(timestamp=timestamp, metric_key=metric_key, value=values[metric_key], labels=labels)
+                for metric_key in _SHOWCASE_METRIC_KEYS
+            )
+    return tuple(metrics)
+
+
 def build_clean_demo_scenario(*, tenant_id: str, anchor_date: date) -> CleanDemoScenario:
     """Build the deterministic Clean Confluent scenario for ``anchor_date``."""
     if not tenant_id.strip():
@@ -1124,6 +1537,53 @@ def build_clean_demo_scenario(*, tenant_id: str, anchor_date: date) -> CleanDemo
     return scenario
 
 
+def build_showcase_demo_scenario(*, tenant_id: str, anchor_date: date) -> ShowcaseDemoScenario:
+    """Build the deterministic additive Showcase profile from Clean state."""
+    clean = build_clean_demo_scenario(tenant_id=tenant_id, anchor_date=anchor_date)
+    cutover = _showcase_cutover(clean.start_date)
+    resources, identities = _showcase_resources_and_identities(tenant_id, clean, cutover)
+    added_billing, added_chargebacks, added_topics = _build_showcase_billing_and_allocations(
+        tenant_id,
+        clean,
+        resources,
+        identities,
+    )
+    billing_lines = clean.billing_lines + added_billing
+    chargebacks = clean.chargebacks + added_chargebacks
+    topic_attributions = clean.topic_attributions + added_topics
+    scenario = ShowcaseDemoScenario(
+        tenant_id=tenant_id,
+        anchor_date=anchor_date,
+        start_date=clean.start_date,
+        resources=resources,
+        identities=identities,
+        entity_tags=_build_tags(tenant_id, resources, identities),
+        billing_lines=billing_lines,
+        chargebacks=chargebacks,
+        pipeline_states=clean.pipeline_states,
+        topic_attributions=topic_attributions,
+        preview_source_capture=_build_preview_source_capture(
+            tenant_id,
+            clean.start_date,
+            anchor_date,
+            billing_lines,
+            resources,
+        ),
+        allocation_lineage_runs=_build_lineage_runs(
+            tenant_id,
+            clean.start_date,
+            anchor_date,
+            billing_lines,
+            chargebacks,
+        ),
+        organization_authority_id=clean.organization_authority_id,
+        organization_authority_at=clean.organization_authority_at,
+        source_metrics=_build_showcase_source_metrics(resources, identities, chargebacks, anchor_date),
+    )
+    validate_showcase_demo_scenario(scenario)
+    return scenario
+
+
 def _resource_environment(resource_id: str, resources_by_id: dict[str, CoreResource]) -> str | None:
     current_id: str | None = resource_id
     visited: set[str] = set()
@@ -1148,6 +1608,111 @@ def _active_for(value: CoreResource | CoreIdentity, timestamp: datetime) -> bool
     return (value.created_at is None or value.created_at <= timestamp) and (
         value.deleted_at is None or timestamp < value.deleted_at
     )
+
+
+@dataclass(frozen=True)
+class _ShowcaseScopeCounts:
+    """Cached active unit denominators for one generated date."""
+
+    tenant_active_topic_count: int
+    tenant_active_principal_count: int
+    environment_active_topic_counts: dict[str, int]
+    environment_active_principal_counts: dict[str, int]
+    cluster_active_topic_counts: dict[str, int]
+    cluster_active_principal_counts: dict[str, int]
+
+
+def _showcase_scope_ids(
+    resource: CoreResource,
+    resources_by_id: dict[str, CoreResource],
+) -> tuple[str | None, str | None]:
+    """Return the nearest Kafka-cluster and environment ancestors for a resource."""
+    cluster_id: str | None = None
+    environment_id: str | None = None
+    current_id: str | None = resource.resource_id
+    visited: set[str] = set()
+    while current_id is not None and current_id not in visited:
+        visited.add(current_id)
+        current = resources_by_id.get(current_id)
+        if current is None:
+            break
+        if current.resource_type == "kafka_cluster" and cluster_id is None:
+            cluster_id = current.resource_id
+        if current.resource_type == "environment" and environment_id is None:
+            environment_id = current.resource_id
+        current_id = current.parent_id
+    return cluster_id, environment_id
+
+
+def _showcase_scope_counts_by_date(
+    resources: tuple[CoreResource, ...],
+    identities: tuple[CoreIdentity, ...],
+    chargebacks: tuple[ChargebackRow, ...],
+    tracking_dates: tuple[date, ...],
+) -> dict[date, _ShowcaseScopeCounts]:
+    """Cache scope denominators once per generated date."""
+    resources_by_id = {resource.resource_id: resource for resource in resources}
+    identities_by_id = {identity.identity_id: identity for identity in identities}
+    resource_scopes = {resource.resource_id: _showcase_scope_ids(resource, resources_by_id) for resource in resources}
+    topics = tuple(resource for resource in resources if resource.resource_type == "topic")
+    tracking_date_set = set(tracking_dates)
+
+    active_principals_by_date: defaultdict[date, set[str]] = defaultdict(set)
+    environment_principals_by_date: defaultdict[date, defaultdict[str, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    cluster_principals_by_date: defaultdict[date, defaultdict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for row in chargebacks:
+        tracking_date = row.timestamp.date()
+        if tracking_date not in tracking_date_set:
+            continue
+        identity = identities_by_id.get(row.identity_id)
+        resource = resources_by_id.get(str(row.resource_id))
+        if (
+            identity is None
+            or identity.identity_type not in _SHOWCASE_PRINCIPAL_TYPES
+            or not _active_for(identity, row.timestamp)
+            or resource is None
+            or not _active_for(resource, row.timestamp)
+        ):
+            continue
+        active_principals_by_date[tracking_date].add(identity.identity_id)
+        cluster_id, environment_id = resource_scopes[resource.resource_id]
+        if environment_id is not None:
+            environment_principals_by_date[tracking_date][environment_id].add(identity.identity_id)
+        if cluster_id is not None:
+            cluster_principals_by_date[tracking_date][cluster_id].add(identity.identity_id)
+
+    counts_by_date: dict[date, _ShowcaseScopeCounts] = {}
+    for tracking_date in tracking_dates:
+        timestamp = _at_midnight(tracking_date)
+        tenant_active_topic_count = 0
+        environment_active_topic_counts: Counter[str] = Counter()
+        cluster_active_topic_counts: Counter[str] = Counter()
+        for topic in topics:
+            if not _active_for(topic, timestamp):
+                continue
+            tenant_active_topic_count += 1
+            cluster_id, environment_id = resource_scopes[topic.resource_id]
+            if environment_id is not None:
+                environment_active_topic_counts[environment_id] += 1
+            if cluster_id is not None:
+                cluster_active_topic_counts[cluster_id] += 1
+        counts_by_date[tracking_date] = _ShowcaseScopeCounts(
+            tenant_active_topic_count=tenant_active_topic_count,
+            tenant_active_principal_count=len(active_principals_by_date[tracking_date]),
+            environment_active_topic_counts=dict(environment_active_topic_counts),
+            environment_active_principal_counts={
+                environment_id: len(principal_ids)
+                for environment_id, principal_ids in environment_principals_by_date[tracking_date].items()
+            },
+            cluster_active_topic_counts=dict(cluster_active_topic_counts),
+            cluster_active_principal_counts={
+                cluster_id: len(principal_ids)
+                for cluster_id, principal_ids in cluster_principals_by_date[tracking_date].items()
+            },
+        )
+    return counts_by_date
 
 
 def _validate_billed_resource_lifetime(
@@ -1661,3 +2226,318 @@ def validate_clean_demo_scenario(scenario: CleanDemoScenario) -> None:
                 _raise("allocation lineage capture is incomplete")
             if sum((fact.allocated_cost for fact in lineage.facts), Decimal("0")) != line.total_cost:
                 _raise("allocation lineage does not reconcile to billing")
+
+
+def _showcase_billing_key(line: CCloudBillingLineItem) -> tuple[datetime, str, str, str, str]:
+    return (line.timestamp, line.env_id, line.resource_id, line.product_category, line.product_type)
+
+
+def _showcase_chargeback_key(row: ChargebackRow) -> tuple[datetime, str, str, str, str]:
+    return (
+        row.timestamp,
+        str(row.metadata.get("env_id", "")),
+        row.resource_id or "",
+        row.product_category,
+        row.product_type,
+    )
+
+
+def _showcase_topic_key(row: TopicAttributionRow) -> tuple[datetime, str, str, str, str]:
+    return (row.timestamp, row.env_id, row.cluster_resource_id, row.product_category, row.product_type)
+
+
+def _validate_showcase_metrics(scenario: ShowcaseDemoScenario) -> None:
+    """Validate complete source windows and distinct partition-efficiency conditions."""
+    resources_by_id = {resource.resource_id: resource for resource in scenario.resources}
+    topics = tuple(resource for resource in scenario.resources if resource.resource_type == "topic")
+    topics_by_name = {str(topic.display_name): topic for topic in topics}
+    topic_names = set(topics_by_name)
+    final_start = scenario.anchor_date - timedelta(days=_SHOWCASE_VALIDATION_DAYS - 1)
+    final_days = tuple(final_start + timedelta(days=offset) for offset in range(_SHOWCASE_VALIDATION_DAYS))
+    scope_counts_by_date = _showcase_scope_counts_by_date(
+        scenario.resources,
+        scenario.identities,
+        scenario.chargebacks,
+        final_days,
+    )
+    topic_scopes = {
+        topic_name: _showcase_scope_ids(topic, resources_by_id) for topic_name, topic in topics_by_name.items()
+    }
+    active_topic_names_by_date: dict[date, set[str]] = {}
+    active_topic_names_by_environment: defaultdict[tuple[date, str], set[str]] = defaultdict(set)
+    active_topic_names_by_cluster: defaultdict[tuple[date, str], set[str]] = defaultdict(set)
+    for tracking_date in final_days:
+        timestamp = _at_midnight(tracking_date)
+        active_names: set[str] = set()
+        for topic_name, topic in topics_by_name.items():
+            if not _active_for(topic, timestamp):
+                continue
+            active_names.add(topic_name)
+            cluster_id, environment_id = topic_scopes[topic_name]
+            if environment_id is not None:
+                active_topic_names_by_environment[(tracking_date, environment_id)].add(topic_name)
+            if cluster_id is not None:
+                active_topic_names_by_cluster[(tracking_date, cluster_id)].add(topic_name)
+        active_topic_names_by_date[tracking_date] = active_names
+
+    rows_by_topic_day: dict[tuple[str, date], dict[str, MetricRow]] = defaultdict(dict)
+    actual_topic_names_by_date: defaultdict[date, set[str]] = defaultdict(set)
+    actual_topic_names_by_environment: defaultdict[tuple[date, str], set[str]] = defaultdict(set)
+    actual_topic_names_by_cluster: defaultdict[tuple[date, str], set[str]] = defaultdict(set)
+    actual_tenant_topic_counts: defaultdict[date, set[int]] = defaultdict(set)
+    actual_tenant_principal_counts: defaultdict[date, set[int]] = defaultdict(set)
+    actual_environment_topic_counts: defaultdict[tuple[date, str], set[int]] = defaultdict(set)
+    actual_environment_principal_counts: defaultdict[tuple[date, str], set[int]] = defaultdict(set)
+    actual_cluster_topic_counts: defaultdict[tuple[date, str], set[int]] = defaultdict(set)
+    actual_cluster_principal_counts: defaultdict[tuple[date, str], set[int]] = defaultdict(set)
+    daily_totals: defaultdict[date, defaultdict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for row in scenario.source_metrics:
+        if not math.isfinite(row.value) or row.value < 0:
+            _raise("Showcase source metric value must be finite and nonnegative")
+        matching_topics = topic_names & set(row.labels.values())
+        if len(matching_topics) != 1:
+            _raise("Showcase source metric must identify one topic")
+        topic_name = matching_topics.pop()
+        topic = topics_by_name[topic_name]
+        cluster = resources_by_id.get(str(topic.parent_id))
+        if cluster is None or cluster.resource_type != "kafka_cluster":
+            _raise("Showcase source metric topic parent is invalid")
+        tracking_date = row.timestamp.date()
+        scope_counts = scope_counts_by_date.get(tracking_date)
+        if scope_counts is None:
+            _raise("Showcase source metric timestamp is outside the validation window")
+        cluster_id, environment_id = topic_scopes[topic_name]
+        if cluster_id is None or environment_id is None:
+            _raise("Showcase source metric topic scope is invalid")
+        if (
+            row.labels.get("tenant_id") != scenario.tenant_id
+            or row.labels.get("environment_id") != environment_id
+            or row.labels.get("cluster_id") != cluster_id
+            or row.labels.get("tenant_active_topic_count") != str(scope_counts.tenant_active_topic_count)
+            or row.labels.get("tenant_active_principal_count") != str(scope_counts.tenant_active_principal_count)
+            or row.labels.get("environment_active_topic_count")
+            != str(scope_counts.environment_active_topic_counts.get(environment_id, 0))
+            or row.labels.get("environment_active_principal_count")
+            != str(scope_counts.environment_active_principal_counts.get(environment_id, 0))
+            or row.labels.get("cluster_active_topic_count")
+            != str(scope_counts.cluster_active_topic_counts.get(cluster_id, 0))
+            or row.labels.get("cluster_active_principal_count")
+            != str(scope_counts.cluster_active_principal_counts.get(cluster_id, 0))
+            or not _is_utc_second(row.timestamp)
+            or not _active_for(topic, row.timestamp)
+            or row.metric_key not in _SHOWCASE_METRIC_KEYS
+        ):
+            _raise("Showcase source metric labels or lifetime are invalid")
+        topic_day_key = (topic_name, tracking_date)
+        if row.metric_key in rows_by_topic_day[topic_day_key]:
+            _raise("Showcase source metric keys must be unique per topic and day")
+        rows_by_topic_day[topic_day_key][row.metric_key] = row
+        actual_topic_names_by_date[tracking_date].add(topic_name)
+        actual_topic_names_by_environment[(tracking_date, environment_id)].add(topic_name)
+        actual_topic_names_by_cluster[(tracking_date, cluster_id)].add(topic_name)
+        actual_tenant_topic_counts[tracking_date].add(int(row.labels["tenant_active_topic_count"]))
+        actual_tenant_principal_counts[tracking_date].add(int(row.labels["tenant_active_principal_count"]))
+        actual_environment_topic_counts[(tracking_date, environment_id)].add(
+            int(row.labels["environment_active_topic_count"])
+        )
+        actual_environment_principal_counts[(tracking_date, environment_id)].add(
+            int(row.labels["environment_active_principal_count"])
+        )
+        actual_cluster_topic_counts[(tracking_date, cluster_id)].add(int(row.labels["cluster_active_topic_count"]))
+        actual_cluster_principal_counts[(tracking_date, cluster_id)].add(
+            int(row.labels["cluster_active_principal_count"])
+        )
+        daily_totals[tracking_date][row.metric_key] += row.value
+
+    for topic_name in topic_names:
+        for tracking_date in final_days:
+            expected_keys = (
+                set(_SHOWCASE_METRIC_KEYS) if topic_name in active_topic_names_by_date[tracking_date] else set()
+            )
+            actual_keys = set(rows_by_topic_day.get((topic_name, tracking_date), {}))
+            if actual_keys != expected_keys:
+                _raise("Showcase source metric windows are incomplete")
+
+    for window_size in (30, 60, 90):
+        window_days = set(final_days[-window_size:])
+        totals: defaultdict[str, float] = defaultdict(float)
+        for tracking_date in window_days:
+            for metric_name, value in daily_totals[tracking_date].items():
+                totals[metric_name] += value
+        if any(totals[key] <= 0 for key in _SHOWCASE_METRIC_KEYS):
+            _raise("Showcase source metric denominators must be positive")
+        for tracking_date in window_days:
+            scope_counts = scope_counts_by_date[tracking_date]
+            if (
+                actual_topic_names_by_date[tracking_date] != active_topic_names_by_date[tracking_date]
+                or actual_tenant_topic_counts[tracking_date] != {scope_counts.tenant_active_topic_count}
+                or actual_tenant_principal_counts[tracking_date] != {scope_counts.tenant_active_principal_count}
+            ):
+                _raise("Showcase source metric unit denominators do not match resource lifetimes")
+            for environment_id, expected_topic_count in scope_counts.environment_active_topic_counts.items():
+                if (
+                    actual_topic_names_by_environment[(tracking_date, environment_id)]
+                    != active_topic_names_by_environment[(tracking_date, environment_id)]
+                    or actual_environment_topic_counts[(tracking_date, environment_id)] != {expected_topic_count}
+                    or actual_environment_principal_counts[(tracking_date, environment_id)]
+                    != {scope_counts.environment_active_principal_counts.get(environment_id, 0)}
+                ):
+                    _raise("Showcase environment unit denominators do not match resource lifetimes")
+            for cluster_id, expected_topic_count in scope_counts.cluster_active_topic_counts.items():
+                if (
+                    actual_topic_names_by_cluster[(tracking_date, cluster_id)]
+                    != active_topic_names_by_cluster[(tracking_date, cluster_id)]
+                    or actual_cluster_topic_counts[(tracking_date, cluster_id)] != {expected_topic_count}
+                    or actual_cluster_principal_counts[(tracking_date, cluster_id)]
+                    != {scope_counts.cluster_active_principal_counts.get(cluster_id, 0)}
+                ):
+                    _raise("Showcase cluster unit denominators do not match resource lifetimes")
+
+    final_seven = final_days[-7:]
+    low_throughput = False
+    idle = False
+    healthy = False
+    for topic in topics:
+        rows_by_day = [rows_by_topic_day.get((str(topic.display_name), day), {}) for day in final_seven]
+        if any(set(day_rows) != set(_SHOWCASE_METRIC_KEYS) for day_rows in rows_by_day):
+            continue
+        rates = [
+            (day_rows["received_bytes"].value + day_rows["sent_bytes"].value)
+            / 86_400
+            / day_rows["partition_count"].value
+            for day_rows in rows_by_day
+        ]
+        traffic = [day_rows["received_bytes"].value + day_rows["sent_bytes"].value for day_rows in rows_by_day]
+        low_throughput |= all(value > 0 for value in traffic) and all(rate < 1_024 for rate in rates)
+        idle |= all(value == 0 for value in traffic)
+        healthy |= all(rate >= 1_024 for rate in rates)
+    if not low_throughput or not idle or not healthy:
+        _raise("Showcase source metrics must contain distinct partition-efficiency conditions")
+
+
+def validate_showcase_demo_scenario(scenario: ShowcaseDemoScenario) -> None:
+    """Validate the additive Showcase profile and all declared source conditions."""
+    if not scenario.tenant_id.strip():
+        _raise("scenario tenant_id must not be blank")
+    clean = build_clean_demo_scenario(tenant_id=scenario.tenant_id, anchor_date=scenario.anchor_date)
+    if (
+        scenario.start_date != clean.start_date
+        or scenario.organization_authority_id != clean.organization_authority_id
+        or scenario.organization_authority_at != clean.organization_authority_at
+        or scenario.pipeline_states != clean.pipeline_states
+    ):
+        _raise("Showcase baseline metadata does not match Clean")
+    if (
+        scenario.resources[: len(clean.resources)] != clean.resources
+        or scenario.identities[: len(clean.identities)] != clean.identities
+        or scenario.billing_lines[: len(clean.billing_lines)] != clean.billing_lines
+        or scenario.chargebacks[: len(clean.chargebacks)] != clean.chargebacks
+        or scenario.topic_attributions[: len(clean.topic_attributions)] != clean.topic_attributions
+    ):
+        _raise("Showcase must preserve the complete Clean baseline")
+
+    expected_resources, expected_identities = _showcase_resources_and_identities(
+        scenario.tenant_id,
+        clean,
+        _showcase_cutover(clean.start_date),
+    )
+    if scenario.resources != expected_resources or scenario.identities != expected_identities:
+        _raise("Showcase lifecycle topology does not match the deterministic profile")
+    expected_tags = _build_tags(scenario.tenant_id, expected_resources, expected_identities)
+    if scenario.entity_tags != expected_tags:
+        _raise("Showcase entity tags do not match the deterministic assignments")
+
+    expected_added_billing, expected_added_chargebacks, expected_added_topics = _build_showcase_billing_and_allocations(
+        scenario.tenant_id,
+        clean,
+        expected_resources,
+        expected_identities,
+    )
+    if scenario.billing_lines[len(clean.billing_lines) :] != expected_added_billing:
+        _raise("Showcase billing cohorts do not match the deterministic profile")
+    if scenario.chargebacks[len(clean.chargebacks) :] != expected_added_chargebacks:
+        _raise("Showcase chargeback cohorts do not match the deterministic profile")
+    if scenario.topic_attributions[len(clean.topic_attributions) :] != expected_added_topics:
+        _raise("Showcase topic cohorts do not match the deterministic profile")
+
+    expected_capture = _build_preview_source_capture(
+        scenario.tenant_id,
+        clean.start_date,
+        scenario.anchor_date,
+        scenario.billing_lines,
+        scenario.resources,
+    )
+    if scenario.preview_source_capture != expected_capture:
+        _raise("Showcase preview source evidence does not match billing")
+    expected_lineage = _build_lineage_runs(
+        scenario.tenant_id,
+        clean.start_date,
+        scenario.anchor_date,
+        scenario.billing_lines,
+        scenario.chargebacks,
+    )
+    if scenario.allocation_lineage_runs != expected_lineage:
+        _raise("Showcase allocation lineage does not match billing")
+
+    resources_by_id = {resource.resource_id: resource for resource in scenario.resources}
+    identities_by_id = {identity.identity_id: identity for identity in scenario.identities}
+    billing_by_key = {_showcase_billing_key(line): line for line in scenario.billing_lines}
+    if len(billing_by_key) != len(scenario.billing_lines):
+        _raise("Showcase billing natural keys must be unique")
+    chargeback_totals: defaultdict[tuple[datetime, str, str, str, str], Decimal] = defaultdict(Decimal)
+    for row in scenario.chargebacks:
+        identity = identities_by_id.get(row.identity_id)
+        resource = resources_by_id.get(str(row.resource_id))
+        key = _showcase_chargeback_key(row)
+        if (
+            identity is None
+            or resource is None
+            or not _active_for(identity, row.timestamp)
+            or not _active_for(resource, row.timestamp)
+            or key not in billing_by_key
+            or row.amount <= 0
+            or row.amount != row.amount.quantize(_CENT)
+            or row.metadata.get("env_id") != _resource_environment(resource.resource_id, resources_by_id)
+        ):
+            _raise("Showcase chargeback target or allocation row is invalid")
+        chargeback_totals[key] += row.amount
+    if dict(chargeback_totals) != {key: line.total_cost for key, line in billing_by_key.items()}:
+        _raise("Showcase billing lines must reconcile exactly to chargebacks")
+
+    topic_by_key: defaultdict[tuple[datetime, str, str, str, str], Decimal] = defaultdict(Decimal)
+    for topic_row in scenario.topic_attributions:
+        topic = resources_by_id.get(f"{topic_row.cluster_resource_id}:topic:{topic_row.topic_name}")
+        key = _showcase_topic_key(topic_row)
+        if (
+            topic is None
+            or not _active_for(topic, topic_row.timestamp)
+            or key not in billing_by_key
+            or topic_row.amount <= 0
+        ):
+            _raise("Showcase topic attribution row is invalid")
+        topic_by_key[key] += topic_row.amount
+    expected_topic_totals = {
+        key: line.total_cost for key, line in billing_by_key.items() if line.product_category == "KAFKA"
+    }
+    if dict(topic_by_key) != expected_topic_totals:
+        _raise("Showcase Kafka billing must reconcile exactly to topic attribution")
+
+    day_count = (scenario.anchor_date - scenario.start_date).days + 1
+    added_billing = scenario.billing_lines[len(clean.billing_lines) :]
+    if len(added_billing) != day_count * len(_CLUSTERS) * len(_SHOWCASE_LINE_TYPES):
+        _raise("Showcase billing must add twelve rows for every generated day")
+    added_dates = Counter(line.timestamp.date() for line in added_billing)
+    if set(added_dates) != {scenario.start_date + timedelta(days=offset) for offset in range(day_count)} or set(
+        added_dates.values()
+    ) != {len(_CLUSTERS) * len(_SHOWCASE_LINE_TYPES)}:
+        _raise("Showcase billing must cover every generated day")
+
+    expected_metrics = _build_showcase_source_metrics(
+        scenario.resources,
+        scenario.identities,
+        scenario.chargebacks,
+        scenario.anchor_date,
+    )
+    if scenario.source_metrics != expected_metrics:
+        _raise("Showcase source metrics do not match the deterministic profile")
+    _validate_showcase_metrics(scenario)

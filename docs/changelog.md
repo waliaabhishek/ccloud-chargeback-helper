@@ -26,5 +26,9 @@
   allocations, topic attribution, healthy pipeline status, exports, and
   Confluent Cloud FOCUS Mapping Preview are available through the normal UI and
   API using fully synthetic data without external provider calls.
+- Add an opt-in `./demo --showcase` profile; bare `./demo` remains Clean. The
+  deterministic additive profile provides comparison, trend, budget, anomaly,
+  unit-economics, and partition-efficiency source conditions, with exact
+  persisted validation beyond 10,000 rows.
 
 --8<-- "CHANGELOG.md"

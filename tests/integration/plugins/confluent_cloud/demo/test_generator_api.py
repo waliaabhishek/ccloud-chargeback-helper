@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +21,7 @@ from core.metrics.prometheus import PrometheusMetricsSource
 from core.models.resource import CoreResource, ResourceStatus
 from core.preview.evidence import PreviewEvidenceScope
 from core.storage.backends.sqlmodel.base_tables import ResourceTable
-from core.storage.backends.sqlmodel.repositories import SQLModelEntityTagRepository
+from core.storage.backends.sqlmodel.repositories import SQLModelEntityTagRepository, TopicAttributionRepository
 from core.storage.backends.sqlmodel.unit_of_work import SQLModelBackend
 from core.storage.registry import create_storage_backend
 from demo.generator import GenerationResult, generate_or_reuse_clean_demo
@@ -28,7 +29,7 @@ from plugins.confluent_cloud.connections import CCloudConnection
 from plugins.confluent_cloud.demo.scenario import CleanDemoScenario, build_clean_demo_scenario
 from plugins.confluent_cloud.source_capture import CCloudNativeSourceEvidenceCapture
 from plugins.confluent_cloud.storage.module import CCloudStorageModule
-from plugins.confluent_cloud.storage.repositories import CCloudChargebackRepository
+from plugins.confluent_cloud.storage.repositories import CCloudBillingRepository, CCloudChargebackRepository
 from plugins.self_managed_kafka.demo.scenario import (
     CleanSelfManagedKafkaScenario,
     build_clean_self_managed_kafka_scenario,
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from core.models.chargeback import ChargebackRow
     from core.models.entity_tag import EntityTag
     from core.models.topic_attribution import TopicAttributionRow
+    from core.storage.interface import EntityTagRepository
     from plugins.confluent_cloud.models.billing import CCloudBillingLineItem
 
 
@@ -1397,6 +1399,718 @@ def test_future_anchor_keeps_focus_preview_available_without_provider_requests(
                 break
             sleep(0.01)
         assert preview_status["status"] == "ready"
+
+    assert provider_requests == []
+    assert metrics_requests == []
+
+
+def _assert_persisted_showcase_collections(backend: SQLModelBackend, scenario: Any) -> None:
+    """Compare Showcase facts without retaining a second full actual collection."""
+    with backend.create_read_only_unit_of_work() as uow:
+        actual_tags, tag_total = uow.tags.find_tags_for_tenant(TENANT_ID, limit=max(1, len(scenario.entity_tags)))
+        assert tag_total == len(scenario.entity_tags)
+        assert Counter(_tag_fields(tag) for tag in actual_tags) == Counter(
+            _tag_fields(tag) for tag in scenario.entity_tags
+        )
+
+        _one_billing, billing_total = uow.billing.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+        assert billing_total == len(scenario.billing_lines)
+        assert billing_total > 10_000
+        expected_billing_by_date: defaultdict[date, Counter[tuple[object, ...]]] = defaultdict(Counter)
+        for line in scenario.billing_lines:
+            expected_billing_by_date[line.timestamp.date()][_billing_fields(line)] += 1
+        traversed_billing = 0
+        for expected_date, expected_rows in expected_billing_by_date.items():
+            actual_rows = uow.billing.find_by_date(ECOSYSTEM, TENANT_ID, expected_date)
+            traversed_billing += len(actual_rows)
+            assert (
+                Counter(_billing_fields(cast("CCloudBillingLineItem", line)) for line in actual_rows) == expected_rows
+            )
+        assert traversed_billing == billing_total
+
+        _one_chargeback, chargeback_total = uow.chargebacks.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+        assert chargeback_total == len(scenario.chargebacks)
+        assert chargeback_total > 10_000
+        expected_chargebacks = Counter(_chargeback_fields(row) for row in scenario.chargebacks)
+        streamed_chargebacks = 0
+        for chargeback_row in uow.chargebacks.iter_by_filters(ECOSYSTEM, TENANT_ID, batch_size=257):
+            key = _chargeback_fields(chargeback_row)
+            assert expected_chargebacks[key] > 0
+            expected_chargebacks[key] -= 1
+            streamed_chargebacks += 1
+        assert streamed_chargebacks == chargeback_total
+        assert not +expected_chargebacks
+
+        _one_topic, topic_total = uow.topic_attributions.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+        assert topic_total == len(scenario.topic_attributions)
+        assert topic_total > 10_000
+        expected_topics = Counter(_topic_attribution_fields(row) for row in scenario.topic_attributions)
+        streamed_topics = 0
+        for topic_row in uow.topic_attributions.iter_by_filters(ECOSYSTEM, TENANT_ID, batch_size=257):
+            key = _topic_attribution_fields(topic_row)
+            assert expected_topics[key] > 0
+            expected_topics[key] -= 1
+            streamed_topics += 1
+        assert streamed_topics == topic_total
+        assert not +expected_topics
+
+
+def _status_counts(records: Any, *, deleted: Any) -> dict[str, tuple[int, int, int]]:
+    by_type: defaultdict[str, list[Any]] = defaultdict(list)
+    for record in records:
+        record_type = record.resource_type if hasattr(record, "resource_type") else record.identity_type
+        by_type[record_type].append(record)
+    return {
+        record_type: (
+            len(values),
+            sum(
+                record.status is not deleted if hasattr(record, "status") else record.deleted_at is None
+                for record in values
+            ),
+            sum(
+                record.status is deleted if hasattr(record, "status") else record.deleted_at is not None
+                for record in values
+            ),
+        )
+        for record_type, values in by_type.items()
+    }
+
+
+def _repository_counts(counts: Any) -> dict[str, tuple[int, int, int]]:
+    return {record_type: (count.total, count.active, count.deleted) for record_type, count in counts.items()}
+
+
+def _persisted_billing_total(backend: SQLModelBackend) -> int:
+    with backend.create_read_only_unit_of_work() as uow:
+        _rows, total = uow.billing.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+    return total
+
+
+def _persisted_chargeback_snapshot(
+    backend: SQLModelBackend,
+    tracking_date: date,
+) -> tuple[int, Counter[tuple[object, ...]]]:
+    with backend.create_read_only_unit_of_work() as uow:
+        _one_row, total = uow.chargebacks.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+        return total, Counter(
+            _chargeback_fields(chargeback_row)
+            for chargeback_row in uow.chargebacks.find_by_date(
+                ECOSYSTEM,
+                TENANT_ID,
+                tracking_date,
+            )
+        )
+
+
+def _persisted_topic_snapshot(
+    backend: SQLModelBackend,
+    tracking_date: date,
+) -> tuple[int, Counter[tuple[object, ...]]]:
+    with backend.create_read_only_unit_of_work() as uow:
+        _one_row, total = uow.topic_attributions.find_by_filters(ECOSYSTEM, TENANT_ID, limit=1)
+        return total, Counter(
+            _topic_attribution_fields(topic_row)
+            for topic_row in uow.topic_attributions.find_by_date(
+                ECOSYSTEM,
+                TENANT_ID,
+                tracking_date,
+            )
+        )
+
+
+def _replace_chargeback_day(
+    backend: SQLModelBackend,
+    tracking_date: date,
+    rows: list[ChargebackRow],
+) -> None:
+    with backend.create_unit_of_work() as uow:
+        uow.chargebacks.delete_by_date(ECOSYSTEM, TENANT_ID, tracking_date)
+        uow.chargebacks.upsert_batch(rows)
+        uow.commit()
+
+
+def _replace_topic_day(
+    backend: SQLModelBackend,
+    tracking_date: date,
+    rows: list[TopicAttributionRow],
+) -> None:
+    with backend.create_unit_of_work() as uow:
+        uow.topic_attributions.delete_by_date(ECOSYSTEM, TENANT_ID, tracking_date)
+        uow.topic_attributions.upsert_batch(rows)
+        uow.commit()
+
+
+def test_showcase_generator_persists_complete_collections_with_bounded_validation_and_reuses(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Profile-aware generation validates every Showcase fact through bounded repository seams."""
+    from demo.generator import DemoProfile, generate_or_reuse_demo
+    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
+
+    config_path = _write_config(tmp_path, tmp_path / "showcase-confluent.db", tmp_path / "showcase-self-managed.db")
+    billing_limits: list[int] = []
+    chargeback_limits: list[int] = []
+    topic_limits: list[int] = []
+    chargeback_batches: list[int] = []
+    topic_batches: list[int] = []
+    original_billing_find = CCloudBillingRepository.find_by_filters
+    original_chargeback_find = CCloudChargebackRepository.find_by_filters
+    original_topic_find = TopicAttributionRepository.find_by_filters
+    original_chargeback_iter = CCloudChargebackRepository.iter_by_filters
+    original_topic_iter = TopicAttributionRepository.iter_by_filters
+
+    def record_billing_limit(
+        self: CCloudBillingRepository,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        product_type: str | None = None,
+        resource_id: str | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> tuple[list[CCloudBillingLineItem], int]:
+        billing_limits.append(limit)
+        return original_billing_find(
+            self,
+            ecosystem,
+            tenant_id,
+            start,
+            end,
+            product_type,
+            resource_id,
+            limit,
+            offset,
+        )
+
+    def record_chargeback_limit(
+        self: CCloudChargebackRepository,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        identity_id: str | None = None,
+        product_type: str | None = None,
+        resource_id: str | None = None,
+        cost_type: str | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+        tag_key: str | None = None,
+        tag_value: str | None = None,
+        tags_repo: EntityTagRepository | None = None,
+    ) -> tuple[list[ChargebackRow], int]:
+        chargeback_limits.append(limit)
+        return original_chargeback_find(
+            self,
+            ecosystem,
+            tenant_id,
+            start,
+            end,
+            identity_id,
+            product_type,
+            resource_id,
+            cost_type,
+            limit,
+            offset,
+            tag_key,
+            tag_value,
+            tags_repo,
+        )
+
+    def record_topic_limit(
+        self: TopicAttributionRepository,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        cluster_resource_id: str | None = None,
+        topic_name: str | None = None,
+        product_type: str | None = None,
+        attribution_method: str | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+        tag_key: str | None = None,
+        tag_value: str | None = None,
+        tags_repo: EntityTagRepository | None = None,
+    ) -> tuple[list[TopicAttributionRow], int]:
+        topic_limits.append(limit)
+        return original_topic_find(
+            self,
+            ecosystem,
+            tenant_id,
+            start,
+            end,
+            cluster_resource_id,
+            topic_name,
+            product_type,
+            attribution_method,
+            limit,
+            offset,
+            tag_key,
+            tag_value,
+            tags_repo,
+        )
+
+    def record_chargeback_batches(
+        self: CCloudChargebackRepository,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        identity_id: str | None = None,
+        product_type: str | None = None,
+        resource_id: str | None = None,
+        cost_type: str | None = None,
+        batch_size: int = 5000,
+        tag_key: str | None = None,
+        tag_value: str | None = None,
+        tags_repo: EntityTagRepository | None = None,
+    ) -> Iterator[ChargebackRow]:
+        chargeback_batches.append(batch_size)
+        yield from original_chargeback_iter(
+            self,
+            ecosystem,
+            tenant_id,
+            start,
+            end,
+            identity_id,
+            product_type,
+            resource_id,
+            cost_type,
+            batch_size,
+            tag_key,
+            tag_value,
+            tags_repo,
+        )
+
+    def record_topic_batches(
+        self: TopicAttributionRepository,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        cluster_resource_id: str | None = None,
+        topic_name: str | None = None,
+        product_type: str | None = None,
+        attribution_method: str | None = None,
+        batch_size: int = 5000,
+        tag_key: str | None = None,
+        tag_value: str | None = None,
+        tags_repo: EntityTagRepository | None = None,
+    ) -> Iterator[TopicAttributionRow]:
+        topic_batches.append(batch_size)
+        yield from original_topic_iter(
+            self,
+            ecosystem,
+            tenant_id,
+            start,
+            end,
+            cluster_resource_id,
+            topic_name,
+            product_type,
+            attribution_method,
+            batch_size,
+            tag_key,
+            tag_value,
+            tags_repo,
+        )
+
+    monkeypatch.setattr(CCloudBillingRepository, "find_by_filters", record_billing_limit)
+    monkeypatch.setattr(CCloudChargebackRepository, "find_by_filters", record_chargeback_limit)
+    monkeypatch.setattr(TopicAttributionRepository, "find_by_filters", record_topic_limit)
+    monkeypatch.setattr(CCloudChargebackRepository, "iter_by_filters", record_chargeback_batches)
+    monkeypatch.setattr(TopicAttributionRepository, "iter_by_filters", record_topic_batches)
+
+    result = generate_or_reuse_demo(config_path=config_path, anchor_date=ANCHOR_DATE, profile=DemoProfile.SHOWCASE)
+
+    assert result == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    assert billing_limits and set(billing_limits) == {1}
+    assert chargeback_limits and set(chargeback_limits) == {1}
+    assert topic_limits and set(topic_limits) == {1}
+    assert chargeback_batches and all(0 < batch_size < 10_000 for batch_size in chargeback_batches)
+    assert topic_batches and all(0 < batch_size < 10_000 for batch_size in topic_batches)
+
+    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    backend = _create_real_backend(config_path)
+    try:
+        _assert_persisted_showcase_collections(backend, scenario)
+        with backend.create_read_only_unit_of_work() as uow:
+            resource_counts = _repository_counts(uow.resources.count_by_type(ECOSYSTEM, TENANT_ID))
+            identity_counts = _repository_counts(uow.identities.count_by_type(ECOSYSTEM, TENANT_ID))
+            assert resource_counts == _status_counts(
+                scenario.resources,
+                deleted=ResourceStatus.DELETED,
+            )
+            assert identity_counts == _status_counts(
+                scenario.identities,
+                deleted=ResourceStatus.DELETED,
+            )
+    finally:
+        backend.dispose()
+
+    self_managed_backend = _create_real_backend(config_path, SELF_MANAGED_TENANT_NAME)
+    try:
+        _assert_persisted_self_managed_scenario(
+            self_managed_backend,
+            build_clean_self_managed_kafka_scenario(tenant_id=SELF_MANAGED_TENANT_ID, anchor_date=ANCHOR_DATE),
+        )
+    finally:
+        self_managed_backend.dispose()
+
+    billing_limits.clear()
+    chargeback_limits.clear()
+    topic_limits.clear()
+    chargeback_batches.clear()
+    topic_batches.clear()
+
+    def fail_write_uow(self: SQLModelBackend) -> NoReturn:
+        raise AssertionError("a complete Showcase state must be reused without persistence")
+
+    with monkeypatch.context() as reuse_patch:
+        reuse_patch.setattr(SQLModelBackend, "create_unit_of_work", fail_write_uow)
+        assert generate_or_reuse_demo(
+            config_path=config_path,
+            anchor_date=ANCHOR_DATE,
+            profile=DemoProfile.SHOWCASE,
+        ) == _generation_results(GenerationResult.REUSED, GenerationResult.REUSED)
+        assert generate_or_reuse_demo(
+            config_path=config_path,
+            anchor_date=ANCHOR_DATE + timedelta(days=1),
+            profile=DemoProfile.SHOWCASE,
+        ) == _generation_results(GenerationResult.REUSED, GenerationResult.REUSED)
+    assert billing_limits and set(billing_limits) == {1}
+    assert chargeback_limits and set(chargeback_limits) == {1}
+    assert topic_limits and set(topic_limits) == {1}
+    assert chargeback_batches and topic_batches
+
+
+def test_generator_rejects_clean_and_showcase_state_profile_mismatches_without_repairing(
+    tmp_path: Path,
+) -> None:
+    from demo.generator import DemoProfile, generate_or_reuse_demo
+
+    clean_config = _write_config(tmp_path, tmp_path / "clean-confluent.db", tmp_path / "clean-self-managed.db")
+    assert generate_or_reuse_demo(config_path=clean_config, anchor_date=ANCHOR_DATE) == _generation_results(
+        GenerationResult.GENERATED,
+        GenerationResult.GENERATED,
+    )
+    assert generate_or_reuse_clean_demo(config_path=clean_config, anchor_date=ANCHOR_DATE) == _generation_results(
+        GenerationResult.REUSED,
+        GenerationResult.REUSED,
+    )
+    clean_backend = _create_real_backend(clean_config)
+    try:
+        clean_total = _persisted_billing_total(clean_backend)
+    finally:
+        clean_backend.dispose()
+
+    with pytest.raises(ValueError, match="persisted"):
+        generate_or_reuse_demo(config_path=clean_config, anchor_date=ANCHOR_DATE, profile=DemoProfile.SHOWCASE)
+
+    clean_backend = _create_real_backend(clean_config)
+    try:
+        assert _persisted_billing_total(clean_backend) == clean_total
+    finally:
+        clean_backend.dispose()
+
+    showcase_config = _write_config(tmp_path, tmp_path / "showcase-confluent.db", tmp_path / "showcase-self-managed.db")
+    assert generate_or_reuse_demo(
+        config_path=showcase_config,
+        anchor_date=ANCHOR_DATE,
+        profile=DemoProfile.SHOWCASE,
+    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    showcase_backend = _create_real_backend(showcase_config)
+    try:
+        showcase_total = _persisted_billing_total(showcase_backend)
+    finally:
+        showcase_backend.dispose()
+
+    with pytest.raises(ValueError, match="persisted"):
+        generate_or_reuse_clean_demo(config_path=showcase_config, anchor_date=ANCHOR_DATE)
+
+    showcase_backend = _create_real_backend(showcase_config)
+    try:
+        assert _persisted_billing_total(showcase_backend) == showcase_total
+    finally:
+        showcase_backend.dispose()
+
+
+def test_showcase_generator_rejects_missing_unexpected_and_same_total_billing_replacements(
+    tmp_path: Path,
+) -> None:
+    from demo.generator import DemoProfile, generate_or_reuse_demo
+    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
+
+    config_path = _write_config(tmp_path, tmp_path / "showcase-confluent.db", tmp_path / "showcase-self-managed.db")
+    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    assert generate_or_reuse_demo(
+        config_path=config_path,
+        anchor_date=ANCHOR_DATE,
+        profile=DemoProfile.SHOWCASE,
+    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    expected = scenario.billing_lines[-1]
+    expected_day_rows = [line for line in scenario.billing_lines if line.timestamp.date() == expected.timestamp.date()]
+
+    backend = _create_real_backend(config_path)
+    try:
+        with backend.create_unit_of_work() as uow:
+            billing_repository = cast("CCloudBillingRepository", uow.billing)
+            billing_repository.replace_for_date(
+                ECOSYSTEM,
+                TENANT_ID,
+                expected.timestamp.date(),
+                [line for line in expected_day_rows if line != expected],
+            )
+            uow.commit()
+        missing_total = _persisted_billing_total(backend)
+    finally:
+        backend.dispose()
+    with pytest.raises(ValueError, match="persisted billing"):
+        generate_or_reuse_demo(
+            config_path=config_path,
+            anchor_date=ANCHOR_DATE + timedelta(days=1),
+            profile=DemoProfile.SHOWCASE,
+        )
+    backend = _create_real_backend(config_path)
+    try:
+        assert _persisted_billing_total(backend) == missing_total
+        with backend.create_unit_of_work() as uow:
+            billing_repository = cast("CCloudBillingRepository", uow.billing)
+            billing_repository.replace_for_date(ECOSYSTEM, TENANT_ID, expected.timestamp.date(), expected_day_rows)
+            uow.commit()
+    finally:
+        backend.dispose()
+
+    unexpected = replace(expected, product_type=f"{expected.product_type}_unexpected")
+    backend = _create_real_backend(config_path)
+    try:
+        with backend.create_unit_of_work() as uow:
+            uow.billing.upsert(unexpected)
+            uow.commit()
+        unexpected_total = _persisted_billing_total(backend)
+    finally:
+        backend.dispose()
+    with pytest.raises(ValueError, match="persisted billing"):
+        generate_or_reuse_demo(
+            config_path=config_path,
+            anchor_date=ANCHOR_DATE + timedelta(days=1),
+            profile=DemoProfile.SHOWCASE,
+        )
+    backend = _create_real_backend(config_path)
+    try:
+        assert _persisted_billing_total(backend) == unexpected_total
+        with backend.create_unit_of_work() as uow:
+            billing_repository = cast("CCloudBillingRepository", uow.billing)
+            billing_repository.replace_for_date(ECOSYSTEM, TENANT_ID, expected.timestamp.date(), expected_day_rows)
+            uow.commit()
+    finally:
+        backend.dispose()
+
+    backend = _create_real_backend(config_path)
+    try:
+        replacement_rows = [unexpected if line == expected else line for line in expected_day_rows]
+        with backend.create_unit_of_work() as uow:
+            billing_repository = cast("CCloudBillingRepository", uow.billing)
+            billing_repository.replace_for_date(ECOSYSTEM, TENANT_ID, expected.timestamp.date(), replacement_rows)
+            uow.commit()
+        replacement_total = _persisted_billing_total(backend)
+    finally:
+        backend.dispose()
+    assert replacement_total == len(scenario.billing_lines)
+    with pytest.raises(ValueError, match="persisted billing"):
+        generate_or_reuse_demo(
+            config_path=config_path,
+            anchor_date=ANCHOR_DATE + timedelta(days=1),
+            profile=DemoProfile.SHOWCASE,
+        )
+    backend = _create_real_backend(config_path)
+    try:
+        assert _persisted_billing_total(backend) == replacement_total
+    finally:
+        backend.dispose()
+
+
+def test_showcase_generator_rejects_missing_unexpected_and_same_total_fact_replacements(
+    tmp_path: Path,
+) -> None:
+    from demo.generator import DemoProfile, generate_or_reuse_demo
+    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
+
+    config_path = _write_config(
+        tmp_path,
+        tmp_path / "showcase-facts-confluent.db",
+        tmp_path / "showcase-facts-self-managed.db",
+    )
+    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    assert generate_or_reuse_demo(
+        config_path=config_path,
+        anchor_date=ANCHOR_DATE,
+        profile=DemoProfile.SHOWCASE,
+    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+
+    corruption_kinds = ("missing", "unexpected", "replacement")
+
+    def exercise_chargebacks(corruption: str) -> None:
+        expected = scenario.chargebacks[-1]
+        expected_day_rows = [row for row in scenario.chargebacks if row.timestamp.date() == expected.timestamp.date()]
+        unexpected = replace(expected, product_type=f"{expected.product_type}_unexpected")
+        if corruption == "missing":
+            corrupted_rows = [row for row in expected_day_rows if row != expected]
+        elif corruption == "unexpected":
+            corrupted_rows = [*expected_day_rows, unexpected]
+        else:
+            corrupted_rows = [unexpected if row == expected else row for row in expected_day_rows]
+
+        backend = _create_real_backend(config_path)
+        try:
+            _replace_chargeback_day(backend, expected.timestamp.date(), corrupted_rows)
+            state_before_failure = _persisted_chargeback_snapshot(backend, expected.timestamp.date())
+        finally:
+            backend.dispose()
+        expected_total = len(scenario.chargebacks) + (
+            1 if corruption == "unexpected" else -1 if corruption == "missing" else 0
+        )
+        assert state_before_failure[0] == expected_total
+
+        with pytest.raises(ValueError, match="persisted Showcase chargebacks"):
+            generate_or_reuse_demo(
+                config_path=config_path,
+                anchor_date=ANCHOR_DATE + timedelta(days=1),
+                profile=DemoProfile.SHOWCASE,
+            )
+
+        backend = _create_real_backend(config_path)
+        try:
+            assert _persisted_chargeback_snapshot(backend, expected.timestamp.date()) == state_before_failure
+            _replace_chargeback_day(backend, expected.timestamp.date(), expected_day_rows)
+        finally:
+            backend.dispose()
+
+    def exercise_topics(corruption: str) -> None:
+        expected = scenario.topic_attributions[-1]
+        expected_day_rows = [
+            row for row in scenario.topic_attributions if row.timestamp.date() == expected.timestamp.date()
+        ]
+        unexpected = replace(expected, product_type=f"{expected.product_type}_unexpected")
+        if corruption == "missing":
+            corrupted_rows = [row for row in expected_day_rows if row != expected]
+        elif corruption == "unexpected":
+            corrupted_rows = [*expected_day_rows, unexpected]
+        else:
+            corrupted_rows = [unexpected if row == expected else row for row in expected_day_rows]
+
+        backend = _create_real_backend(config_path)
+        try:
+            _replace_topic_day(backend, expected.timestamp.date(), corrupted_rows)
+            state_before_failure = _persisted_topic_snapshot(backend, expected.timestamp.date())
+        finally:
+            backend.dispose()
+        expected_total = len(scenario.topic_attributions) + (
+            1 if corruption == "unexpected" else -1 if corruption == "missing" else 0
+        )
+        assert state_before_failure[0] == expected_total
+
+        with pytest.raises(ValueError, match="persisted Showcase topic attributions"):
+            generate_or_reuse_demo(
+                config_path=config_path,
+                anchor_date=ANCHOR_DATE + timedelta(days=1),
+                profile=DemoProfile.SHOWCASE,
+            )
+
+        backend = _create_real_backend(config_path)
+        try:
+            assert _persisted_topic_snapshot(backend, expected.timestamp.date()) == state_before_failure
+            _replace_topic_day(backend, expected.timestamp.date(), expected_day_rows)
+        finally:
+            backend.dispose()
+
+    for corruption in corruption_kinds:
+        exercise_chargebacks(corruption)
+        exercise_topics(corruption)
+
+
+def test_generated_showcase_data_uses_normal_api_startup_without_provider_or_metrics_requests(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from demo.generator import DemoProfile, generate_or_reuse_demo
+    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
+
+    config_path = _write_config(
+        tmp_path,
+        tmp_path / "showcase-api-confluent.db",
+        tmp_path / "showcase-api-self-managed.db",
+    )
+    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    assert generate_or_reuse_demo(
+        config_path=config_path,
+        anchor_date=ANCHOR_DATE,
+        profile=DemoProfile.SHOWCASE,
+    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+
+    provider_requests: list[tuple[str, str]] = []
+
+    def fail_provider_request(
+        self: CCloudConnection,
+        method: str,
+        url: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        provider_requests.append((method, url))
+        raise AssertionError(f"unexpected provider request: {method} {url}")
+
+    metrics_requests: list[object] = []
+
+    def fail_metrics_query(self: PrometheusMetricsSource, *_args: object, **_kwargs: object) -> NoReturn:
+        metrics_requests.append(self)
+        raise AssertionError("unexpected Prometheus query")
+
+    monkeypatch.setattr(CCloudConnection, "_request", fail_provider_request)
+    monkeypatch.setattr(PrometheusMetricsSource, "query", fail_metrics_query)
+    import core.api.routes.readiness as readiness_routes
+
+    monkeypatch.setattr(readiness_routes, "_readiness_cache", None)
+    settings = load_config(config_path)
+    period_params = {
+        "start_date": scenario.start_date.isoformat(),
+        "end_date": scenario.anchor_date.isoformat(),
+    }
+    api_prefix = f"/api/v1/tenants/{TENANT_NAME}"
+
+    with TestClient(create_app(settings, mode="api")) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["status"] == "ok"
+        assert health.json()["version"]
+
+        readiness = client.get("/api/v1/readiness")
+        assert readiness.status_code == 200
+        assert readiness.json()["mode"] == "api"
+        assert readiness.json()["status"] == "ready"
+
+        tenants = client.get("/api/v1/tenants")
+        assert tenants.status_code == 200
+        assert [(item["tenant_name"], item["tenant_id"]) for item in tenants.json()["tenants"]] == [
+            (TENANT_NAME, TENANT_ID),
+            (SELF_MANAGED_TENANT_NAME, SELF_MANAGED_TENANT_ID),
+        ]
+
+        cost = client.get(
+            f"{api_prefix}/chargebacks/aggregate",
+            params={**period_params, "group_by": "resource_id", "time_bucket": "day"},
+        )
+        assert cost.status_code == 200
+        assert cost.json()["buckets"]
+        assert _decimal_from_response(cost.json()["total_amount"]) == sum(
+            (line.total_cost for line in scenario.billing_lines),
+            Decimal("0"),
+        )
+
+        topic_attributions = client.get(f"{api_prefix}/topic-attributions", params=period_params)
+        assert topic_attributions.status_code == 200
+        assert topic_attributions.json()["total"] == len(scenario.topic_attributions)
+        assert topic_attributions.json()["total"] > 10_000
 
     assert provider_requests == []
     assert metrics_requests == []
