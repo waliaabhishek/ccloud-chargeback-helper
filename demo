@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 0)); then
+    echo "Usage: ./demo"
+    exit 2
+fi
+
+SCRIPT_PATH=${BASH_SOURCE[0]}
+case "$SCRIPT_PATH" in
+    */*)
+        REPO_DIR=${SCRIPT_PATH%/*}
+        ;;
+    *)
+        REPO_DIR=.
+        ;;
+esac
+REPO_ROOT=$(CDPATH= cd -- "$REPO_DIR" && pwd)
+cd "$REPO_ROOT"
+
+COMPOSE=()
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+else
+    echo "Docker with Compose support is required" >&2
+    exit 1
+fi
+
+if ! DEMO_UID=$(id -u) || [[ ! "$DEMO_UID" =~ ^[0-9]+$ ]]; then
+    echo "Numeric UID/GID could not be determined" >&2
+    exit 1
+fi
+if ! DEMO_GID=$(id -g) || [[ ! "$DEMO_GID" =~ ^[0-9]+$ ]]; then
+    echo "Numeric UID/GID could not be determined" >&2
+    exit 1
+fi
+export DEMO_UID DEMO_GID
+
+mkdir -p .demo/state/clean
+if ! DEMO_ANCHOR_DATE=$(date -u +%F); then
+    echo "Unable to determine the current UTC date" >&2
+    exit 1
+fi
+export DEMO_ANCHOR_DATE
+
+COMPOSE_FILE=examples/demo/docker-compose.yml
+"${COMPOSE[@]}" -f "$COMPOSE_FILE" build demo-generator chitragupta chitragupta-ui
+"${COMPOSE[@]}" -f "$COMPOSE_FILE" run --rm demo-generator
+"${COMPOSE[@]}" -f "$COMPOSE_FILE" up --detach --wait chitragupta chitragupta-ui
+
+echo "Demo services are healthy."
+echo "UI: http://127.0.0.1:8081"
+echo "API: http://127.0.0.1:8080"

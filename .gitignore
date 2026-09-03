@@ -20,6 +20,9 @@ CONTEXT.md
 # MkDocs build output
 site/
 
+# Disposable local Demo Stack state
+.demo/
+
 # Python
 __pycache__/
 *.pyc

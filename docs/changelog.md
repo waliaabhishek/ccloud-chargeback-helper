@@ -15,5 +15,8 @@
 - Reject negative and non-finite self-managed Kafka cost rates and pool telemetry;
   invalid UTC days fail closed, remain retryable, and do not create downstream
   billing or attribution output.
+- Add a credential-free root `./demo` path with Docker Compose support for a
+  deterministic rolling six-month Clean Confluent profile, a real API-only
+  backend, and a React UI.
 
 --8<-- "CHANGELOG.md"

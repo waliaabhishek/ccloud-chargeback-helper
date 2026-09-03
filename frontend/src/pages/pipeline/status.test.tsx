@@ -107,7 +107,9 @@ vi.mock("../../utils/gridDefaults", () => ({
 // Mock antd
 // ---------------------------------------------------------------------------
 
-vi.mock("antd", () => {
+vi.mock("antd", async () => {
+  const { useState } = await import("react");
+
   const DescriptionsItem = ({
     label,
     children,
@@ -131,6 +133,28 @@ vi.mock("antd", () => {
     ),
     { Item: DescriptionsItem },
   );
+
+  const Tooltip = ({
+    children,
+    title,
+  }: {
+    children: ReactNode;
+    title: ReactNode;
+  }) => {
+    const [isVisible, setIsVisible] = useState(false);
+
+    return (
+      <span
+        onBlur={() => setIsVisible(false)}
+        onFocus={() => setIsVisible(true)}
+        onMouseEnter={() => setIsVisible(true)}
+        onMouseLeave={() => setIsVisible(false)}
+      >
+        {children}
+        {isVisible && <span role="tooltip">{title}</span>}
+      </span>
+    );
+  };
 
   return {
     Typography: {
@@ -234,6 +258,7 @@ vi.mock("antd", () => {
       lg?: number;
     }) => <div>{children}</div>,
     Descriptions,
+    Tooltip,
   };
 });
 
@@ -511,11 +536,54 @@ describe("AC-2: Run Pipeline button", () => {
     expect(screen.getByTestId("run-pipeline-btn")).toBeDisabled();
   });
 
-  it("test 6: readiness.mode=api → button is disabled", () => {
+  it("disables the pipeline control in API-only mode", () => {
     setupTenantContext({}, { mode: "api" });
     setupDefaultQueries();
     render(<PipelineStatusPage />);
     expect(screen.getByTestId("run-pipeline-btn")).toBeDisabled();
+  });
+
+  it("explains the disabled pipeline control on hover and focus in API-only mode", async () => {
+    const user = userEvent.setup();
+    setupTenantContext({}, { mode: "api" });
+    setupDefaultQueries();
+    render(<PipelineStatusPage />);
+
+    const pipelineControl = screen.getByTestId("run-pipeline-btn");
+    const tooltipTrigger = pipelineControl.parentElement;
+    expect(pipelineControl).toBeDisabled();
+    expect(tooltipTrigger).not.toBeNull();
+
+    await user.hover(tooltipTrigger!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Pipeline execution is unavailable in API-only mode.",
+    );
+
+    await user.unhover(tooltipTrigger!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    await user.tab();
+    expect(tooltipTrigger).toHaveFocus();
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Pipeline execution is unavailable in API-only mode.",
+    );
+  });
+
+  it("does not expose the API-only pipeline explanation in both mode", async () => {
+    const user = userEvent.setup();
+    setupTenantContext({}, { mode: "both" });
+    setupDefaultQueries();
+    render(<PipelineStatusPage />);
+
+    const pipelineControl = screen.getByTestId("run-pipeline-btn");
+    expect(pipelineControl).not.toBeDisabled();
+
+    await user.hover(pipelineControl);
+    await user.tab();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(
+      screen.queryByText("Pipeline execution is unavailable in API-only mode."),
+    ).toBeNull();
   });
 
   it("test 7: isReadOnly=true → button is disabled", () => {
@@ -525,8 +593,8 @@ describe("AC-2: Run Pipeline button", () => {
     expect(screen.getByTestId("run-pipeline-btn")).toBeDisabled();
   });
 
-  it("test 8: happy path — click button → POST to /pipeline/run → success Alert shown", async () => {
-    setupTenantContext();
+  it("starts the pipeline in both mode and shows the success response", async () => {
+    setupTenantContext({}, { mode: "both" });
     setupDefaultQueries();
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(
