@@ -2,44 +2,820 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage:"
-    echo "  ./demo [--showcase]"
-    echo "  ./demo reset [--clean|--showcase]"
+    cat <<'EOF'
+Usage:
+  ./demo [--showcase] [--grafana] [--lan] [--build]
+       [--ui-port PORT] [--api-port PORT] [--grafana-port PORT]
+  ./demo reset [--clean|--showcase]
+  ./demo status
+  ./demo logs
+  ./demo down
+EOF
+}
+
+invalid_usage() {
+    usage
+    exit 2
+}
+
+invalid_port() {
+    local switch=$1
+    local value=$2
+    echo "Invalid value for $switch $value; expected a decimal port in 1..65535." >&2
+    usage
+    exit 2
+}
+
+normalize_decimal() {
+    local value=$1
+    [[ "${value}" =~ ^[0-9]+$ ]] || return 1
+    while [[ ${#value} -gt 1 && ${value:0:1} == 0 ]]; do
+        value=${value:1}
+    done
+    DECIMAL_NORMALIZED=${value}
+}
+
+parse_port() {
+    local switch=$1
+    local value=$2
+    if ! normalize_decimal "$value"; then
+        invalid_port "$switch" "$value"
+    fi
+    local normalized=$DECIMAL_NORMALIZED
+    if [[ "${normalized}" == 0 || ${#normalized} -gt 5 || ( ${#normalized} == 5 && "${normalized}" > 65535 ) ]]; then
+        invalid_port "$switch" "$value"
+    fi
+    PARSED_PORT=$normalized
+}
+
+is_usable_ipv4() {
+    local address=$1
+    local first octet
+    [[ "${address}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS=. read -r -a octets <<< "${address}"
+    for octet in "${octets[@]}"; do
+        ((10#${octet} <= 255)) || return 1
+    done
+    first=${octets[0]}
+    ((10#${first} != 0 && 10#${first} != 127))
+}
+
+decode_ipv4() {
+    local encoded
+    local a b c d
+    encoded=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    [[ "${encoded}" =~ ^[0-9A-F]{8}$ ]] || return 1
+    printf -v a '%d' "0x${encoded:6:2}"
+    printf -v b '%d' "0x${encoded:4:2}"
+    printf -v c '%d' "0x${encoded:2:2}"
+    printf -v d '%d' "0x${encoded:0:2}"
+    DECODED_IPV4="${a}.${b}.${c}.${d}"
+}
+
+proc_owner() {
+    local inode=$1
+    local proc_root=${DEMO_PROC_ROOT:-/proc}
+    local pid_dir fd_link link command
+    LISTENER_PID=
+    LISTENER_COMMAND=
+    for pid_dir in "${proc_root}"/[0-9]*; do
+        [[ -d "${pid_dir}/fd" ]] || continue
+        for fd_link in "${pid_dir}"/fd/*; do
+            [[ -L "${fd_link}" ]] || continue
+            link=$(readlink "${fd_link}" 2>/dev/null) || continue
+            [[ "${link}" == "socket:[${inode}]" ]] || continue
+            [[ -r "${pid_dir}/comm" ]] || continue
+            command=$(<"${pid_dir}/comm") || continue
+            command=${command//$'\n'/}
+            [[ -n "${command}" ]] || continue
+            LISTENER_PID=${pid_dir##*/}
+            LISTENER_COMMAND=${command}
+            return 0
+        done
+    done
+    return 1
+}
+
+parse_lsof_owner() {
+    local output=$1
+    local port=$2
+    local line endpoint endpoint_port command pid
+    local -a fields
+    FALLBACK_PID=
+    FALLBACK_COMMAND=
+    while IFS= read -r line; do
+        [[ -n "${line}" && "${line}" != COMMAND* ]] || continue
+        read -r -a fields <<< "${line}"
+        (( ${#fields[@]} >= 9 )) || continue
+        command=${fields[0]}
+        pid=${fields[1]}
+        endpoint=${fields[8]}
+        [[ "${pid}" =~ ^[0-9]+$ && "${endpoint}" =~ :([0-9]+)$ ]] || continue
+        endpoint_port=${BASH_REMATCH[1]}
+        [[ "${endpoint_port}" == "${port}" ]] || continue
+        FALLBACK_PID=${pid}
+        FALLBACK_COMMAND=${command}
+        return 0
+    done <<< "${output}"
+    return 1
+}
+
+lookup_linux_fallback_owner() {
+    local port=$1 path output pid command token line
+    FALLBACK_PID=
+    FALLBACK_COMMAND=
+    path=$(command -v lsof 2>/dev/null || true)
+    if [[ -n "${path}" ]]; then
+        output=$("${path}" -nP "-iTCP:${port}" -sTCP:LISTEN 2>/dev/null) || output=
+        if parse_lsof_owner "${output}" "${port}"; then
+            return 0
+        fi
+    fi
+    path=$(command -v ss 2>/dev/null || true)
+    if [[ -n "${path}" ]]; then
+        output=$("${path}" -ltnp "sport = :${port}" 2>/dev/null) || output=
+        while IFS= read -r line; do
+            [[ "${line}" == *pid=* ]] || continue
+            pid=$(sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' <<< "${line}")
+            command=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<< "${line}")
+            if [[ "${pid}" =~ ^[0-9]+$ && -n "${command}" ]]; then
+                FALLBACK_PID=${pid}
+                FALLBACK_COMMAND=${command}
+                return 0
+            fi
+        done <<< "${output}"
+    fi
+    path=$(command -v fuser 2>/dev/null || true)
+    if [[ -n "${path}" ]]; then
+        output=$("${path}" -n tcp "${port}" 2>/dev/null) || output=
+        for token in ${output}; do
+            [[ "${token}" =~ ^[0-9]+$ ]] || continue
+            command=
+            if [[ -r "${DEMO_PROC_ROOT:-/proc}/${token}/comm" ]]; then
+                command=$(<"${DEMO_PROC_ROOT:-/proc}/${token}/comm") || command=
+                command=${command//$'\n'/}
+            fi
+            if [[ -n "${command}" ]]; then
+                FALLBACK_PID=${token}
+                FALLBACK_COMMAND=${command}
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
+is_docker_listener_command() {
+    local command=$1 normalized
+    normalized=$(printf '%s' "${command}" | tr '[:upper:]' '[:lower:]')
+    case "${normalized}" in
+        docker-proxy|com.docker.backend|com.docker.virtualization|docker-desktop|vpnkit*) return 0 ;;
+    esac
+    return 1
+}
+
+current_demo_docker_listener_matches() {
+    local listener_address=$1
+    case "${CURRENT_DEMO_BIND_ADDRESS}" in
+        127.0.0.1) [[ "${listener_address}" == 127.0.0.1 ]] ;;
+        0.0.0.0) [[ "${listener_address}" == 0.0.0.0 ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+record_ambiguous_listener() {
+    AMBIGUOUS_SERVICES+=("$1")
+    AMBIGUOUS_PORTS+=("$2")
+    AMBIGUOUS_PIDS+=("$3")
+    AMBIGUOUS_COMMANDS+=("$4")
+}
+
+linux_unknown_owner() {
+    echo "Port $2 for $1 has a non-Docker listener, but Linux process ownership could not be read from /proc and no ownership fallback identified it. Re-run with permission to inspect the listener or inspect the port and retry." >&2
+}
+
+macos_unknown_owner() {
+    echo "Port $2 for $1 has a non-Docker listener, but macOS lsof could not identify its process. Inspect the port and retry." >&2
+}
+
+print_process_conflict() {
+    echo "Port $2 for $1 is in use by process $4 (PID $3)." >&2
+}
+
+ipv4_listener_conflicts() {
+    local address=$1
+    decode_ipv4 "${address}" || return 1
+    if [[ "${DEMO_BIND_ADDRESS}" == 0.0.0.0 ]]; then
+        return 0
+    fi
+    [[ "$DECODED_IPV4" == 0.0.0.0 || "$DECODED_IPV4" == 127.0.0.1 ]]
+}
+
+inspect_linux_port() {
+    local service=$1 port=$2 proc_root=${DEMO_PROC_ROOT:-/proc}
+    local table path line local_endpoint address local_port state inode owner_pid owner_command
+    local -a fields
+    local port_hex
+    port_hex=$(printf '%04X' "$port")
+    for table in tcp tcp6; do
+        path="${proc_root}/net/${table}"
+        [[ -r "${path}" ]] || continue
+        while IFS= read -r line; do
+            read -r -a fields <<< "${line}"
+            (( ${#fields[@]} >= 4 )) || continue
+            local_endpoint=${fields[1]}
+            state=${fields[3]}
+            [[ "${state}" == 0A && "${local_endpoint}" == *:* ]] || continue
+            local_port=${local_endpoint##*:}
+            local_port=$(printf '%s' "${local_port}" | tr '[:lower:]' '[:upper:]')
+            [[ "${local_port}" == "${port_hex}" ]] || continue
+            address=${local_endpoint%:*}
+            inode=${fields[9]}
+            if [[ "${table}" == tcp ]]; then
+                ipv4_listener_conflicts "${address}" || continue
+                if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_docker_listener_matches "${DECODED_IPV4}"; then
+                    continue
+                fi
+                if proc_owner "${inode}"; then
+                    owner_pid=$LISTENER_PID
+                    owner_command=$LISTENER_COMMAND
+                elif lookup_linux_fallback_owner "${port}"; then
+                    owner_pid=$FALLBACK_PID
+                    owner_command=$FALLBACK_COMMAND
+                else
+                    linux_unknown_owner "${service}" "${port}"
+                    return 1
+                fi
+                if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_docker_listener_matches "${DECODED_IPV4}" &&
+                    is_docker_listener_command "${owner_command}"; then
+                    continue
+                fi
+                print_process_conflict "${service}" "${port}" "${owner_pid}" "${owner_command}"
+                return 1
+            fi
+            address=$(printf '%s' "${address}" | tr '[:lower:]' '[:upper:]')
+            if [[ "${address}" =~ ^0{16}FFFF[0-9A-F]{12}$ ]]; then
+                ipv4_listener_conflicts "${address:24:8}" || continue
+                if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_docker_listener_matches "${DECODED_IPV4}"; then
+                    continue
+                fi
+                if proc_owner "${inode}"; then
+                    owner_pid=$LISTENER_PID
+                    owner_command=$LISTENER_COMMAND
+                elif lookup_linux_fallback_owner "${port}"; then
+                    owner_pid=$FALLBACK_PID
+                    owner_command=$FALLBACK_COMMAND
+                else
+                    linux_unknown_owner "${service}" "${port}"
+                    return 1
+                fi
+                if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_docker_listener_matches "${DECODED_IPV4}" &&
+                    is_docker_listener_command "${owner_command}"; then
+                    continue
+                fi
+                print_process_conflict "${service}" "${port}" "${owner_pid}" "${owner_command}"
+                return 1
+            fi
+            if [[ "${address}" =~ ^0{32}$ ]]; then
+                owner_pid=
+                owner_command=
+                if proc_owner "${inode}"; then
+                    owner_pid=$LISTENER_PID
+                    owner_command=$LISTENER_COMMAND
+                elif lookup_linux_fallback_owner "${port}"; then
+                    owner_pid=$FALLBACK_PID
+                    owner_command=$FALLBACK_COMMAND
+                fi
+                if [[ -n "${owner_command}" ]] && ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_docker_listener_matches 0.0.0.0 &&
+                    is_docker_listener_command "${owner_command}"; then
+                    continue
+                fi
+                record_ambiguous_listener "${service}" "${port}" "${owner_pid}" "${owner_command}"
+            fi
+        done < "${path}"
+    done
+}
+
+macos_endpoint_kind() {
+    local endpoint=$1 host=${endpoint%:*}
+    host=${host#[}
+    host=${host%]}
+    MACOS_ENDPOINT_HOST=$host
+    if [[ "${host}" == "*" || "${host}" == 0.0.0.0 || "${host}" == :: ]]; then
+        MACOS_ENDPOINT_KIND=wildcard
+    elif [[ "${host}" == 127.* || "${host}" == localhost || "${host}" == ::1 ]]; then
+        MACOS_ENDPOINT_KIND=loopback
+    elif [[ "${host}" == ::ffff:* || "${host}" == \[::ffff:* ]]; then
+        MACOS_ENDPOINT_KIND=mapped
+        MACOS_ENDPOINT_HOST=${host#\[}
+        MACOS_ENDPOINT_HOST=${MACOS_ENDPOINT_HOST%\]}
+        MACOS_ENDPOINT_HOST=${MACOS_ENDPOINT_HOST#::ffff:}
+    elif [[ "${host}" == *:* ]]; then
+        MACOS_ENDPOINT_KIND=ipv6
+    else
+        MACOS_ENDPOINT_KIND=interface
+    fi
+}
+
+current_demo_macos_docker_listener_matches() {
+    local type=$1
+    case "${CURRENT_DEMO_BIND_ADDRESS}" in
+        127.0.0.1)
+            if [[ "${type}" == IPv4 ]]; then
+                [[ "${MACOS_ENDPOINT_KIND}" == loopback && "${MACOS_ENDPOINT_HOST}" == 127.0.0.1 ]]
+            else
+                [[ "${type}" == IPv6 && "${MACOS_ENDPOINT_KIND}" == mapped &&
+                    "${MACOS_ENDPOINT_HOST}" == 127.0.0.1 ]]
+            fi
+            ;;
+        0.0.0.0)
+            [[ "${type}" == IPv4 && "${MACOS_ENDPOINT_KIND}" == wildcard &&
+                ( "${MACOS_ENDPOINT_HOST}" == '*' || "${MACOS_ENDPOINT_HOST}" == 0.0.0.0 ) ]]
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+inspect_macos_port() {
+    local service=$1 port=$2 path output status line endpoint endpoint_port command pid type
+    local malformed_data=0
+    local -a fields
+    if [[ -x /usr/sbin/lsof ]]; then
+        path=/usr/sbin/lsof
+    else
+        path=$(command -v lsof 2>/dev/null || true)
+    fi
+    if [[ -z "${path}" ]]; then
+        macos_unknown_owner "${service}" "${port}"
+        return 1
+    fi
+    if output=$("${path}" -nP +c 0 "-iTCP:${port}" -sTCP:LISTEN 2>&1); then
+        status=0
+    else
+        status=$?
+    fi
+    if [[ -z "${output}" ]]; then
+        ((status == 0 || status == 1)) && return 0
+        macos_unknown_owner "${service}" "${port}"
+        return 1
+    fi
+    if ((status != 0)); then
+        echo "macOS lsof inspection failed: ${output}" >&2
+        macos_unknown_owner "${service}" "${port}"
+        return 1
+    fi
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] || continue
+        read -r -a fields <<< "${line}"
+        [[ "${fields[0]:-}" == COMMAND ]] && continue
+        if (( ${#fields[@]} < 9 )); then
+            malformed_data=1
+            continue
+        fi
+        command=${fields[0]}
+        pid=${fields[1]}
+        type=${fields[4]}
+        endpoint=${fields[8]}
+        if [[ ! "${pid}" =~ ^[0-9]+$ ]] || [[ "${type}" != IPv4 && "${type}" != IPv6 ]] ||
+            [[ ! "${endpoint}" =~ :([0-9]+)$ ]]; then
+            malformed_data=1
+            continue
+        fi
+        endpoint_port=${BASH_REMATCH[1]}
+        [[ "${endpoint_port}" == "${port}" ]] || continue
+            macos_endpoint_kind "${endpoint}"
+            if [[ "${type}" == IPv4 ]]; then
+            if [[ "${MACOS_ENDPOINT_KIND}" == wildcard || "${MACOS_ENDPOINT_KIND}" == loopback || "${DEMO_BIND_ADDRESS}" == 0.0.0.0 ]]; then
+                if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                    current_demo_macos_docker_listener_matches "${type}"; then
+                    continue
+                fi
+                print_process_conflict "${service}" "${port}" "${pid}" "${command}"
+                return 1
+            fi
+        elif [[ "${type}" == IPv6 ]]; then
+            case "$MACOS_ENDPOINT_KIND" in
+                wildcard)
+                    if ! ((CURRENT_DEMO_SERVICE_OWNS_PORT)) ||
+                        ! current_demo_macos_docker_listener_matches "${type}" ||
+                        ! is_docker_listener_command "${command}"; then
+                        record_ambiguous_listener "${service}" "${port}" "${pid}" "${command}"
+                    fi
+                    ;;
+                mapped)
+                    if [[ "$MACOS_ENDPOINT_HOST" == 127.* || "$MACOS_ENDPOINT_HOST" == 0.0.0.0 || "$DEMO_BIND_ADDRESS" == 0.0.0.0 ]]; then
+                        if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                            current_demo_macos_docker_listener_matches "${type}"; then
+                            continue
+                        fi
+                        print_process_conflict "${service}" "${port}" "${pid}" "${command}"
+                        return 1
+                    fi
+                    ;;
+            esac
+        fi
+    done <<< "${output}"
+    if ((malformed_data)); then
+        macos_unknown_owner "${service}" "${port}"
+        return 1
+    fi
+    return 0
+}
+
+compose_service_name() {
+    case "$1" in
+        API) COMPOSE_SERVICE=chitragupta; COMPOSE_CONTAINER_PORT=8080 ;;
+        UI) COMPOSE_SERVICE=chitragupta-ui; COMPOSE_CONTAINER_PORT=80 ;;
+        Grafana) COMPOSE_SERVICE=grafana; COMPOSE_CONTAINER_PORT=3000 ;;
+        *) return 1 ;;
+    esac
+}
+
+docker_host_overlaps_bind() {
+    local host_address=$1 embedded
+    host_address=$(printf '%s' "${host_address}" | tr '[:upper:]' '[:lower:]')
+    case "${host_address}" in
+        ""|"*"|0.0.0.0|::)
+            return 0
+            ;;
+        127.0.0.1|localhost)
+            [[ "${DEMO_BIND_ADDRESS}" == 127.0.0.1 || "${DEMO_BIND_ADDRESS}" == 0.0.0.0 ]]
+            ;;
+        ::1)
+            return 1
+            ;;
+        ::ffff:*)
+            embedded=${host_address#::ffff:}
+            docker_host_overlaps_bind "${embedded}"
+            ;;
+        *.*.*.*)
+            [[ "${DEMO_BIND_ADDRESS}" == 0.0.0.0 ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+docker_mapping_conflicts() {
+    local mapping=$1 port=$2 host_port host_address published
+    mapping=${mapping#"${mapping%%[![:space:]]*}"}
+    mapping=${mapping%"${mapping##*[![:space:]]}"}
+    [[ "${mapping}" == *"->"* ]] || return 1
+    host_port=${mapping%%->*}
+    [[ "${host_port}" == *:* ]] || return 1
+    host_address=${host_port%:*}
+    published=${host_port##*:}
+    host_address=${host_address#[}
+    host_address=${host_address%]}
+    normalize_decimal "${published}" || return 1
+    [[ "${DECIMAL_NORMALIZED}" == "${port}" ]] || return 1
+    docker_host_overlaps_bind "${host_address}"
+}
+
+docker_mapping_has_current_port() {
+    local mapping=$1 host_port published container_port
+    [[ -n "${CURRENT_DEMO_PUBLISHED_PORT}" && -n "${CURRENT_DEMO_CONTAINER_PORT}" ]] || return 1
+    mapping=${mapping#"${mapping%%[![:space:]]*}"}
+    mapping=${mapping%"${mapping##*[![:space:]]}"}
+    [[ "${mapping}" == *"->"* ]] || return 1
+    host_port=${mapping%%->*}
+    [[ "${host_port}" == *:* ]] || return 1
+    published=${host_port##*:}
+    normalize_decimal "${published}" || return 1
+    [[ "${DECIMAL_NORMALIZED}" == "${CURRENT_DEMO_PUBLISHED_PORT}" ]] || return 1
+    container_port=${mapping#*->}
+    container_port=${container_port%%/*}
+    normalize_decimal "${container_port}" || return 1
+    [[ "${DECIMAL_NORMALIZED}" == "${CURRENT_DEMO_CONTAINER_PORT}" ]]
+}
+
+has_task_owned_binding() {
+    local output=$1 port=$2 line token host_port host_address published
+    while IFS= read -r line; do
+        for token in ${line}; do
+            token=${token%,}
+            [[ "${token}" == *:* ]] || continue
+            host_port=${token%:*}
+            published=${token##*:}
+            host_address=${host_port#[}
+            host_address=${host_address%]}
+            normalize_decimal "${published}" || continue
+            [[ "${DECIMAL_NORMALIZED}" == "${port}" ]] || continue
+            if [[ "${host_address}" == "${DEMO_BIND_ADDRESS}" ]]; then
+                CURRENT_DEMO_BIND_ADDRESS=${host_address}
+                CURRENT_DEMO_PUBLISHED_PORT=${DECIMAL_NORMALIZED}
+                return 0
+            fi
+            if [[ "${host_address}" == 127.0.0.1 || "${host_address}" == 0.0.0.0 ]] &&
+                [[ "${DEMO_BIND_ADDRESS}" == 127.0.0.1 || "${DEMO_BIND_ADDRESS}" == 0.0.0.0 ]]; then
+                CURRENT_DEMO_BIND_ADDRESS=${host_address}
+                CURRENT_DEMO_PUBLISHED_PORT=${DECIMAL_NORMALIZED}
+                return 0
+            fi
+        done
+    done <<< "${output}"
+    return 1
+}
+
+current_demo_service_owns_port() {
+    local service=$1 port=$2 output
+    CURRENT_DEMO_BIND_ADDRESS=
+    CURRENT_DEMO_PUBLISHED_PORT=
+    CURRENT_DEMO_CONTAINER_PORT=
+    compose_service_name "${service}" || return 1
+    CURRENT_DEMO_CONTAINER_PORT=${COMPOSE_CONTAINER_PORT}
+    if ! output=$("${COMPOSE[@]}" "${ALL_COMPOSE[@]}" port "${COMPOSE_SERVICE}" "${COMPOSE_CONTAINER_PORT}" 2>/dev/null); then
+        return 1
+    fi
+    has_task_owned_binding "${output}" "${port}"
+}
+
+docker_mapping_matches_current() {
+    local mapping=$1 host_port host_address published
+    [[ -n "${CURRENT_DEMO_BIND_ADDRESS}" ]] || return 1
+    docker_mapping_has_current_port "${mapping}" || return 1
+    mapping=${mapping#"${mapping%%[![:space:]]*}"}
+    mapping=${mapping%"${mapping##*[![:space:]]}"}
+    [[ "${mapping}" == *"->"* ]] || return 1
+    host_port=${mapping%%->*}
+    [[ "${host_port}" == *:* ]] || return 1
+    host_address=${host_port%:*}
+    published=${host_port##*:}
+    host_address=${host_address#[}
+    host_address=${host_address%]}
+    normalize_decimal "${published}" || return 1
+    [[ "${host_address}" == "${CURRENT_DEMO_BIND_ADDRESS}" &&
+        "${DECIMAL_NORMALIZED}" == "${CURRENT_DEMO_PUBLISHED_PORT}" ]]
+}
+
+docker_container_conflict() {
+    local service=$1 port=$2 output name id mappings mapping
+    local compose_owned=0 current_container_name= current_container_id= row_is_current=0
+    local -a mapping_entries
+    CURRENT_DEMO_SERVICE_OWNS_PORT=0
+    if current_demo_service_owns_port "${service}" "${port}"; then
+        compose_owned=1
+    fi
+    command -v docker >/dev/null 2>&1 || return 0
+    output=$(docker ps --format '{{.Names}}\t{{.ID}}\t{{.Ports}}' 2>/dev/null || true)
+    while IFS=$'\t' read -r name id mappings; do
+        [[ -n "${name:-}" && -n "${mappings:-}" ]] || continue
+        IFS=, read -r -a mapping_entries <<< "${mappings}"
+        row_is_current=0
+        if ((compose_owned)); then
+            for mapping in "${mapping_entries[@]}"; do
+                if docker_mapping_matches_current "${mapping}"; then
+                    row_is_current=1
+                    current_container_name=${name}
+                    current_container_id=${id}
+                    CURRENT_DEMO_SERVICE_OWNS_PORT=1
+                    break
+                fi
+            done
+        fi
+        for mapping in "${mapping_entries[@]}"; do
+            if ((row_is_current)) && docker_mapping_has_current_port "${mapping}"; then
+                continue
+            fi
+            if ((CURRENT_DEMO_SERVICE_OWNS_PORT)) &&
+                [[ -n "${current_container_name}" && "${name}" == "${current_container_name}" &&
+                    "${id}" == "${current_container_id}" ]] &&
+                docker_mapping_has_current_port "${mapping}"; then
+                continue
+            fi
+            if docker_mapping_conflicts "${mapping}" "${port}"; then
+                echo "Port ${port} for ${service} is in use by Docker container ${name} (${id})." >&2
+                return 1
+            fi
+        done
+    done <<< "${output}"
+}
+
+inspect_host_port() {
+    CURRENT_DEMO_SERVICE_OWNS_PORT=0
+    if ! docker_container_conflict "$1" "$2"; then
+        return 1
+    fi
+    if [[ "$DEMO_PLATFORM" == Darwin ]]; then
+        inspect_macos_port "$1" "$2"
+    else
+        inspect_linux_port "$1" "$2"
+    fi
+}
+
+check_duplicate_ports() {
+    if [[ "$DEMO_API_PORT" == "$DEMO_UI_PORT" ]]; then
+        echo "Port $DEMO_API_PORT is requested by both API and UI; choose distinct ports." >&2
+        return 1
+    fi
+    if ((DEMO_GRAFANA_ENABLED)) && [[ "$DEMO_API_PORT" == "$DEMO_GRAFANA_PORT" ]]; then
+        echo "Port $DEMO_API_PORT is requested by both API and Grafana; choose distinct ports." >&2
+        return 1
+    fi
+    if ((DEMO_GRAFANA_ENABLED)) && [[ "$DEMO_UI_PORT" == "$DEMO_GRAFANA_PORT" ]]; then
+        echo "Port $DEMO_UI_PORT is requested by both UI and Grafana; choose distinct ports." >&2
+        return 1
+    fi
+}
+
+preflight_ports() {
+    inspect_host_port API "$DEMO_API_PORT" || return 1
+    inspect_host_port UI "$DEMO_UI_PORT" || return 1
+    if (( $1 )); then
+        inspect_host_port Grafana "$DEMO_GRAFANA_PORT" || return 1
+    fi
+}
+
+resolve_lan_address() {
+    local platform=$1 output interface address
+    DEMO_DISPLAY_HOST=
+    case "$platform" in
+        Linux)
+            output=$(ip route get 1.1.1.1 2>/dev/null || true)
+            if [[ "${output}" =~ (^|[[:space:]])src[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)($|[[:space:]]) ]]; then
+                address=${BASH_REMATCH[2]}
+            else
+                address=
+                if command -v hostname >/dev/null 2>&1; then
+                    output=$(hostname -I 2>/dev/null || true)
+                    for address in $output; do
+                        is_usable_ipv4 "${address}" && break
+                    done
+                fi
+            fi
+            ;;
+        Darwin)
+            output=$(route -n get default 2>/dev/null || true)
+            if [[ "${output}" =~ interface:[[:space:]]*([^[:space:]]+) ]]; then
+                interface=${BASH_REMATCH[1]}
+                output=$(ifconfig "${interface}" 2>/dev/null || true)
+            else
+                address=
+                output=
+            fi
+            if [[ "${output}" =~ inet[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)($|[[:space:]]) ]]; then
+                address=${BASH_REMATCH[1]}
+            else
+                address=
+            fi
+            ;;
+        *) echo "Unsupported host for --lan; rerun without --lan." >&2; return 1 ;;
+    esac
+    if ! is_usable_ipv4 "${address:-}"; then
+        echo "Unable to resolve a routable IPv4 address for --lan; rerun without --lan." >&2
+        return 1
+    fi
+    DEMO_DISPLAY_HOST=$address
+}
+
+resolve_release_tag() {
+    local candidate
+    DEMO_IMAGE_TAG=latest
+    if command -v git >/dev/null 2>&1 && candidate=$(git describe --tags --exact-match --match 'v*.*.*' HEAD 2>/dev/null); then
+        DEMO_IMAGE_TAG=${candidate}
+    fi
+    export DEMO_IMAGE_TAG
+}
+
+compose_service_in_line() {
+    local line=$1 service=$2 token suffix
+    local -a fields
+    read -r -a fields <<< "${line}"
+    for token in "${fields[@]}"; do
+        token=${token##*=}
+        while [[ "${token}" == \(* || "${token}" == \[* || "${token}" == \{* || "${token}" == \"* ]]; do
+            token=${token:1}
+        done
+        while [[ "${token}" == *: || "${token}" == *, || "${token}" == *\; || "${token}" == *\) || "${token}" == *\] || "${token}" == *\} || "${token}" == *\" ]]; do
+            token=${token:0:${#token}-1}
+        done
+        [[ "${token}" == "${service}" ]] && return 0
+        if [[ "${token}" == *-"${service}"-* ]]; then
+            suffix=${token##*-"${service}"-}
+            [[ "${suffix}" =~ ^[0-9]+$ ]] && return 0
+        fi
+        if [[ "${token}" == *_"${service}"_* ]]; then
+            suffix=${token##*_"${service}"_}
+            [[ "${suffix}" =~ ^[0-9]+$ ]] && return 0
+        fi
+    done
+    return 1
+}
+
+compose_service_in_output() {
+    local output=$1 service=$2 line
+    while IFS= read -r line; do
+        compose_service_in_line "${line}" "${service}" && return 0
+    done <<< "${output}"
+    return 1
+}
+
+diagnose_bind_failure() {
+    local output=$1 line index port service pid command bind_pattern
+    bind_pattern=${DEMO_BIND_ADDRESS//./\\.}
+    while IFS= read -r line; do
+        [[ "${line}" == *"already allocated"* || "${line}" == *"address already in use"* || ( "${line}" == *Bind* && "${line}" == *failed* ) ]] || continue
+        [[ "${line}" =~ (^|[^[:digit:].])${bind_pattern}:([0-9]+)([^[:digit:]]|$) ]] || continue
+        normalize_decimal "${BASH_REMATCH[2]}" || continue
+        for index in "${!AMBIGUOUS_PORTS[@]}"; do
+            port=${AMBIGUOUS_PORTS[index]}
+            [[ "${DECIMAL_NORMALIZED}" == "${port}" ]] || continue
+            service=${AMBIGUOUS_SERVICES[index]}
+            compose_service_name "${service}" || continue
+            compose_service_in_line "${line}" "${COMPOSE_SERVICE}" || compose_service_in_output "${output}" "${COMPOSE_SERVICE}" || continue
+            pid=${AMBIGUOUS_PIDS[index]}
+            command=${AMBIGUOUS_COMMANDS[index]}
+            if [[ -n "${pid}" && -n "${command}" ]]; then
+                print_process_conflict "${service}" "${port}" "${pid}" "${command}"
+            elif [[ "$DEMO_PLATFORM" == Darwin ]]; then
+                macos_unknown_owner "${service}" "${port}"
+            else
+                linux_unknown_owner "${service}" "${port}"
+            fi
+            return 0
+        done
+    done <<< "${output}"
+}
+
+retained_failure_diagnostic() {
+    cat >&2 <<'EOF'
+Demo startup failed. Containers were left in place for diagnosis.
+Run './demo status' to inspect service state.
+Run './demo logs' to inspect service output.
+Run './demo down' to stop the stack.
+EOF
 }
 
 DEMO_ACTION=start
+DEMO_PROFILE=
+DEMO_GRAFANA_ENABLED=0
+DEMO_LAN_ENABLED=0
+DEMO_BUILD=0
+DEMO_UI_PORT=8081
+DEMO_API_PORT=8080
+DEMO_GRAFANA_PORT=3000
+
 if (($# == 0)); then
     DEMO_PROFILE=clean
-elif (($# == 1)) && [[ $1 == "--showcase" ]]; then
-    DEMO_PROFILE=showcase
-elif [[ $1 == "reset" ]] && (($# == 1)); then
+elif [[ "$1" == reset ]]; then
     DEMO_ACTION=reset
-    DEMO_PROFILE=
-elif [[ $1 == "reset" ]] && (($# == 2)) && [[ $2 == "--clean" ]]; then
-    DEMO_ACTION=reset
-    DEMO_PROFILE=clean
-elif [[ $1 == "reset" ]] && (($# == 2)) && [[ $2 == "--showcase" ]]; then
-    DEMO_ACTION=reset
-    DEMO_PROFILE=showcase
+    if (($# == 1)); then
+        :
+    elif (($# == 2)) && [[ "$2" == --clean || "$2" == --showcase ]]; then
+        DEMO_PROFILE=${2#--}
+    else
+        invalid_usage
+    fi
+elif [[ "$1" == status || "$1" == logs || "$1" == down ]]; then
+    (($# == 1)) || invalid_usage
+    DEMO_ACTION=$1
 else
-    usage
-    exit 2
+    while (($# > 0)); do
+        case "$1" in
+            --showcase) DEMO_PROFILE=showcase ;;
+            --grafana) DEMO_GRAFANA_ENABLED=1 ;;
+            --lan) DEMO_LAN_ENABLED=1 ;;
+            --build) DEMO_BUILD=1 ;;
+            --ui-port|--api-port|--grafana-port)
+                local_switch=$1
+                if (($# < 2)); then
+                    local_value=
+                else
+                    local_value=$2
+                    shift
+                fi
+                parse_port "$local_switch" "$local_value"
+                case "$local_switch" in
+                    --ui-port) DEMO_UI_PORT=$PARSED_PORT ;;
+                    --api-port) DEMO_API_PORT=$PARSED_PORT ;;
+                    --grafana-port) DEMO_GRAFANA_PORT=$PARSED_PORT ;;
+                esac
+                ;;
+            *) invalid_usage ;;
+        esac
+        shift
+    done
+    [[ -n "$DEMO_PROFILE" ]] || DEMO_PROFILE=clean
 fi
-export DEMO_PROFILE
+if [[ "$DEMO_ACTION" != reset && -z "$DEMO_PROFILE" ]]; then
+    DEMO_PROFILE=clean
+fi
 
 SCRIPT_PATH=${BASH_SOURCE[0]}
 case "$SCRIPT_PATH" in
-    */*)
-        REPO_DIR=${SCRIPT_PATH%/*}
-        ;;
-    *)
-        REPO_DIR=.
-        ;;
+    */*) REPO_DIR=${SCRIPT_PATH%/*} ;;
+    *) REPO_DIR=. ;;
 esac
 REPO_ROOT=$(CDPATH= cd -- "$REPO_DIR" && pwd)
 cd "$REPO_ROOT"
 
-if [[ "$DEMO_ACTION" == "reset" ]] && [[ -z "$DEMO_PROFILE" ]]; then
+if [[ "$DEMO_ACTION" == reset && -z "$DEMO_PROFILE" ]]; then
     ACTIVE_PROFILE_FILE=.demo/active-profile
     if [[ -e "$ACTIVE_PROFILE_FILE" ]]; then
         if [[ ! -f "$ACTIVE_PROFILE_FILE" ]]; then
@@ -47,13 +823,18 @@ if [[ "$DEMO_ACTION" == "reset" ]] && [[ -z "$DEMO_PROFILE" ]]; then
             exit 1
         fi
         ACTIVE_PROFILE=
-        IFS= read -r -d '' ACTIVE_PROFILE < "$ACTIVE_PROFILE_FILE" || true
+        active_profile_status=0
+        IFS= read -r -d '' ACTIVE_PROFILE < "$ACTIVE_PROFILE_FILE" || active_profile_status=$?
+        if ((active_profile_status != 1)); then
+            echo "Invalid active Demo profile. Use './demo reset --clean' or './demo reset --showcase'." >&2
+            exit 1
+        fi
         case "$ACTIVE_PROFILE" in
-            $'clean\n'|$'showcase\n')
-                DEMO_PROFILE=${ACTIVE_PROFILE%$'\n'}
-                ;;
+            $'clean\n') DEMO_PROFILE=clean ;;
+            $'showcase\n') DEMO_PROFILE=showcase ;;
             *)
-                echo "Invalid active Demo profile '$ACTIVE_PROFILE'. Use './demo reset --clean' or './demo reset --showcase'." >&2
+                invalid_active_profile=${ACTIVE_PROFILE%$'\n'}
+                echo "Invalid active Demo profile '$invalid_active_profile'. Use './demo reset --clean' or './demo reset --showcase'." >&2
                 exit 1
                 ;;
         esac
@@ -63,22 +844,17 @@ if [[ "$DEMO_ACTION" == "reset" ]] && [[ -z "$DEMO_PROFILE" ]]; then
 fi
 
 case "$DEMO_PROFILE" in
-    clean)
-        DEMO_STATE_PATH=.demo/state/clean
-        DEMO_STATE_DIR=../../.demo/state/clean
-        ;;
-    showcase)
-        DEMO_STATE_PATH=.demo/state/showcase
-        DEMO_STATE_DIR=../../.demo/state/showcase
-        ;;
-    *)
-        echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2
-        exit 1
-        ;;
+    clean) DEMO_STATE_PATH=.demo/state/clean; DEMO_STATE_DIR=../../.demo/state/clean ;;
+    showcase) DEMO_STATE_PATH=.demo/state/showcase; DEMO_STATE_DIR=../../.demo/state/showcase ;;
+    *) echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2; exit 1 ;;
 esac
 export DEMO_PROFILE DEMO_STATE_DIR
 
-COMPOSE_FILE=examples/demo/docker-compose.yml
+BASE_COMPOSE_FILE=examples/demo/docker-compose.yml
+GRAFANA_COMPOSE_FILE=examples/demo/docker-compose.grafana.yml
+BASE_COMPOSE=(-f "$BASE_COMPOSE_FILE")
+ALL_COMPOSE=(-f "$BASE_COMPOSE_FILE" -f "$GRAFANA_COMPOSE_FILE")
+
 COMPOSE=()
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     COMPOSE=(docker compose)
@@ -99,21 +875,56 @@ if ! DEMO_GID=$(id -g) || [[ ! "$DEMO_GID" =~ ^[0-9]+$ ]]; then
 fi
 export DEMO_UID DEMO_GID
 
-if [[ "$DEMO_ACTION" == "reset" ]]; then
-    echo "Resetting ${DEMO_PROFILE} demo state at ${DEMO_STATE_PATH}"
+if [[ "$DEMO_ACTION" == status || "$DEMO_ACTION" == logs || "$DEMO_ACTION" == down ]]; then
+    DEMO_BIND_ADDRESS=127.0.0.1
+    export DEMO_BIND_ADDRESS DEMO_UI_PORT DEMO_API_PORT DEMO_GRAFANA_PORT
+    case "$DEMO_ACTION" in
+        status) "${COMPOSE[@]}" "${ALL_COMPOSE[@]}" ps ;;
+        logs) "${COMPOSE[@]}" "${ALL_COMPOSE[@]}" logs ;;
+        down) "${COMPOSE[@]}" "${ALL_COMPOSE[@]}" down ;;
+    esac
+    exit $?
 fi
 
-if [[ "$DEMO_ACTION" == "reset" ]]; then
-    "${COMPOSE[@]}" -f "$COMPOSE_FILE" stop chitragupta chitragupta-ui
+DEMO_PLATFORM=$(uname -s 2>/dev/null || echo Linux)
+if ((DEMO_LAN_ENABLED)); then
+    DEMO_BIND_ADDRESS=0.0.0.0
+    resolve_lan_address "$DEMO_PLATFORM" || exit 1
+else
+    DEMO_BIND_ADDRESS=127.0.0.1
+    DEMO_DISPLAY_HOST=127.0.0.1
+fi
+export DEMO_BIND_ADDRESS DEMO_DISPLAY_HOST DEMO_UI_PORT DEMO_API_PORT DEMO_GRAFANA_PORT
+
+check_duplicate_ports || exit 1
+AMBIGUOUS_SERVICES=()
+AMBIGUOUS_PORTS=()
+AMBIGUOUS_PIDS=()
+AMBIGUOUS_COMMANDS=()
+preflight_ports "$DEMO_GRAFANA_ENABLED" || exit 1
+
+if [[ "$DEMO_ACTION" == reset ]]; then
+    echo "Resetting $DEMO_PROFILE demo state at $DEMO_STATE_PATH"
+    "${COMPOSE[@]}" "${ALL_COMPOSE[@]}" stop chitragupta chitragupta-ui grafana
     case "$DEMO_PROFILE" in
-        clean)
-            rm -rf -- .demo/state/clean
-            ;;
-        showcase)
-            rm -rf -- .demo/state/showcase
-            ;;
+        clean) rm -rf -- .demo/state/clean ;;
+        showcase) rm -rf -- .demo/state/showcase ;;
     esac
 fi
+
+if ((DEMO_BUILD)); then
+    DEMO_IMAGE_TAG=local
+else
+    resolve_release_tag
+fi
+export DEMO_IMAGE_TAG
+
+if ((DEMO_GRAFANA_ENABLED)); then
+    COMPOSE_FILES=("${ALL_COMPOSE[@]}")
+else
+    COMPOSE_FILES=("${BASE_COMPOSE[@]}")
+fi
+
 mkdir -p "$DEMO_STATE_PATH"
 if ! DEMO_ANCHOR_DATE=$(date -u +%F); then
     echo "Unable to determine the current UTC date" >&2
@@ -121,13 +932,63 @@ if ! DEMO_ANCHOR_DATE=$(date -u +%F); then
 fi
 export DEMO_ANCHOR_DATE
 
-"${COMPOSE[@]}" -f "$COMPOSE_FILE" build demo-generator chitragupta chitragupta-ui
-"${COMPOSE[@]}" -f "$COMPOSE_FILE" run --rm demo-generator
-"${COMPOSE[@]}" -f "$COMPOSE_FILE" up --detach --wait --force-recreate chitragupta chitragupta-ui
+if ((DEMO_BUILD)); then
+    if ((DEMO_GRAFANA_ENABLED)); then
+        if "${COMPOSE[@]}" "${COMPOSE_FILES[@]}" pull grafana; then :; else
+            status=$?
+            echo "Grafana image acquisition failed." >&2
+            exit "$status"
+        fi
+    fi
+    if "${COMPOSE[@]}" "${COMPOSE_FILES[@]}" build chitragupta chitragupta-ui; then :; else
+        status=$?
+        echo "checkout build failed." >&2
+        exit "$status"
+    fi
+else
+    pull_services=(chitragupta chitragupta-ui)
+    ((DEMO_GRAFANA_ENABLED)) && pull_services+=(grafana)
+    if "${COMPOSE[@]}" "${COMPOSE_FILES[@]}" pull "${pull_services[@]}"; then :; else
+        status=$?
+        echo "released-image acquisition failed." >&2
+        exit "$status"
+    fi
+fi
+
+if "${COMPOSE[@]}" "${COMPOSE_FILES[@]}" run --rm demo-generator; then :; else
+    status=$?
+    echo "Demo generation failed." >&2
+    exit "$status"
+fi
+
+up_services=(chitragupta chitragupta-ui)
+up_orphans=(--remove-orphans)
+if ((DEMO_GRAFANA_ENABLED)); then
+    up_services+=(grafana)
+    up_orphans=()
+fi
+up_output=
+up_status=0
+if up_output=$("${COMPOSE[@]}" "${COMPOSE_FILES[@]}" up --detach --wait --force-recreate "${up_orphans[@]}" "${up_services[@]}" 2>&1); then
+    up_status=0
+else
+    up_status=$?
+fi
+printf '%s\n' "$up_output"
+if ((up_status != 0)); then
+    diagnose_bind_failure "$up_output"
+    retained_failure_diagnostic
+    exit "$up_status"
+fi
 
 mkdir -p .demo
 printf '%s\n' "$DEMO_PROFILE" > .demo/active-profile
-
 echo "Demo services are healthy."
-echo "UI: http://127.0.0.1:8081"
-echo "API: http://127.0.0.1:8080"
+if ((DEMO_LAN_ENABLED)); then
+    echo "WARNING: --lan exposes unauthenticated demo services and writable synthetic state to the local network."
+fi
+echo "UI: http://$DEMO_DISPLAY_HOST:$DEMO_UI_PORT"
+echo "API: http://$DEMO_DISPLAY_HOST:$DEMO_API_PORT"
+if ((DEMO_GRAFANA_ENABLED)); then
+    echo "Grafana: http://$DEMO_DISPLAY_HOST:$DEMO_GRAFANA_PORT"
+fi

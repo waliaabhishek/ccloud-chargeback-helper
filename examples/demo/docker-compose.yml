@@ -1,6 +1,6 @@
 services:
   demo-generator:
-    image: chitragupta-demo-backend:local
+    image: ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}
     user: "${DEMO_UID}:${DEMO_GID}"
     entrypoint: ["python", "-m", "demo.generator"]
     command:
@@ -22,7 +22,7 @@ services:
     restart: "no"
 
   chitragupta:
-    image: chitragupta-demo-backend:local
+    image: ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}
     user: "${DEMO_UID}:${DEMO_GID}"
     build:
       context: ../..
@@ -33,9 +33,10 @@ services:
       - ./config.yaml:/app/config/config.yaml:ro
       - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"
     networks:
       - demo
+      - demo-public
     restart: unless-stopped
     healthcheck:
       test:
@@ -49,14 +50,15 @@ services:
       start_period: 10s
 
   chitragupta-ui:
-    image: chitragupta-demo-ui:local
+    image: ghcr.io/waliaabhishek/chitragupta-ui:${DEMO_IMAGE_TAG:-latest}
     build:
       context: ../../frontend
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:8081:80"
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"
     networks:
       - demo
+      - demo-public
     restart: unless-stopped
     depends_on:
       chitragupta:
@@ -71,3 +73,5 @@ services:
 networks:
   demo:
     internal: true
+  demo-public:
+    driver: bridge

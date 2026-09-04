@@ -2,6 +2,9 @@
 
 ### Added
 
+- Add a portable root `./demo` launcher with Clean and Showcase profiles,
+  optional Grafana, localhost/LAN controls, release-image pulls or source
+  builds, lifecycle operations, and port-ownership diagnostics.
 - Add bounded self-managed Kafka historical Prometheus acquisition with a default
   five-day response/chunk limit, configurable `1..30` day range, exact scope reuse,
   recovery preflight, and documented logical-family versus HTTP-attempt bounds.

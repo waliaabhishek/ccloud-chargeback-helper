@@ -51,6 +51,11 @@ This was originally built for Confluent Cloud but has been extended to support o
 
 ## Quick Start
 
+For a credential-free synthetic stack, see the [Demo guide](docs/getting-started/demo.md)
+and run `./demo` from the repository root. It covers Clean and Showcase
+profiles, optional Grafana, LAN exposure, port overrides, lifecycle commands,
+and raw Compose escape hatches.
+
 ```bash
 git clone https://github.com/waliaabhishek/chitragupta.git
 cd chitragupta/examples/ccloud-full
