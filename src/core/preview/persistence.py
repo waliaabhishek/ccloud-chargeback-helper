@@ -2523,6 +2523,8 @@ class PreviewGenerationReadUnitOfWork(Protocol):
     repairs: PreviewRepairRepository
     retention_outcomes: PreviewRetentionOutcomeRepository
 
+    def has_any_preview_evidence(self, ecosystem: str, tenant_id: str) -> bool: ...
+
     def __enter__(self) -> Self: ...
     def __exit__(
         self,

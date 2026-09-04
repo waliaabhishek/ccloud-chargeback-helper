@@ -30,5 +30,11 @@
   deterministic additive profile provides comparison, trend, budget, anomaly,
   unit-economics, and partition-efficiency source conditions, with exact
   persisted validation beyond 10,000 rows.
+- Keep Clean and Showcase persisted state independent for safe profile switching.
+  Ordinary restarts preserve entity-tag changes made through the public API;
+  non-interactive reset accepts an explicit `--clean` or `--showcase`, otherwise
+  it uses the last-active profile and defaults to Clean when none exists. Stored
+  compatibility checks stop with a profile-specific reset command, and state
+  older than 15 days gets a reset recommendation without automatic refresh.
 
 --8<-- "CHANGELOG.md"

@@ -567,6 +567,7 @@ def test_preview_uows_expose_full_protocol_shape_and_close_sessions(tmp_path: Pa
             assert opened.allocation_evidence is not None
             assert opened.resources is not None
             assert opened.identities is not None
+            assert opened.has_any_preview_evidence("confluent_cloud", "tenant-1") is False
         assert generation_uow._session is None
 
         write_uow = backend.create_preview_write_unit_of_work()
@@ -598,6 +599,7 @@ def test_preview_repository_uow_and_backend_contracts_are_structural(tmp_path: P
         assert read_hints["revisions"] is persistence.PreviewRevisionRepository
         generation_hints = get_type_hints(persistence.PreviewGenerationReadUnitOfWork)
         assert generation_hints["calculations"] is persistence.PreviewCalculationRepository
+        assert hasattr(persistence.PreviewGenerationReadUnitOfWork, "has_any_preview_evidence")
     finally:
         backend.dispose()
 

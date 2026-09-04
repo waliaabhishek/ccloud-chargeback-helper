@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import inspect
+from sqlalchemy.engine import make_url
 
 from core.config.loader import load_config
 from core.models import ChargebackRow, CoreBillingLineItem, EntityTag, PipelineState
@@ -67,7 +69,27 @@ class DemoProfile(StrEnum):
     SHOWCASE = "showcase"
 
 
+DEMO_STATE_SCHEMA_VERSION = 1
+DEMO_GENERATOR_VERSION = 1
+DEMO_STATE_METADATA_FILE = "demo-state.json"
+
+
+@dataclass(frozen=True)
+class DemoStateMetadata:
+    """Compatibility metadata persisted beside one profile's databases."""
+
+    schema_version: int
+    generator_version: int
+    profile: DemoProfile
+    anchor_date: date
+
+
+class DemoStateCompatibilityError(ValueError):
+    """Raised when persisted profile state cannot be safely reused."""
+
+
 _VALIDATION_BATCH_SIZE = 2048
+_DEMO_STATE_METADATA_FIELDS = frozenset({"schema_version", "generator_version", "profile", "anchor_date"})
 
 
 def _at_midnight(day: date) -> datetime:
@@ -127,11 +149,139 @@ def _state_is_empty(uow: ReadOnlyUnitOfWork, ecosystem: str, tenant_id: str, ten
     )
 
 
+def _compatibility_error(profile: DemoProfile, reason: str) -> DemoStateCompatibilityError:
+    return DemoStateCompatibilityError(
+        f"Incompatible {profile.value} demo state: {reason}. Run './demo reset --{profile.value}' to regenerate it."
+    )
+
+
+def _load_state_metadata(path: Path, profile: DemoProfile) -> DemoStateMetadata:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _compatibility_error(profile, "completion metadata is not valid JSON") from exc
+
+    if not isinstance(raw, dict) or set(raw) != _DEMO_STATE_METADATA_FIELDS:
+        raise _compatibility_error(profile, "completion metadata must contain exactly the required fields")
+
+    schema_version = raw["schema_version"]
+    generator_version = raw["generator_version"]
+    recorded_profile = raw["profile"]
+    anchor_value = raw["anchor_date"]
+    if type(schema_version) is not int or type(generator_version) is not int:
+        raise _compatibility_error(profile, "completion metadata versions must be integers")
+    if not isinstance(recorded_profile, str):
+        raise _compatibility_error(profile, "completion metadata profile must be clean or showcase")
+    if not isinstance(anchor_value, str):
+        raise _compatibility_error(profile, "completion metadata anchor_date must be an ISO date")
+    try:
+        metadata_profile = DemoProfile(recorded_profile)
+    except ValueError as exc:
+        raise _compatibility_error(profile, "completion metadata profile must be clean or showcase") from exc
+    try:
+        anchor_date = date.fromisoformat(anchor_value)
+    except ValueError as exc:
+        raise _compatibility_error(profile, "completion metadata anchor_date is invalid") from exc
+    if anchor_date.isoformat() != anchor_value:
+        raise _compatibility_error(profile, "completion metadata anchor_date is invalid")
+    if schema_version != DEMO_STATE_SCHEMA_VERSION:
+        raise _compatibility_error(
+            profile,
+            f"schema version {schema_version} does not match expected {DEMO_STATE_SCHEMA_VERSION}",
+        )
+    if generator_version != DEMO_GENERATOR_VERSION:
+        raise _compatibility_error(
+            profile,
+            f"generator version {generator_version} does not match expected {DEMO_GENERATOR_VERSION}",
+        )
+    if metadata_profile is not profile:
+        raise _compatibility_error(
+            profile,
+            f"profile {metadata_profile.value!r} does not match selected profile {profile.value!r}",
+        )
+    return DemoStateMetadata(
+        schema_version=schema_version,
+        generator_version=generator_version,
+        profile=metadata_profile,
+        anchor_date=anchor_date,
+    )
+
+
+def _write_state_metadata(path: Path, profile: DemoProfile, anchor_date: date) -> None:
+    payload = {
+        "schema_version": DEMO_STATE_SCHEMA_VERSION,
+        "generator_version": DEMO_GENERATOR_VERSION,
+        "profile": profile.value,
+        "anchor_date": anchor_date.isoformat(),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _database_file_names(selected: tuple[tuple[str, TenantConfig], ...]) -> frozenset[str]:
+    names: set[str] = set()
+    for _tenant_name, tenant_config in selected:
+        connection_string = tenant_config.storage.connection_string.get_secret_value()
+        connection_url = make_url(connection_string)
+        if connection_url.get_backend_name() != "sqlite" or not connection_url.database:
+            raise ValueError("demo state requires file-backed SQLite tenant databases")
+        names.add(Path(connection_url.database).name)
+    return frozenset(names)
+
+
+def _prove_unmanifested_state_empty(
+    selected: tuple[tuple[str, TenantConfig], ...],
+    profile: DemoProfile,
+) -> None:
+    """Prove database-only state is schema-only before allowing a retry."""
+    for tenant_name, tenant_config in selected:
+        ecosystem, tenant_id, storage_module = _tenant_parts(tenant_config)
+        connection_string = tenant_config.storage.connection_string.get_secret_value()
+        backend = create_storage_backend(
+            tenant_config.storage,
+            storage_module=storage_module,
+            use_migrations=_should_use_migrations(connection_string),
+            focus_preview_enabled=tenant_config.focus_preview_enabled,
+        )
+        if not isinstance(backend, SQLModelBackend):
+            raise TypeError("demo generation requires the SQLModel storage backend")
+        try:
+            backend.create_tables()
+            with backend.create_read_only_unit_of_work() as uow:
+                if not _state_is_empty(uow, ecosystem, tenant_id, tenant_name):
+                    raise _compatibility_error(profile, f"tenant {tenant_name} contains existing demo data")
+            if ecosystem == CCLOUD_ECOSYSTEM and tenant_config.focus_preview_enabled:
+                with backend.create_preview_generation_read_unit_of_work() as uow:
+                    if uow.has_any_preview_evidence(ecosystem, tenant_id):
+                        raise _compatibility_error(profile, f"tenant {tenant_name} contains preview evidence")
+        finally:
+            backend.dispose()
+
+
 def _should_use_migrations(connection_string: str) -> bool:
     """Use Alembic for fresh/versioned databases and preserve direct schemas."""
     engine = get_or_create_engine(connection_string)
     tables = set(inspect(engine).get_table_names())
     return not tables or "alembic_version" in tables
+
+
+def _classify_profile_state(
+    state_dir: Path,
+    selected: tuple[tuple[str, TenantConfig], ...],
+    profile: DemoProfile,
+) -> DemoStateMetadata | None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = state_dir / DEMO_STATE_METADATA_FILE
+    if metadata_path.exists():
+        return _load_state_metadata(metadata_path, profile)
+
+    entries = tuple(state_dir.iterdir())
+    database_names = _database_file_names(selected)
+    unexpected_entries = tuple(entry for entry in entries if entry.name not in database_names)
+    if unexpected_entries:
+        raise _compatibility_error(profile, "state contains artifacts without completion metadata")
+    if entries:
+        _prove_unmanifested_state_empty(selected, profile)
+    return None
 
 
 def _resource_counts(uow: ReadOnlyUnitOfWork, ecosystem: str, tenant_id: str) -> dict[str, tuple[int, int, int]]:
@@ -279,6 +429,8 @@ def _validate_persisted_scenario(
     uow: ReadOnlyUnitOfWork,
     tenant_name: str,
     scenario: Scenario,
+    *,
+    validate_generated_tags: bool,
 ) -> None:
     """Validate stored state through bounded repository reads."""
     if isinstance(scenario, (CleanDemoScenario, ShowcaseDemoScenario)):
@@ -302,16 +454,17 @@ def _validate_persisted_scenario(
         if actual_identity != expected_identity:
             raise ValueError(f"persisted {profile_name} identities do not match the expected topology")
 
-    actual_tags, tag_total = uow.tags.find_tags_for_tenant(
-        scenario.tenant_id,
-        limit=max(1, len(scenario.entity_tags)),
-    )
-    if tag_total != len(scenario.entity_tags) or {_tag_fields(tag) for tag in actual_tags} != {
-        _tag_fields(tag) for tag in scenario.entity_tags
-    }:
-        if profile_name == "Clean":
-            raise ValueError("persisted entity tags do not match the expected Clean assignments")
-        raise ValueError("persisted entity tags do not match the expected Showcase assignments")
+    if validate_generated_tags:
+        actual_tags, tag_total = uow.tags.find_tags_for_tenant(
+            scenario.tenant_id,
+            limit=max(1, len(scenario.entity_tags)),
+        )
+        if tag_total != len(scenario.entity_tags) or {_tag_fields(tag) for tag in actual_tags} != {
+            _tag_fields(tag) for tag in scenario.entity_tags
+        }:
+            if profile_name == "Clean":
+                raise ValueError("persisted entity tags do not match the expected Clean assignments")
+            raise ValueError("persisted entity tags do not match the expected Showcase assignments")
 
     _one_billing, billing_total = uow.billing.find_by_filters(ecosystem, scenario.tenant_id, limit=1)
     if billing_total != len(scenario.billing_lines):
@@ -525,6 +678,8 @@ def _persist_or_validate_tenant(
     tenant_config: TenantConfig,
     scenario: Scenario,
     profile: DemoProfile,
+    *,
+    reuse_state: bool,
 ) -> GenerationResult:
     ecosystem, tenant_id, storage_module = _tenant_parts(tenant_config)
     connection_string = tenant_config.storage.connection_string.get_secret_value()
@@ -538,72 +693,113 @@ def _persist_or_validate_tenant(
         raise TypeError("demo generation requires the SQLModel storage backend")
     try:
         backend.create_tables()
-        with backend.create_read_only_unit_of_work() as uow:
-            empty = _state_is_empty(uow, ecosystem, tenant_id, tenant_name)
-            if empty:
-                persisted_anchor = scenario.anchor_date
-            else:
+
+        if reuse_state is True:
+            with backend.create_read_only_unit_of_work() as uow:
                 persisted_dates = uow.chargebacks.get_distinct_dates(ecosystem, tenant_id)
                 if not persisted_dates:
-                    if isinstance(scenario, ShowcaseDemoScenario):
-                        raise ValueError("nonempty Showcase state has no persisted chargeback dates")
-                    raise ValueError("nonempty Clean state has no persisted chargeback dates")
-                persisted_anchor = max(persisted_dates)
-        if persisted_anchor != scenario.anchor_date:
-            scenario = _build_scenario(
-                ecosystem=ecosystem,
-                tenant_id=tenant_id,
-                anchor_date=persisted_anchor,
-                profile=profile,
-            )
-        if empty:
-            _validate_scenario(scenario)
-            with backend.create_unit_of_work() as uow:
-                _persist_scenario(uow, tenant_name, scenario)
-                uow.commit()
-            if ecosystem == CCLOUD_ECOSYSTEM:
-                _persist_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
-            with backend.create_read_only_unit_of_work() as uow:
-                _validate_persisted_scenario(uow, tenant_name, scenario)
+                    profile_name = "Showcase" if isinstance(scenario, ShowcaseDemoScenario) else "Clean"
+                    raise ValueError(f"persisted {profile_name} state has no persisted chargeback dates")
+                if max(persisted_dates) != scenario.anchor_date:
+                    profile_name = "Showcase" if isinstance(scenario, ShowcaseDemoScenario) else "Clean"
+                    raise ValueError(f"persisted {profile_name} chargeback anchor does not match the demo state anchor")
+                _validate_persisted_scenario(
+                    uow,
+                    tenant_name,
+                    scenario,
+                    validate_generated_tags=False,
+                )
             if ecosystem == CCLOUD_ECOSYSTEM:
                 _validate_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
-            return GenerationResult.GENERATED
+            return GenerationResult.REUSED
 
         with backend.create_read_only_unit_of_work() as uow:
-            _validate_persisted_scenario(uow, tenant_name, scenario)
+            empty = _state_is_empty(uow, ecosystem, tenant_id, tenant_name)
+            if not empty:
+                raise _compatibility_error(profile, f"tenant {tenant_name} contains existing demo data")
+        _validate_scenario(scenario)
+        with backend.create_unit_of_work() as uow:
+            _persist_scenario(uow, tenant_name, scenario)
+            uow.commit()
+        if ecosystem == CCLOUD_ECOSYSTEM:
+            _persist_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
+        with backend.create_read_only_unit_of_work() as uow:
+            _validate_persisted_scenario(
+                uow,
+                tenant_name,
+                scenario,
+                validate_generated_tags=True,
+            )
         if ecosystem == CCLOUD_ECOSYSTEM:
             _validate_ccloud_preview(backend, cast("ConfluentDemoScenario", scenario))
-        return GenerationResult.REUSED
+        return GenerationResult.GENERATED
     finally:
         backend.dispose()
+
+
+def _generate_or_reuse_demo(
+    *,
+    config_path: Path,
+    state_dir: Path,
+    anchor_date: date,
+    profile: DemoProfile = DemoProfile.CLEAN,
+) -> tuple[dict[str, GenerationResult], DemoStateMetadata | None]:
+    """Generate or validate the two deterministic demo tenant databases."""
+    profile = DemoProfile(profile)
+    settings = load_config(config_path)
+    selected = _select_demo_tenants(settings)
+    existing_metadata = _classify_profile_state(state_dir, selected, profile)
+    reuse_state = existing_metadata is not None
+    effective_anchor = existing_metadata.anchor_date if existing_metadata is not None else anchor_date
+
+    results: dict[str, GenerationResult] = {}
+    for tenant_name, tenant_config in selected:
+        scenario = _build_scenario(
+            ecosystem=tenant_config.ecosystem,
+            tenant_id=tenant_config.tenant_id,
+            anchor_date=effective_anchor,
+            profile=profile,
+        )
+        results[tenant_name] = _persist_or_validate_tenant(
+            tenant_name,
+            tenant_config,
+            scenario,
+            profile,
+            reuse_state=reuse_state,
+        )
+    if existing_metadata is None:
+        _write_state_metadata(state_dir / DEMO_STATE_METADATA_FILE, profile, effective_anchor)
+    return results, existing_metadata
 
 
 def generate_or_reuse_demo(
     *,
     config_path: Path,
     anchor_date: date,
+    state_dir: Path,
     profile: DemoProfile = DemoProfile.CLEAN,
 ) -> dict[str, GenerationResult]:
     """Generate or validate the two deterministic demo tenant databases."""
-    settings = load_config(config_path)
-    selected = _select_demo_tenants(settings)
-    results: dict[str, GenerationResult] = {}
-    for tenant_name, tenant_config in selected:
-        scenario = _build_scenario(
-            ecosystem=tenant_config.ecosystem,
-            tenant_id=tenant_config.tenant_id,
-            anchor_date=anchor_date,
-            profile=profile,
-        )
-        results[tenant_name] = _persist_or_validate_tenant(tenant_name, tenant_config, scenario, profile)
+    results, _existing_metadata = _generate_or_reuse_demo(
+        config_path=config_path,
+        state_dir=state_dir,
+        anchor_date=anchor_date,
+        profile=profile,
+    )
     return results
 
 
-def generate_or_reuse_clean_demo(*, config_path: Path, anchor_date: date) -> dict[str, GenerationResult]:
+def generate_or_reuse_clean_demo(
+    *,
+    config_path: Path,
+    anchor_date: date,
+    state_dir: Path,
+) -> dict[str, GenerationResult]:
     """Compatibility wrapper for the default Clean demo profile."""
     return generate_or_reuse_demo(
         config_path=config_path,
         anchor_date=anchor_date,
+        state_dir=state_dir,
         profile=DemoProfile.CLEAN,
     )
 
@@ -619,6 +815,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the one-shot demo generator CLI."""
     parser = argparse.ArgumentParser(description="Generate deterministic demo state")
     parser.add_argument("--config", type=Path, required=True, help="Path to the demo YAML configuration")
+    parser.add_argument("--state-dir", type=Path, required=True, help="Profile-local demo state directory")
     parser.add_argument("--anchor", type=_parse_anchor, required=True, help="UTC anchor date (YYYY-MM-DD)")
     parser.add_argument(
         "--profile",
@@ -629,10 +826,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        results = generate_or_reuse_demo(config_path=args.config, anchor_date=args.anchor, profile=args.profile)
+        results, existing_metadata = _generate_or_reuse_demo(
+            config_path=args.config,
+            state_dir=args.state_dir,
+            anchor_date=args.anchor,
+            profile=args.profile,
+        )
     except Exception as exc:
         print(f"Demo generation failed: {exc}", file=sys.stderr)
         return 1
+    if existing_metadata is not None:
+        age_days = (args.anchor - existing_metadata.anchor_date).days
+        if age_days > 15:
+            print(
+                f"Demo {existing_metadata.profile.value} state is {age_days} days old; "
+                f"run './demo reset --{existing_metadata.profile.value}' to regenerate it."
+            )
     print(f"Demo {', '.join(f'{name} {result.value}' for name, result in results.items())}.")
     return 0
 

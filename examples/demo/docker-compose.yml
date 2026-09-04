@@ -11,6 +11,8 @@ services:
         "${DEMO_ANCHOR_DATE:-}",
         "--profile",
         "${DEMO_PROFILE:-clean}",
+        "--state-dir",
+        "/app/data",
       ]
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro

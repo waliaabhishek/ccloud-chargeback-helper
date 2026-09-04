@@ -20,7 +20,17 @@ BUILD_COMMAND = (
     "chitragupta-ui",
 )
 GENERATOR_COMMAND = ("-f", COMPOSE_FILE, "run", "--rm", "demo-generator")
-FINAL_UP_COMMAND = ("-f", COMPOSE_FILE, "up", "--detach", "--wait", "chitragupta", "chitragupta-ui")
+FINAL_UP_COMMAND = (
+    "-f",
+    COMPOSE_FILE,
+    "up",
+    "--detach",
+    "--wait",
+    "--force-recreate",
+    "chitragupta",
+    "chitragupta-ui",
+)
+STOP_COMMAND = ("-f", COMPOSE_FILE, "stop", "chitragupta", "chitragupta-ui")
 UI_URL = "http://127.0.0.1:8081"
 API_URL = "http://127.0.0.1:8080"
 
@@ -113,7 +123,10 @@ case "$*" in
         if [[ "${DEMO_FAKE_FAILURE:-}" == "generator" ]]; then exit 43; fi
         printf 'GENERATED\\n'
         ;;
-    "compose -f examples/demo/docker-compose.yml up --detach --wait chitragupta chitragupta-ui")
+    "compose -f examples/demo/docker-compose.yml stop chitragupta chitragupta-ui")
+        ;;
+    "compose -f examples/demo/docker-compose.yml up --detach --wait chitragupta chitragupta-ui" | \
+    "compose -f examples/demo/docker-compose.yml up --detach --wait --force-recreate chitragupta chitragupta-ui")
         case "${DEMO_FAKE_FAILURE:-}" in
             api-health)
                 printf 'chitragupta failed its health check\\n' >&2
@@ -150,7 +163,10 @@ case "$*" in
         if [[ "${DEMO_FAKE_FAILURE:-}" == "generator" ]]; then exit 53; fi
         printf 'GENERATED\\n'
         ;;
-    "-f examples/demo/docker-compose.yml up --detach --wait chitragupta chitragupta-ui")
+    "-f examples/demo/docker-compose.yml stop chitragupta chitragupta-ui")
+        ;;
+    "-f examples/demo/docker-compose.yml up --detach --wait chitragupta chitragupta-ui" | \
+    "-f examples/demo/docker-compose.yml up --detach --wait --force-recreate chitragupta chitragupta-ui")
         case "${DEMO_FAKE_FAILURE:-}" in
             api-health)
                 printf 'chitragupta failed its health check\\n' >&2
@@ -174,9 +190,10 @@ esac
     isolated_bin = tmp_path / "runtime-bin"
     isolated_bin.mkdir()
     shutil.copy2(bash_path, isolated_bin / "bash")
-    mkdir_path = shutil.which("mkdir")
-    assert mkdir_path is not None, "mkdir is required to exercise the public shell launcher"
-    shutil.copy2(mkdir_path, isolated_bin / "mkdir")
+    for command in ("mkdir", "rm", "rmdir"):
+        command_path = shutil.which(command)
+        assert command_path is not None, f"{command} is required to exercise the public shell launcher"
+        shutil.copy2(command_path, isolated_bin / command)
     runtime_bin = isolated_bin
     environment = os.environ.copy()
     environment.update(
@@ -241,6 +258,14 @@ def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
     return f"{result.stdout}{result.stderr}"
 
 
+def _tree_snapshot(path: Path) -> dict[Path, tuple[bytes, int]]:
+    return {
+        item.relative_to(path): (item.read_bytes(), item.stat().st_mtime_ns)
+        for item in path.rglob("*")
+        if item.is_file()
+    }
+
+
 def _normalized_command(command: tuple[str, ...]) -> tuple[str, ...]:
     return command[1:] if command[:1] == ("compose",) else command
 
@@ -272,7 +297,7 @@ def test_demo_rejects_arguments_before_invoking_docker(tmp_path: Path) -> None:
     result = _run_demo(workspace, environment, "--profile", "showcase")
 
     assert result.returncode != 0
-    assert _combined_output(result).strip() == "Usage: ./demo [--showcase]"
+    assert _combined_output(result).strip() == "Usage:\n  ./demo [--showcase]\n  ./demo reset [--clean|--showcase]"
     assert _docker_calls(command_log) == []
 
 
@@ -322,10 +347,151 @@ def test_demo_compose_passes_the_selected_profile_and_state_mount_to_generator_a
     generator_command = services["demo-generator"]["command"]
     assert "--profile" in generator_command
     assert "DEMO_PROFILE" in generator_command[generator_command.index("--profile") + 1]
+    assert generator_command[generator_command.index("--state-dir") + 1] == "/app/data"
     for service_name in ("demo-generator", "chitragupta"):
         assert any(
             "DEMO_STATE_DIR" in mount and mount.endswith(":/app/data:rw") for mount in services[service_name]["volumes"]
         )
+
+
+@pytest.mark.parametrize(
+    ("arguments", "active_profile", "selected_profile"),
+    [
+        (("reset",), None, "clean"),
+        (("reset",), "showcase", "showcase"),
+        (("reset", "--clean"), "showcase", "clean"),
+        (("reset", "--showcase"), "clean", "showcase"),
+    ],
+)
+def test_demo_reset_selects_the_explicit_or_last_active_profile_and_preserves_the_inactive_tree(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    active_profile: str | None,
+    selected_profile: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    selected_dir = workspace / ".demo" / "state" / selected_profile
+    inactive_profile = "showcase" if selected_profile == "clean" else "clean"
+    inactive_dir = workspace / ".demo" / "state" / inactive_profile
+    selected_dir.mkdir(parents=True)
+    inactive_dir.mkdir(parents=True)
+    (selected_dir / "obsolete.txt").write_text("remove only this profile", encoding="utf-8")
+    (inactive_dir / "keep.txt").write_text("leave this profile unchanged", encoding="utf-8")
+    if active_profile is not None:
+        (workspace / ".demo" / "active-profile").write_text(f"{active_profile}\n", encoding="utf-8")
+    inactive_before = _tree_snapshot(inactive_dir)
+    environment, command_log, _date_log = _fake_command_environment(tmp_path, anchor="2026-09-02")
+
+    result = _run_demo(workspace, environment, *arguments)
+
+    calls = _docker_calls(command_log)
+    assert result.returncode == 0
+    assert f"Resetting {selected_profile} demo state at .demo/state/{selected_profile}" in result.stdout
+    assert [command for _anchor, _uid, _gid, command in calls] == [
+        ("compose", "version"),
+        _selected_command("plugin", STOP_COMMAND),
+        _selected_command("plugin", BUILD_COMMAND),
+        _selected_command("plugin", GENERATOR_COMMAND),
+        _selected_command("plugin", FINAL_UP_COMMAND),
+    ]
+    assert not (selected_dir / "obsolete.txt").exists()
+    assert _tree_snapshot(inactive_dir) == inactive_before
+    assert (workspace / ".demo" / "active-profile").read_text(encoding="utf-8") == f"{selected_profile}\n"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("reset", "--clean", "--showcase"),
+        ("reset", "--unknown"),
+        ("--clean",),
+        ("--showcase", "reset"),
+    ],
+)
+def test_demo_rejects_invalid_reset_forms_before_docker_or_state_mutation(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log, _date_log = _fake_command_environment(tmp_path, anchor="2026-09-02")
+
+    result = _run_demo(workspace, environment, *arguments)
+
+    assert result.returncode == 2
+    assert _combined_output(result).strip() == "Usage:\n  ./demo [--showcase]\n  ./demo reset [--clean|--showcase]"
+    assert _docker_calls(command_log) == []
+    assert not (workspace / ".demo").exists()
+
+
+def test_demo_rejects_an_invalid_last_active_profile_before_stop_or_delete(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    state_dir = workspace / ".demo" / "state" / "clean"
+    state_dir.mkdir(parents=True)
+    (state_dir / "keep.txt").write_text("must not be deleted", encoding="utf-8")
+    active_profile = workspace / ".demo" / "active-profile"
+    active_profile.write_text("unsafe\n", encoding="utf-8")
+    before = _tree_snapshot(state_dir)
+    environment, command_log, _date_log = _fake_command_environment(tmp_path, anchor="2026-09-02")
+
+    result = _run_demo(workspace, environment, "reset")
+
+    assert result.returncode == 1
+    assert "reset --clean" in _combined_output(result)
+    assert "reset --showcase" in _combined_output(result)
+    assert _docker_calls(command_log) == []
+    assert _tree_snapshot(state_dir) == before
+
+
+def test_demo_writes_active_profile_only_after_a_healthy_forced_recreation(tmp_path: Path) -> None:
+    healthy_root = tmp_path / "healthy"
+    healthy_root.mkdir()
+    healthy_workspace = _copy_public_demo(healthy_root)
+    healthy_runtime_root = tmp_path / "healthy-runtime"
+    healthy_runtime_root.mkdir()
+    healthy_environment, _healthy_log, _date_log = _fake_command_environment(
+        healthy_runtime_root,
+        anchor="2026-09-02",
+    )
+
+    healthy = _run_demo(healthy_workspace, healthy_environment, "--showcase")
+
+    assert healthy.returncode == 0
+    assert (healthy_workspace / ".demo" / "active-profile").read_text(encoding="utf-8") == "showcase\n"
+
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir()
+    failed_workspace = _copy_public_demo(failed_root)
+    failed_runtime_root = tmp_path / "failed-runtime"
+    failed_runtime_root.mkdir()
+    failed_environment, _failed_log, _date_log = _fake_command_environment(
+        failed_runtime_root,
+        anchor="2026-09-02",
+        failure="api-health",
+    )
+    failed = _run_demo(failed_workspace, failed_environment)
+
+    assert failed.returncode != 0
+    assert not (failed_workspace / ".demo" / "active-profile").exists()
+
+
+def test_demo_switching_profiles_recreates_one_stack_without_rewriting_the_inactive_profile(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log, _date_log = _fake_command_environment(tmp_path, anchor="2026-09-02")
+
+    first = _run_demo(workspace, environment)
+    clean_dir = workspace / ".demo" / "state" / "clean"
+    (clean_dir / "evaluator-tag.txt").write_text("preserved", encoding="utf-8")
+    clean_before = _tree_snapshot(clean_dir)
+    second = _run_demo(workspace, environment, "--showcase")
+
+    calls = _docker_calls(command_log)
+    up_calls = list(_up_calls(calls))
+    assert first.returncode == second.returncode == 0
+    assert _tree_snapshot(clean_dir) == clean_before
+    assert (workspace / ".demo" / "state" / "showcase").is_dir()
+    assert len(up_calls) == 2
+    assert all(command == ("compose", *FINAL_UP_COMMAND) for *_prefix, command in up_calls)
+    assert (workspace / ".demo" / "active-profile").read_text(encoding="utf-8") == "showcase\n"
 
 
 def test_demo_reports_when_docker_is_missing(tmp_path: Path) -> None:

@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+    echo "Usage:"
+    echo "  ./demo [--showcase]"
+    echo "  ./demo reset [--clean|--showcase]"
+}
+
+DEMO_ACTION=start
 if (($# == 0)); then
     DEMO_PROFILE=clean
 elif (($# == 1)) && [[ $1 == "--showcase" ]]; then
     DEMO_PROFILE=showcase
+elif [[ $1 == "reset" ]] && (($# == 1)); then
+    DEMO_ACTION=reset
+    DEMO_PROFILE=
+elif [[ $1 == "reset" ]] && (($# == 2)) && [[ $2 == "--clean" ]]; then
+    DEMO_ACTION=reset
+    DEMO_PROFILE=clean
+elif [[ $1 == "reset" ]] && (($# == 2)) && [[ $2 == "--showcase" ]]; then
+    DEMO_ACTION=reset
+    DEMO_PROFILE=showcase
 else
-    echo "Usage: ./demo [--showcase]"
+    usage
     exit 2
 fi
 export DEMO_PROFILE
@@ -23,6 +39,46 @@ esac
 REPO_ROOT=$(CDPATH= cd -- "$REPO_DIR" && pwd)
 cd "$REPO_ROOT"
 
+if [[ "$DEMO_ACTION" == "reset" ]] && [[ -z "$DEMO_PROFILE" ]]; then
+    ACTIVE_PROFILE_FILE=.demo/active-profile
+    if [[ -e "$ACTIVE_PROFILE_FILE" ]]; then
+        if [[ ! -f "$ACTIVE_PROFILE_FILE" ]]; then
+            echo "Invalid active Demo profile. Use './demo reset --clean' or './demo reset --showcase'." >&2
+            exit 1
+        fi
+        ACTIVE_PROFILE=
+        IFS= read -r -d '' ACTIVE_PROFILE < "$ACTIVE_PROFILE_FILE" || true
+        case "$ACTIVE_PROFILE" in
+            $'clean\n'|$'showcase\n')
+                DEMO_PROFILE=${ACTIVE_PROFILE%$'\n'}
+                ;;
+            *)
+                echo "Invalid active Demo profile '$ACTIVE_PROFILE'. Use './demo reset --clean' or './demo reset --showcase'." >&2
+                exit 1
+                ;;
+        esac
+    else
+        DEMO_PROFILE=clean
+    fi
+fi
+
+case "$DEMO_PROFILE" in
+    clean)
+        DEMO_STATE_PATH=.demo/state/clean
+        DEMO_STATE_DIR=../../.demo/state/clean
+        ;;
+    showcase)
+        DEMO_STATE_PATH=.demo/state/showcase
+        DEMO_STATE_DIR=../../.demo/state/showcase
+        ;;
+    *)
+        echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2
+        exit 1
+        ;;
+esac
+export DEMO_PROFILE DEMO_STATE_DIR
+
+COMPOSE_FILE=examples/demo/docker-compose.yml
 COMPOSE=()
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     COMPOSE=(docker compose)
@@ -43,19 +99,34 @@ if ! DEMO_GID=$(id -g) || [[ ! "$DEMO_GID" =~ ^[0-9]+$ ]]; then
 fi
 export DEMO_UID DEMO_GID
 
-DEMO_STATE_DIR="../../.demo/state/${DEMO_PROFILE}"
-export DEMO_STATE_DIR
-mkdir -p ".demo/state/${DEMO_PROFILE}"
+if [[ "$DEMO_ACTION" == "reset" ]]; then
+    echo "Resetting ${DEMO_PROFILE} demo state at ${DEMO_STATE_PATH}"
+fi
+
+if [[ "$DEMO_ACTION" == "reset" ]]; then
+    "${COMPOSE[@]}" -f "$COMPOSE_FILE" stop chitragupta chitragupta-ui
+    case "$DEMO_PROFILE" in
+        clean)
+            rm -rf -- .demo/state/clean
+            ;;
+        showcase)
+            rm -rf -- .demo/state/showcase
+            ;;
+    esac
+fi
+mkdir -p "$DEMO_STATE_PATH"
 if ! DEMO_ANCHOR_DATE=$(date -u +%F); then
     echo "Unable to determine the current UTC date" >&2
     exit 1
 fi
 export DEMO_ANCHOR_DATE
 
-COMPOSE_FILE=examples/demo/docker-compose.yml
 "${COMPOSE[@]}" -f "$COMPOSE_FILE" build demo-generator chitragupta chitragupta-ui
 "${COMPOSE[@]}" -f "$COMPOSE_FILE" run --rm demo-generator
-"${COMPOSE[@]}" -f "$COMPOSE_FILE" up --detach --wait chitragupta chitragupta-ui
+"${COMPOSE[@]}" -f "$COMPOSE_FILE" up --detach --wait --force-recreate chitragupta chitragupta-ui
+
+mkdir -p .demo
+printf '%s\n' "$DEMO_PROFILE" > .demo/active-profile
 
 echo "Demo services are healthy."
 echo "UI: http://127.0.0.1:8081"
