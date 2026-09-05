@@ -10,6 +10,7 @@ import subprocess
 import sys
 import zlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -24,6 +25,25 @@ MEDIA_FILES = ("-f", BASE, "-f", MEDIA)
 MEDIA_PROJECT = ("-p", "chitragupta-demo-media")
 MEDIA_SPEC_PATH = "/opt/chitragupta-demo-media/capture-spec.json"
 MEDIA_ROOT_PATH = "/app/media"
+GRAFANA_PLUGIN_ENV_PATH = "examples/shared/grafana/plugins.env"
+GRAFANA_PLUGIN_ENV_REFERENCE = "../shared/grafana/plugins.env"
+GRAFANA_PLUGIN_ENV_KEY = "GF_PLUGINS_PREINSTALL_SYNC"
+EXPECTED_GRAFANA_PLUGIN_PINS = "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
+UPDATED_GRAFANA_PLUGIN_PINS = "frser-sqlite-datasource@4.0.7,marcusolsson-treemap-panel@2.1.2"
+GRAFANA_PLUGIN_INSTALL_KEYS = frozenset({"GF_INSTALL_PLUGINS", "GF_PLUGINS_PREINSTALL", GRAFANA_PLUGIN_ENV_KEY})
+GRAFANA_COMPOSE_STACKS = (
+    ("demo", (BASE, GRAFANA)),
+    ("dev", ("examples/dev/docker-compose.yml",)),
+    ("ccloud-full", ("examples/ccloud-full/docker-compose.yml",)),
+    ("ccloud-grafana", ("examples/ccloud-grafana/docker-compose.yml",)),
+    ("self-managed-full", ("examples/self-managed-full/docker-compose.yml",)),
+)
+GRAFANA_EXAMPLE_ENV_FILES = (
+    "examples/dev/.env.example",
+    "examples/ccloud-full/.env.example",
+    "examples/ccloud-grafana/.env.example",
+    "examples/self-managed-full/.env.example",
+)
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -36,6 +56,26 @@ def _copy_public_demo(tmp_path: Path) -> Path:
     workspace.mkdir()
     shutil.copy2(PROJECT_ROOT / "demo", workspace / "demo")
     shutil.copytree(PROJECT_ROOT / "examples" / "demo", workspace / "examples" / "demo")
+    shared_grafana = workspace / "examples" / "shared" / "grafana"
+    shared_grafana.mkdir(parents=True)
+    shutil.copy2(PROJECT_ROOT / GRAFANA_PLUGIN_ENV_PATH, shared_grafana / "plugins.env")
+    return workspace
+
+
+def _copy_grafana_compose_fixture(tmp_path: Path) -> Path:
+    workspace = tmp_path / "grafana-compose-fixture"
+    for _stack_name, compose_files in GRAFANA_COMPOSE_STACKS:
+        for compose_file in compose_files:
+            destination = workspace / compose_file
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(PROJECT_ROOT / compose_file, destination)
+    for environment_example in GRAFANA_EXAMPLE_ENV_FILES:
+        destination = workspace / Path(environment_example).with_suffix("")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(PROJECT_ROOT / environment_example, destination)
+    shared_plugins = workspace / GRAFANA_PLUGIN_ENV_PATH
+    shared_plugins.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(PROJECT_ROOT / GRAFANA_PLUGIN_ENV_PATH, shared_plugins)
     return workspace
 
 
@@ -1801,16 +1841,42 @@ def test_demo_grafana_override_mounts_selected_profile_read_only_and_uses_conflu
     grafana = override["services"]["grafana"]
     datasource_path = PROJECT_ROOT / "examples/demo/grafana/provisioning/datasources/datasource.yml"
     datasource = datasource_path.read_text(encoding="utf-8")
+    shared_plugins = PROJECT_ROOT / GRAFANA_PLUGIN_ENV_PATH
 
+    assert shared_plugins.read_text(encoding="utf-8") == f"{GRAFANA_PLUGIN_ENV_KEY}={EXPECTED_GRAFANA_PLUGIN_PINS}\n"
     assert grafana["image"] == "grafana/grafana:12.4.0"
-    assert grafana["environment"]["GF_PLUGINS_PREINSTALL_SYNC"] == (
-        "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
-    )
-    assert "GF_INSTALL_PLUGINS" not in grafana["environment"]
+    assert grafana["env_file"] == [GRAFANA_PLUGIN_ENV_REFERENCE]
+    assert GRAFANA_PLUGIN_INSTALL_KEYS.isdisjoint(grafana["environment"])
     assert grafana["ports"] == ["${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_GRAFANA_PORT:-3000}:3000"]
     assert "${DEMO_STATE_DIR:-../../.demo/state/clean}:/var/lib/grafana/data/demo:ro" in grafana["volumes"]
     assert "examples/shared/grafana/provisioning/dashboards" in "\n".join(grafana["volumes"])
     assert "/var/lib/grafana/data/demo/confluent-cloud.db" in datasource
+
+
+@pytest.mark.parametrize(("stack_name", "compose_files"), GRAFANA_COMPOSE_STACKS)
+def test_every_grafana_example_consumes_the_shared_plugin_declaration(
+    stack_name: str,
+    compose_files: tuple[str, ...],
+) -> None:
+    for compose_file in compose_files:
+        compose = yaml.safe_load((PROJECT_ROOT / compose_file).read_text(encoding="utf-8"))
+        grafana = compose["services"].get("grafana")
+        if grafana is None:
+            continue
+
+        assert grafana["image"] == "grafana/grafana:12.4.0", stack_name
+        assert grafana["env_file"] == [GRAFANA_PLUGIN_ENV_REFERENCE], stack_name
+        assert GRAFANA_PLUGIN_INSTALL_KEYS.isdisjoint(grafana["environment"]), stack_name
+
+
+def test_demo_public_copy_includes_only_the_shared_grafana_plugin_declaration(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    shared_grafana = workspace / "examples/shared/grafana"
+
+    assert [path.name for path in shared_grafana.iterdir()] == ["plugins.env"]
+    assert (shared_grafana / "plugins.env").read_text(encoding="utf-8") == (
+        f"{GRAFANA_PLUGIN_ENV_KEY}={EXPECTED_GRAFANA_PLUGIN_PINS}\n"
+    )
 
 
 @pytest.mark.parametrize("action", ["status", "logs", "down"])
@@ -2153,6 +2219,39 @@ def _available_compose_commands() -> list[list[str]]:
     return commands
 
 
+def _render_compose_config(
+    compose_command: list[str],
+    working_directory: Path,
+    environment: dict[str, str],
+    compose_files: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    command = [*compose_command]
+    for compose_file in compose_files:
+        command.extend(("-f", compose_file))
+    rendered = subprocess.run(
+        [*command, "config"],
+        cwd=working_directory,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert rendered.returncode == 0, rendered.stderr
+    config = yaml.safe_load(rendered.stdout)
+    assert isinstance(config, dict)
+    return config
+
+
+def _assert_rendered_grafana_plugin_environment(config: dict[str, Any], expected_pins: str) -> None:
+    grafana_environment = config["services"]["grafana"]["environment"]
+
+    assert grafana_environment[GRAFANA_PLUGIN_ENV_KEY] == expected_pins
+    assert "GF_INSTALL_PLUGINS" not in grafana_environment
+    assert "GF_PLUGINS_PREINSTALL" not in grafana_environment
+
+
 def test_demo_production_compose_renders_base_and_grafana_with_nondefault_runtime_values() -> None:
     compose_command = _available_compose_command()
     if compose_command is None:
@@ -2193,11 +2292,7 @@ def test_demo_production_compose_renders_base_and_grafana_with_nondefault_runtim
     assert api_port[0]["target"] == 8080
     assert grafana_port[0]["published"] == "3900"
     assert grafana_port[0]["target"] == 3000
-    grafana_environment = config["services"]["grafana"]["environment"]
-    assert grafana_environment["GF_PLUGINS_PREINSTALL_SYNC"] == (
-        "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
-    )
-    assert "GF_INSTALL_PLUGINS" not in grafana_environment
+    _assert_rendered_grafana_plugin_environment(config, EXPECTED_GRAFANA_PLUGIN_PINS)
     assert any(
         mount["target"] == "/var/lib/grafana/data/demo" and mount["read_only"]
         for mount in config["services"]["grafana"]["volumes"]
@@ -2264,11 +2359,7 @@ def test_demo_renders_base_and_merged_definitions_with_every_available_compose_f
             assert config["networks"][published_network].get("internal", False) is False
             assert published_network not in services["demo-generator"]["networks"]
         assert merged_config["services"]["grafana"]["networks"] == {"default": None}
-        grafana_environment = merged_config["services"]["grafana"]["environment"]
-        assert grafana_environment["GF_PLUGINS_PREINSTALL_SYNC"] == (
-            "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
-        )
-        assert "GF_INSTALL_PLUGINS" not in grafana_environment
+        _assert_rendered_grafana_plugin_environment(merged_config, EXPECTED_GRAFANA_PLUGIN_PINS)
         grafana_volumes = merged_config["services"]["grafana"]["volumes"]
         state_mount = next(mount for mount in grafana_volumes if mount["target"] == "/var/lib/grafana/data/demo")
         datasource_mount = next(
@@ -2280,6 +2371,85 @@ def test_demo_renders_base_and_merged_definitions_with_every_available_compose_f
         assert state_mount["read_only"] is True
         assert Path(datasource_mount["source"]).resolve() == datasource
         assert datasource_mount["read_only"] is True
+
+
+def test_all_grafana_example_stacks_render_shared_plugin_pins_and_propagate_one_edit(tmp_path: Path) -> None:
+    compose_commands = _available_compose_commands()
+    if not compose_commands:
+        pytest.skip("Docker Compose is not available")
+
+    workspace = _copy_grafana_compose_fixture(tmp_path)
+    demo_directory = workspace / "examples/demo"
+    shared_plugins = workspace / GRAFANA_PLUGIN_ENV_PATH
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DEMO_UID": "4242",
+            "DEMO_GID": "4343",
+            "DEMO_IMAGE_TAG": "v12.34.56",
+            "DEMO_BIND_ADDRESS": "127.0.0.1",
+            "DEMO_UI_PORT": "9081",
+            "DEMO_API_PORT": "9080",
+            "DEMO_GRAFANA_PORT": "3900",
+            "DEMO_PROFILE": "showcase",
+            "DEMO_STATE_DIR": "../../.demo/state/showcase",
+        }
+    )
+    showcase_state = (workspace / ".demo/state/showcase").resolve()
+    datasource = (demo_directory / "grafana/provisioning/datasources/datasource.yml").resolve()
+
+    for compose_command in compose_commands:
+        shared_plugins.write_text(
+            f"{GRAFANA_PLUGIN_ENV_KEY}={EXPECTED_GRAFANA_PLUGIN_PINS}\n",
+            encoding="utf-8",
+        )
+        base_config = _render_compose_config(
+            compose_command,
+            demo_directory,
+            environment,
+            ("docker-compose.yml",),
+        )
+        merged_config = _render_compose_config(
+            compose_command,
+            demo_directory,
+            environment,
+            ("docker-compose.yml", "docker-compose.grafana.yml"),
+        )
+
+        assert "grafana" not in base_config["services"]
+        _assert_rendered_grafana_plugin_environment(merged_config, EXPECTED_GRAFANA_PLUGIN_PINS)
+        grafana_volumes = merged_config["services"]["grafana"]["volumes"]
+        state_mount = next(mount for mount in grafana_volumes if mount["target"] == "/var/lib/grafana/data/demo")
+        datasource_mount = next(
+            mount
+            for mount in grafana_volumes
+            if mount["target"] == "/etc/grafana/provisioning/datasources/datasource.yml"
+        )
+        assert Path(state_mount["source"]).resolve() == showcase_state
+        assert state_mount["read_only"] is True
+        assert Path(datasource_mount["source"]).resolve() == datasource
+        assert datasource_mount["read_only"] is True
+
+        for _stack_name, compose_files in GRAFANA_COMPOSE_STACKS[1:]:
+            stack_directory = workspace / Path(compose_files[0]).parent
+            config = _render_compose_config(compose_command, stack_directory, environment)
+            _assert_rendered_grafana_plugin_environment(config, EXPECTED_GRAFANA_PLUGIN_PINS)
+
+        shared_plugins.write_text(
+            f"{GRAFANA_PLUGIN_ENV_KEY}={UPDATED_GRAFANA_PLUGIN_PINS}\n",
+            encoding="utf-8",
+        )
+        merged_config = _render_compose_config(
+            compose_command,
+            demo_directory,
+            environment,
+            ("docker-compose.yml", "docker-compose.grafana.yml"),
+        )
+        _assert_rendered_grafana_plugin_environment(merged_config, UPDATED_GRAFANA_PLUGIN_PINS)
+        for _stack_name, compose_files in GRAFANA_COMPOSE_STACKS[1:]:
+            stack_directory = workspace / Path(compose_files[0]).parent
+            config = _render_compose_config(compose_command, stack_directory, environment)
+            _assert_rendered_grafana_plugin_environment(config, UPDATED_GRAFANA_PLUGIN_PINS)
 
 
 def test_demo_prints_exact_default_ui_api_and_grafana_urls(tmp_path: Path) -> None:

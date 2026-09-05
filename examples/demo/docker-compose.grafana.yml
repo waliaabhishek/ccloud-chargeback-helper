@@ -1,8 +1,9 @@
 services:
   grafana:
     image: grafana/grafana:12.4.0
+    env_file:
+      - ../shared/grafana/plugins.env
     environment:
-      GF_PLUGINS_PREINSTALL_SYNC: frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-password}
     ports:
