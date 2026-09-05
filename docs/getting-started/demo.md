@@ -170,8 +170,11 @@ From the repository root, capture the current checkout with:
 
 This creates an isolated media workspace under `.demo/media`, generates fresh
 Showcase state, captures the five still scenes and walkthrough, validates the
-catalog and manifest, and copies the poster to
-`docs/assets/demo/chitragupta-demo-dashboard-poster.webp`. A successful run
+catalog and manifest. A dirty authoring capture copies the validated poster to
+`docs/assets/demo/chitragupta-demo-dashboard-poster.webp` for visual review and
+commit. A clean-source publication recapture keeps that reviewed tracked poster
+unchanged and generates the validated Release poster under
+`.demo/media/assets/chitragupta-demo-dashboard-poster.webp`. A successful run
 stops the API and UI before removing the media Compose containers and network;
 the generated evidence remains under `.demo/media` for inspection.
 

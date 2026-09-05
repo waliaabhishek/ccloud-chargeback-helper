@@ -2516,12 +2516,48 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
     assert generator_call[6] == "showcase"
     assert Path(generator_call[7]) == (workspace / ".demo" / "media" / "state").resolve()
     assert interactive_sentinel.read_text(encoding="utf-8") == "do not delete"
-    assert (workspace / "docs/assets/demo/chitragupta-demo-dashboard-poster.webp").is_file()
     docs_assets = workspace / "docs/assets/demo"
     assert not any(path.suffix in {".png", ".mp4", ".webm"} for path in docs_assets.glob("*"))
+    assert (
+        "Release poster: .demo/media/assets/chitragupta-demo-dashboard-poster.webp (tracked poster unchanged)"
+        in _output(result)
+    )
     assert (workspace / ".demo/media/assets/chitragupta-demo-walkthrough.mp4").is_file()
     assert ".demo/media" in _output(result)
     assert _gh_commands(environment) == []
+
+
+def test_demo_media_dirty_authoring_capture_copies_reviewed_poster_to_docs(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, _command_log = _fake_environment(tmp_path, media_outputs=True, git_status=" M demo")
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 0, _output(result)
+    poster = workspace / "docs/assets/demo/chitragupta-demo-dashboard-poster.webp"
+    assert poster.read_text(encoding="utf-8") == "generated-chitragupta-demo-dashboard-poster.webp"
+    assert "Reviewed poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp" in _output(result)
+    assert "copied from .demo/media/assets/chitragupta-demo-dashboard-poster.webp" in _output(result)
+
+
+def test_demo_media_clean_recapture_keeps_existing_reviewed_poster_unchanged(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    reviewed_poster = workspace / "docs/assets/demo/chitragupta-demo-dashboard-poster.webp"
+    reviewed_poster.parent.mkdir(parents=True)
+    reviewed_poster.write_text("reviewed poster", encoding="utf-8")
+    environment, _command_log = _fake_environment(tmp_path, media_outputs=True)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 0, _output(result)
+    assert reviewed_poster.read_text(encoding="utf-8") == "reviewed poster"
+    assert (
+        "Release poster: .demo/media/assets/chitragupta-demo-dashboard-poster.webp (tracked poster unchanged)"
+        in _output(result)
+    )
+    assert (workspace / ".demo/media/assets/chitragupta-demo-dashboard-poster.webp").read_text(
+        encoding="utf-8"
+    ) == "generated-chitragupta-demo-dashboard-poster.webp"
 
 
 @pytest.mark.parametrize("action", ["status", "logs", "down"])
@@ -2834,7 +2870,7 @@ def test_demo_media_public_launcher_can_publish_a_production_shaped_capture(tmp_
 
 def test_demo_media_capture_distinguishes_poster_copy_and_teardown_failures(tmp_path: Path) -> None:
     workspace = _copy_public_demo(tmp_path)
-    environment, command_log = _fake_environment(tmp_path, media_outputs=True, cat_failure=True)
+    environment, command_log = _fake_environment(tmp_path, media_outputs=True, cat_failure=True, git_status=" M demo")
 
     result = _run(workspace, environment, "media")
 

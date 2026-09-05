@@ -966,10 +966,15 @@ media_capture() {
         printf '%s\n' "${output}" >&2
         media_poststart_failure "${status}" "Demo media manifest validation failed."
     fi
-    if ! mkdir -p -- docs/assets/demo ||
-        ! cat -- "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard-poster.webp" \
-            > docs/assets/demo/chitragupta-demo-dashboard-poster.webp; then
-        media_poststart_failure 1 "Demo media poster copy failed."
+    if [[ "${source_worktree_clean}" == false ]]; then
+        if ! mkdir -p -- docs/assets/demo ||
+            ! cat -- "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard-poster.webp" \
+                > docs/assets/demo/chitragupta-demo-dashboard-poster.webp; then
+            media_poststart_failure 1 "Demo media poster copy failed."
+        fi
+        echo "Reviewed poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp (copied from .demo/media/assets/chitragupta-demo-dashboard-poster.webp)"
+    else
+        echo "Release poster: .demo/media/assets/chitragupta-demo-dashboard-poster.webp (tracked poster unchanged)"
     fi
     if output=$(media_compose down 2>&1); then
         printf '%s\n' "${output}"
@@ -979,7 +984,6 @@ media_capture() {
         media_poststart_failure "${status}" "Demo media teardown failed."
     fi
     echo "Demo media capture complete: ${DEMO_MEDIA_PATH}"
-    echo "Poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp"
 }
 
 media_diagnostic() {
