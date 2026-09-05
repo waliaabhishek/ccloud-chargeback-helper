@@ -10,7 +10,7 @@ import subprocess
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -30,9 +30,14 @@ from core.storage.backends.sqlmodel.base_tables import ResourceTable
 from core.storage.backends.sqlmodel.repositories import SQLModelEntityTagRepository, TopicAttributionRepository
 from core.storage.backends.sqlmodel.unit_of_work import SQLModelBackend
 from core.storage.registry import create_storage_backend
-from demo.generator import DemoProfile, GenerationResult, generate_or_reuse_clean_demo
+from demo.generator import DemoProfile, GenerationResult, generate_or_reuse_clean_demo, generate_or_reuse_demo
 from plugins.confluent_cloud.connections import CCloudConnection
-from plugins.confluent_cloud.demo.scenario import CleanDemoScenario, build_clean_demo_scenario
+from plugins.confluent_cloud.demo.scenario import (
+    CleanDemoScenario,
+    ConfluentDemoScenario,
+    build_clean_demo_scenario,
+    build_showcase_demo_scenario,
+)
 from plugins.confluent_cloud.source_capture import CCloudNativeSourceEvidenceCapture
 from plugins.confluent_cloud.storage.module import CCloudStorageModule
 from plugins.confluent_cloud.storage.repositories import CCloudBillingRepository, CCloudChargebackRepository
@@ -61,6 +66,15 @@ SELF_MANAGED_TENANT_NAME = "clean-self-managed"
 SELF_MANAGED_TENANT_ID = "northstar-self-managed"
 ANCHOR_DATE = date(2026, 9, 2)
 FUTURE_ANCHOR_DATE = date(2026, 10, 15)
+
+
+@dataclass(frozen=True)
+class _DemoStateTemplate:
+    state_dir: Path
+    profile: DemoProfile
+    anchor_date: date
+    ccloud_scenario: ConfluentDemoScenario
+    self_managed_scenario: CleanSelfManagedKafkaScenario
 
 
 def _generation_results(
@@ -632,19 +646,11 @@ def test_generator_reuses_a_complete_dataset_from_its_persisted_chargeback_ancho
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
     requested_anchor: date,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
     """Same-day and next-day launches validate and reuse the maximum persisted fact date."""
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    assert generate_or_reuse_clean_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
-    expected_ccloud_scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    expected_ccloud_scenario = clean_demo_state_template.ccloud_scenario
 
     backend = _create_real_backend(config_path)
     try:
@@ -691,7 +697,7 @@ def test_generator_reuses_a_complete_dataset_from_its_persisted_chargeback_ancho
         assert _snapshot_self_managed_state(self_managed_backend) == self_managed_before
         _assert_persisted_self_managed_scenario(
             self_managed_backend,
-            build_clean_self_managed_kafka_scenario(tenant_id=SELF_MANAGED_TENANT_ID, anchor_date=ANCHOR_DATE),
+            clean_demo_state_template.self_managed_scenario,
         )
     finally:
         self_managed_backend.dispose()
@@ -699,22 +705,10 @@ def test_generator_reuses_a_complete_dataset_from_its_persisted_chargeback_ancho
 
 def test_generator_rejects_a_manifested_state_with_an_empty_replacement_tenant_database(
     tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    state_dir = _profile_state_dir(tmp_path)
-    initial_config = _write_config(
-        tmp_path,
-        state_dir / "confluent.db",
-        state_dir / "first-self-managed.db",
-    )
-    assert generate_or_reuse_clean_demo(
-        config_path=initial_config,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
-    expected_ccloud_scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    state_dir, initial_config = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    expected_ccloud_scenario = clean_demo_state_template.ccloud_scenario
     ccloud_backend = _create_real_backend(initial_config)
     try:
         ccloud_before = _snapshot_persisted_state(ccloud_backend, expected_ccloud_scenario)
@@ -751,18 +745,10 @@ def test_generator_rejects_a_manifested_state_with_an_empty_replacement_tenant_d
 def test_generator_rejects_missing_unexpected_or_deleted_persisted_topology_without_repairing_it(
     tmp_path: Path,
     corruption: str,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generate_or_reuse_clean_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    scenario = clean_demo_state_template.ccloud_scenario
     backend = _create_real_backend(config_path)
     try:
         with backend.create_unit_of_work() as uow:
@@ -825,21 +811,10 @@ def test_generator_rejects_missing_unexpected_or_deleted_persisted_topology_with
 def test_generator_rejects_self_managed_topology_corruption_without_repairing_it(
     tmp_path: Path,
     corruption: str,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    scenario = build_clean_self_managed_kafka_scenario(
-        tenant_id=SELF_MANAGED_TENANT_ID,
-        anchor_date=ANCHOR_DATE,
-    )
-    assert generate_or_reuse_clean_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    scenario = clean_demo_state_template.self_managed_scenario
     backend = _create_real_backend(config_path, SELF_MANAGED_TENANT_NAME)
     try:
         with backend.create_unit_of_work() as uow:
@@ -1083,27 +1058,12 @@ def _parent_children(graph: dict[str, object], parent_id: str) -> set[str]:
 def test_generated_clean_data_is_available_through_the_production_api_without_provider_requests(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
     """Production startup serves both generated tenants without provider or metrics acquisition."""
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _write_config(
-        tmp_path,
-        state_dir / "api-confluent.db",
-        state_dir / "api-self-managed.db",
-    )
-    scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    self_managed_scenario = build_clean_self_managed_kafka_scenario(
-        tenant_id=SELF_MANAGED_TENANT_ID,
-        anchor_date=ANCHOR_DATE,
-    )
-    assert generate_or_reuse_clean_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
+    _state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    scenario = clean_demo_state_template.ccloud_scenario
+    self_managed_scenario = clean_demo_state_template.self_managed_scenario
 
     provider_requests: list[tuple[str, str]] = []
 
@@ -1459,22 +1419,10 @@ def test_generated_clean_data_is_available_through_the_production_api_without_pr
 def test_future_anchor_keeps_focus_preview_available_without_provider_requests(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
+    future_clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
     """A future rolling demo anchor remains eligible for a real Preview request."""
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _write_config(
-        tmp_path,
-        state_dir / "future-confluent.db",
-        state_dir / "future-self-managed.db",
-    )
-    assert generate_or_reuse_clean_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=FUTURE_ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
+    _, config_path = _copy_demo_state(tmp_path, future_clean_demo_state_template, name="future-clean")
 
     provider_requests: list[tuple[str, str]] = []
 
@@ -1927,23 +1875,12 @@ def test_showcase_generator_persists_complete_collections_with_bounded_validatio
 
 def test_generator_rejects_clean_and_showcase_state_profile_mismatches_without_repairing(
     tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+    showcase_demo_state_template: _DemoStateTemplate,
 ) -> None:
     from demo.generator import DemoProfile, generate_or_reuse_demo
 
-    clean_state_dir = _profile_state_dir(tmp_path, "clean")
-    clean_config = _write_config(
-        tmp_path,
-        clean_state_dir / "clean-confluent.db",
-        clean_state_dir / "clean-self-managed.db",
-    )
-    assert generate_or_reuse_demo(
-        config_path=clean_config,
-        state_dir=clean_state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(
-        GenerationResult.GENERATED,
-        GenerationResult.GENERATED,
-    )
+    clean_state_dir, clean_config = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
     assert generate_or_reuse_clean_demo(
         config_path=clean_config,
         state_dir=clean_state_dir,
@@ -1972,18 +1909,11 @@ def test_generator_rejects_clean_and_showcase_state_profile_mismatches_without_r
     finally:
         clean_backend.dispose()
 
-    showcase_state_dir = _profile_state_dir(tmp_path, "showcase")
-    showcase_config = _write_config(
+    showcase_state_dir, showcase_config = _copy_demo_state(
         tmp_path,
-        showcase_state_dir / "showcase-confluent.db",
-        showcase_state_dir / "showcase-self-managed.db",
+        showcase_demo_state_template,
+        name="showcase",
     )
-    assert generate_or_reuse_demo(
-        config_path=showcase_config,
-        state_dir=showcase_state_dir,
-        anchor_date=ANCHOR_DATE,
-        profile=DemoProfile.SHOWCASE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
     showcase_backend = _create_real_backend(showcase_config)
     try:
         showcase_total = _persisted_billing_total(showcase_backend)
@@ -2006,23 +1936,12 @@ def test_generator_rejects_clean_and_showcase_state_profile_mismatches_without_r
 
 def test_showcase_generator_rejects_missing_unexpected_and_same_total_billing_replacements(
     tmp_path: Path,
+    showcase_demo_state_template: _DemoStateTemplate,
 ) -> None:
     from demo.generator import DemoProfile, generate_or_reuse_demo
-    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
 
-    state_dir = _profile_state_dir(tmp_path, "showcase")
-    config_path = _write_config(
-        tmp_path,
-        state_dir / "showcase-confluent.db",
-        state_dir / "showcase-self-managed.db",
-    )
-    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-        profile=DemoProfile.SHOWCASE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, showcase_demo_state_template, name="showcase")
+    scenario = showcase_demo_state_template.ccloud_scenario
     expected = scenario.billing_lines[-1]
     expected_day_rows = [line for line in scenario.billing_lines if line.timestamp.date() == expected.timestamp.date()]
 
@@ -2110,23 +2029,12 @@ def test_showcase_generator_rejects_missing_unexpected_and_same_total_billing_re
 
 def test_showcase_generator_rejects_missing_unexpected_and_same_total_fact_replacements(
     tmp_path: Path,
+    showcase_demo_state_template: _DemoStateTemplate,
 ) -> None:
     from demo.generator import DemoProfile, generate_or_reuse_demo
-    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
 
-    state_dir = _profile_state_dir(tmp_path, "showcase")
-    config_path = _write_config(
-        tmp_path,
-        state_dir / "showcase-facts-confluent.db",
-        state_dir / "showcase-facts-self-managed.db",
-    )
-    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-        profile=DemoProfile.SHOWCASE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, showcase_demo_state_template, name="showcase")
+    scenario = showcase_demo_state_template.ccloud_scenario
 
     corruption_kinds = ("missing", "unexpected", "replacement")
 
@@ -2214,23 +2122,10 @@ def test_showcase_generator_rejects_missing_unexpected_and_same_total_fact_repla
 def test_generated_showcase_data_uses_normal_api_startup_without_provider_or_metrics_requests(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
+    showcase_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    from demo.generator import DemoProfile, generate_or_reuse_demo
-    from plugins.confluent_cloud.demo.scenario import build_showcase_demo_scenario
-
-    state_dir = _profile_state_dir(tmp_path, "showcase")
-    config_path = _write_config(
-        tmp_path,
-        state_dir / "showcase-api-confluent.db",
-        state_dir / "showcase-api-self-managed.db",
-    )
-    scenario = build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-        profile=DemoProfile.SHOWCASE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    _, config_path = _copy_demo_state(tmp_path, showcase_demo_state_template, name="showcase")
+    scenario = showcase_demo_state_template.ccloud_scenario
 
     provider_requests: list[tuple[str, str]] = []
 
@@ -2299,6 +2194,108 @@ def test_generated_showcase_data_uses_normal_api_startup_without_provider_or_met
     assert metrics_requests == []
 
 
+def test_canonical_demo_state_materialization_is_test_local(
+    tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+) -> None:
+    """Canonical state copies keep SQLite, config, and preview writes test-local."""
+    template = clean_demo_state_template
+    first_state_dir, first_config_path = _copy_demo_state(tmp_path, template, name="first")
+    second_state_dir, second_config_path = _copy_demo_state(tmp_path, template, name="second")
+
+    first_settings = load_config(first_config_path)
+    second_settings = load_config(second_config_path)
+    first_paths = (
+        first_state_dir,
+        Path(
+            first_settings.tenants[TENANT_NAME].storage.connection_string.get_secret_value().removeprefix("sqlite:///")
+        ),
+        Path(
+            first_settings.tenants[SELF_MANAGED_TENANT_NAME]
+            .storage.connection_string.get_secret_value()
+            .removeprefix("sqlite:///")
+        ),
+        first_config_path,
+        first_settings.preview.artifact_root,
+    )
+    second_paths = (
+        second_state_dir,
+        Path(
+            second_settings.tenants[TENANT_NAME].storage.connection_string.get_secret_value().removeprefix("sqlite:///")
+        ),
+        Path(
+            second_settings.tenants[SELF_MANAGED_TENANT_NAME]
+            .storage.connection_string.get_secret_value()
+            .removeprefix("sqlite:///")
+        ),
+        second_config_path,
+        second_settings.preview.artifact_root,
+    )
+
+    assert all(path.is_relative_to(tmp_path) for path in (*first_paths, *second_paths))
+    assert first_paths[0] == first_paths[1].parent == first_paths[2].parent
+    assert second_paths[0] == second_paths[1].parent == second_paths[2].parent
+    assert all(first_path != second_path for first_path, second_path in zip(first_paths, second_paths, strict=True))
+    assert (first_state_dir / "demo-state.json").is_file()
+    assert (second_state_dir / "demo-state.json").is_file()
+
+    expected_tag = template.ccloud_scenario.entity_tags[0]
+    mutated_tag_value = "isolated-mutation"
+    first_backend = _create_real_backend(first_config_path)
+    try:
+        with first_backend.create_unit_of_work() as uow:
+            first_tag = next(
+                tag
+                for tag in uow.tags.get_tags(TENANT_ID, expected_tag.entity_type, expected_tag.entity_id)
+                if tag.tag_key == expected_tag.tag_key
+            )
+            assert _tag_fields(first_tag) == _tag_fields(expected_tag)
+            assert first_tag.tag_id is not None
+            assert uow.tags.update_tag(first_tag.tag_id, mutated_tag_value).tag_value == mutated_tag_value
+            uow.commit()
+    finally:
+        first_backend.dispose()
+
+    first_reopened_backend = _create_real_backend(first_config_path)
+    try:
+        with first_reopened_backend.create_read_only_unit_of_work() as uow:
+            first_reopened_tag = next(
+                tag
+                for tag in uow.tags.get_tags(TENANT_ID, expected_tag.entity_type, expected_tag.entity_id)
+                if tag.tag_key == expected_tag.tag_key
+            )
+            assert _tag_fields(first_reopened_tag) == _tag_fields(replace(expected_tag, tag_value=mutated_tag_value))
+    finally:
+        first_reopened_backend.dispose()
+
+    second_backend = _create_real_backend(second_config_path)
+    try:
+        with second_backend.create_read_only_unit_of_work() as uow:
+            second_tag = next(
+                tag
+                for tag in uow.tags.get_tags(TENANT_ID, expected_tag.entity_type, expected_tag.entity_id)
+                if tag.tag_key == expected_tag.tag_key
+            )
+            assert _tag_fields(second_tag) == _tag_fields(expected_tag)
+    finally:
+        second_backend.dispose()
+
+    later_state_dir, later_config_path = _copy_demo_state(tmp_path, template, name="later")
+    assert later_state_dir.is_relative_to(tmp_path)
+    assert later_config_path.is_relative_to(tmp_path)
+    later_backend = _create_real_backend(later_config_path)
+    try:
+        with later_backend.create_read_only_unit_of_work() as uow:
+            later_tag = next(
+                tag
+                for tag in uow.tags.get_tags(TENANT_ID, expected_tag.entity_type, expected_tag.entity_id)
+                if tag.tag_key == expected_tag.tag_key
+            )
+            assert _tag_fields(later_tag) == _tag_fields(expected_tag)
+    finally:
+        later_backend.dispose()
+
+
 def _profile_state_dir(tmp_path: Path, profile: str = "clean") -> Path:
     state_dir = tmp_path / f"{profile}-state"
     state_dir.mkdir()
@@ -2308,6 +2305,84 @@ def _profile_state_dir(tmp_path: Path, profile: str = "clean") -> Path:
 def _state_config(tmp_path: Path, state_dir: Path) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     return _write_config(tmp_path, state_dir / "confluent.db", state_dir / "self-managed.db")
+
+
+def _build_demo_state_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    *,
+    profile: DemoProfile,
+    anchor_date: date,
+    name: str,
+) -> _DemoStateTemplate:
+    root = tmp_path_factory.mktemp(name)
+    state_dir = root / "state"
+    state_dir.mkdir()
+    config_path = _state_config(root, state_dir)
+    result = generate_or_reuse_demo(
+        config_path=config_path,
+        state_dir=state_dir,
+        anchor_date=anchor_date,
+        profile=profile,
+    )
+    assert result == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    ccloud_scenario = (
+        build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=anchor_date)
+        if profile is DemoProfile.SHOWCASE
+        else build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=anchor_date)
+    )
+    return _DemoStateTemplate(
+        state_dir=state_dir,
+        profile=profile,
+        anchor_date=anchor_date,
+        ccloud_scenario=ccloud_scenario,
+        self_managed_scenario=build_clean_self_managed_kafka_scenario(
+            tenant_id=SELF_MANAGED_TENANT_ID,
+            anchor_date=anchor_date,
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def clean_demo_state_template(tmp_path_factory: pytest.TempPathFactory) -> _DemoStateTemplate:
+    return _build_demo_state_template(
+        tmp_path_factory,
+        profile=DemoProfile.CLEAN,
+        anchor_date=ANCHOR_DATE,
+        name="clean-canonical",
+    )
+
+
+@pytest.fixture(scope="session")
+def future_clean_demo_state_template(tmp_path_factory: pytest.TempPathFactory) -> _DemoStateTemplate:
+    return _build_demo_state_template(
+        tmp_path_factory,
+        profile=DemoProfile.CLEAN,
+        anchor_date=FUTURE_ANCHOR_DATE,
+        name="future-clean-canonical",
+    )
+
+
+@pytest.fixture(scope="session")
+def showcase_demo_state_template(tmp_path_factory: pytest.TempPathFactory) -> _DemoStateTemplate:
+    return _build_demo_state_template(
+        tmp_path_factory,
+        profile=DemoProfile.SHOWCASE,
+        anchor_date=ANCHOR_DATE,
+        name="showcase-canonical",
+    )
+
+
+def _copy_demo_state(
+    tmp_path: Path,
+    template: _DemoStateTemplate,
+    *,
+    name: str,
+) -> tuple[Path, Path]:
+    case_root = tmp_path / name
+    case_root.mkdir()
+    state_dir = case_root / "state"
+    shutil.copytree(template.state_dir, state_dir)
+    return state_dir, _state_config(case_root, state_dir)
 
 
 def _manifest_path(state_dir: Path) -> Path:
@@ -2670,16 +2745,13 @@ def test_generator_rejects_unmanifested_non_database_artifacts_before_generation
     assert not _manifest_path(state_dir).exists()
 
 
-def test_generator_rejects_manifested_empty_generator_owned_state_without_regenerating(tmp_path: Path) -> None:
+def test_generator_rejects_manifested_empty_generator_owned_state_without_regenerating(
+    tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+) -> None:
     import demo.generator as generator
 
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    assert generator.generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
     manifest_before = _manifest_snapshot(state_dir)
     ccloud_backend = _create_real_backend(config_path)
     self_managed_backend = _create_real_backend(config_path, SELF_MANAGED_TENANT_NAME)
@@ -2712,17 +2784,12 @@ def test_generator_rejects_manifested_empty_generator_owned_state_without_regene
 
 def test_generator_rejects_compatible_manifest_pipeline_state_corruption_without_repairing_it(
     tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
     import demo.generator as generator
 
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generator.generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    scenario = clean_demo_state_template.ccloud_scenario
     manifest_before = _manifest_snapshot(state_dir)
     backend = _create_real_backend(config_path)
     try:
@@ -2752,18 +2819,13 @@ def test_generator_rejects_compatible_manifest_pipeline_state_corruption_without
 
 def test_generator_rejects_compatible_manifest_preview_evidence_corruption_without_repairing_it(
     tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
     import demo.generator as generator
     from plugins.confluent_cloud.storage.tables import CCloudCostSourceTable
 
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-    assert generator.generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
+    scenario = clean_demo_state_template.ccloud_scenario
     manifest_before = _manifest_snapshot(state_dir)
     expected_source = scenario.preview_source_capture.records[0]
     backend = _create_real_backend(config_path)
@@ -2798,16 +2860,13 @@ def test_generator_rejects_compatible_manifest_preview_evidence_corruption_witho
     assert _manifest_snapshot(state_dir) == manifest_before
 
 
-def test_generator_rejects_a_manifest_anchor_that_differs_from_persisted_chargebacks(tmp_path: Path) -> None:
+def test_generator_rejects_a_manifest_anchor_that_differs_from_persisted_chargebacks(
+    tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+) -> None:
     import demo.generator as generator
 
-    state_dir = _profile_state_dir(tmp_path)
-    config_path = _state_config(tmp_path, state_dir)
-    assert generator.generate_or_reuse_demo(
-        config_path=config_path,
-        state_dir=state_dir,
-        anchor_date=ANCHOR_DATE,
-    ) == _generation_results(GenerationResult.GENERATED, GenerationResult.GENERATED)
+    state_dir, config_path = _copy_demo_state(tmp_path, clean_demo_state_template, name="clean")
     manifest = json.loads(_manifest_path(state_dir).read_text(encoding="utf-8"))
     manifest["anchor_date"] = (ANCHOR_DATE + timedelta(days=2)).isoformat()
     _manifest_path(state_dir).write_text(json.dumps(manifest), encoding="utf-8")
@@ -2842,11 +2901,15 @@ def test_generator_stale_manifest_notice_is_non_blocking_and_never_refreshes_sta
     tmp_path: Path,
     elapsed_days: int,
     expected_notice: bool,
+    clean_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(tmp_path)
+    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(
+        tmp_path,
+        template=clean_demo_state_template,
+    )
     first = _run_public_launcher(workspace, environment)
     assert first.returncode == 0, first.stderr
-    scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    scenario = clean_demo_state_template.ccloud_scenario
     ccloud_backend = _create_real_backend(config_path)
     self_managed_backend = _create_real_backend(config_path, SELF_MANAGED_TENANT_NAME)
     try:
@@ -2876,8 +2939,14 @@ def test_generator_stale_manifest_notice_is_non_blocking_and_never_refreshes_sta
         self_managed_backend.dispose()
 
 
-def test_public_launcher_reports_incompatible_metadata_from_the_real_generator(tmp_path: Path) -> None:
-    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(tmp_path)
+def test_public_launcher_reports_incompatible_metadata_from_the_real_generator(
+    tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+) -> None:
+    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(
+        tmp_path,
+        template=clean_demo_state_template,
+    )
     first = _run_public_launcher(workspace, environment)
     assert first.returncode == 0, first.stderr
     manifest = _manifest_path(workspace / ".demo" / "state" / "clean")
@@ -2906,16 +2975,17 @@ def test_public_launcher_reports_incompatible_metadata_from_the_real_generator(t
 def test_supported_public_tag_mutations_survive_reuse_without_any_tag_write(
     tmp_path: Path,
     profile: DemoProfile,
+    clean_demo_state_template: _DemoStateTemplate,
+    showcase_demo_state_template: _DemoStateTemplate,
 ) -> None:
-    import demo.generator as generator
-
-    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(tmp_path, profile)
-    launcher_arguments = ["--showcase"] if profile is DemoProfile.SHOWCASE else []
-    scenario = (
-        build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
-        if profile is DemoProfile.CLEAN
-        else generator.build_showcase_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    template = clean_demo_state_template if profile is DemoProfile.CLEAN else showcase_demo_state_template
+    workspace, config_path, environment, _compose_log = _launcher_with_real_generator(
+        tmp_path,
+        profile,
+        template=template,
     )
+    launcher_arguments = ["--showcase"] if profile is DemoProfile.SHOWCASE else []
+    scenario = template.ccloud_scenario
     first = _run_public_launcher(workspace, environment, *launcher_arguments)
     assert first.returncode == 0, first.stderr
     settings = load_config(config_path)
@@ -3038,6 +3108,8 @@ def test_supported_public_tag_mutations_survive_reuse_without_any_tag_write(
 def _launcher_with_real_generator(
     tmp_path: Path,
     profile: DemoProfile = DemoProfile.CLEAN,
+    *,
+    template: _DemoStateTemplate | None = None,
 ) -> tuple[Path, Path, dict[str, str], Path]:
     repository_root = Path(__file__).resolve().parents[5]
     workspace = tmp_path / "workspace"
@@ -3046,6 +3118,8 @@ def _launcher_with_real_generator(
     (workspace / "demo").chmod(0o755)
     shutil.copytree(repository_root / "examples" / "demo", workspace / "examples" / "demo")
     state_dir = workspace / ".demo" / "state" / profile.value
+    if template is not None:
+        shutil.copytree(template.state_dir, state_dir)
     config_path = _write_config(
         workspace / "examples" / "demo",
         state_dir / "confluent.db",
@@ -3114,8 +3188,14 @@ def _run_public_launcher(
     )
 
 
-def test_public_launcher_runs_the_real_generator_and_reset_restores_baseline_tags(tmp_path: Path) -> None:
-    workspace, config_path, environment, compose_log = _launcher_with_real_generator(tmp_path)
+def test_public_launcher_runs_the_real_generator_and_reset_restores_baseline_tags(
+    tmp_path: Path,
+    clean_demo_state_template: _DemoStateTemplate,
+) -> None:
+    workspace, config_path, environment, compose_log = _launcher_with_real_generator(
+        tmp_path,
+        template=clean_demo_state_template,
+    )
 
     first = subprocess.run(
         [str(workspace / "demo")],
@@ -3129,7 +3209,7 @@ def test_public_launcher_runs_the_real_generator_and_reset_restores_baseline_tag
 
     assert first.returncode == 0, first.stderr
     settings = load_config(config_path)
-    initial_scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE)
+    initial_scenario = clean_demo_state_template.ccloud_scenario
     with TestClient(create_app(settings, mode="api")) as client:
         mutation = client.post(
             f"/api/v1/tenants/{TENANT_NAME}/entities/resource/{initial_scenario.resources[0].resource_id}/tags",
