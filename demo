@@ -1093,7 +1093,7 @@ media_publish() {
     fi
 
     release_view_status=0
-    release_output=$(gh release view demo-media --json isDraft,isPrerelease,isLatest,url 2>&1) || release_view_status=$?
+    release_output=$(gh release view demo-media --json isDraft,isPrerelease,url 2>&1) || release_view_status=$?
     if ((release_view_status == 0)); then
         output=
         if output=$(gh release edit demo-media --draft=false --prerelease=false --latest=false 2>&1); then

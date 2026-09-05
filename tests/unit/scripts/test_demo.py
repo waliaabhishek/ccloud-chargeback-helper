@@ -261,10 +261,16 @@ case "$DEMO_GH_FAILURE" in
   release-edit) [[ "$*" != *"release edit"* ]] || exit 8 ;;
   release-upload) [[ "$*" != *"release upload"* ]] || exit 9 ;;
 esac
-if [[ "$*" == *"release view demo-media"* && "$DEMO_GH_RELEASE_EXISTS" != 1 ]]; then exit 1; fi
+if [[ "$*" == *"release view demo-media"* ]]; then
+  [[ "$*" == "release view demo-media --json isDraft,isPrerelease,url" ]] || {
+    echo "unsupported demo-media release view fields" >&2
+    exit 10
+  }
+  [[ "$DEMO_GH_RELEASE_EXISTS" == 1 ]] || exit 1
+fi
 if [[ "$*" == *"release view v"* && "$DEMO_GH_STABLE_RELEASE_EXISTS" != 1 ]]; then exit 1; fi
 if [[ "$*" == *"release view"* ]]; then
-  printf '%s\\n' '{"isDraft":false,"isPrerelease":false,"isLatest":false,"url":"https://example.test/demo-media"}'
+  printf '%s\\n' '{"isDraft":false,"isPrerelease":false,"url":"https://example.test/demo-media"}'
 fi
 if [[ "$*" == *"release create"* || "$*" == *"release edit"* || "$*" == *"release upload"* ]]; then
   printf '%s\\n' 'https://example.test/demo-media'
@@ -2753,6 +2759,7 @@ def test_demo_media_publish_keeps_an_existing_release_non_latest(tmp_path: Path)
 
     assert result.returncode == 0, _output(result)
     gh_commands = _gh_commands(environment)
+    assert "release view demo-media --json isDraft,isPrerelease,url" in gh_commands
     assert not any(command.startswith("release create demo-media") for command in gh_commands)
     assert any(command.startswith("release edit demo-media") and "--latest=false" in command for command in gh_commands)
 
