@@ -33,7 +33,6 @@ services:
     entrypoint: ["/bin/sh", "/opt/chitragupta-demo-media/encode.sh"]
     volumes:
       - ./media/encode.sh:/opt/chitragupta-demo-media/encode.sh:ro
-      - ./media/capture-spec.json:/opt/chitragupta-demo-media/capture-spec.json:ro
       - ${DEMO_MEDIA_DIR}:/app/media:rw
     network_mode: none
     restart: "no"

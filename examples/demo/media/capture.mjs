@@ -2,45 +2,45 @@
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-import { chromium } from "playwright-core";
 
 const UI_ORIGIN = "http://chitragupta-ui";
-const VIEWPORT = { width: 1600, height: 900 };
-const SCREENSHOTS = [
+const APPROVED_VIEWPORT = { width: 1600, height: 900 };
+const APPROVED_SCREENSHOTS = [
   {
     name: "chitragupta-demo-dashboard.png",
-    route: "/dashboard?start_date=2026-08-02&end_date=2026-08-31&timezone=UTC",
-    markers: ["Cost Dashboard", "Total Cost", "Usage Cost", "Shared Cost", "Cost Trend Over Time"],
+    route: "/dashboard",
   },
   {
     name: "chitragupta-demo-cost-explorer.png",
     route: "/explorer",
-    markers: ["Cost Explorer"],
   },
   {
     name: "chitragupta-demo-topic-attribution.png",
-    route: "/topic-attributions?start_date=2026-08-02&end_date=2026-08-31&timezone=UTC",
-    markers: ["Topic Attribution"],
+    route: "/topic-attributions",
   },
   {
     name: "chitragupta-demo-pipeline-status.png",
     route: "/pipeline",
-    markers: ["Pipeline Status", "Last Run Summary", "Per-Date Processing Status"],
   },
   {
     name: "chitragupta-demo-focus-mapping-preview.png",
     route: "/focus-preview",
-    markers: ["FOCUS Mapping Preview"],
   },
 ];
-const CAPTIONS = [
+const APPROVED_CAPTIONS = [
   { start: 0, end: 13 },
   { start: 13, end: 30 },
   { start: 30, end: 44 },
   { start: 44, end: 56 },
   { start: 56, end: 75 },
+];
+const APPROVED_VIDEO_NAME = "chitragupta-demo-walkthrough.mp4";
+const SCENE_MARKERS = [
+  { markers: ["Cost Dashboard", "Total Cost", "Usage Cost", "Shared Cost", "Cost Trend Over Time"] },
+  { markers: ["Cost Explorer"] },
+  { markers: ["Topic Attribution"] },
+  { markers: ["Pipeline Status", "Last Run Summary", "Per-Date Processing Status"] },
+  { markers: ["FOCUS Mapping Preview"] },
 ];
 // These fields are generated for the asynchronous FOCUS Preview workflow and
 // are intentionally excluded from the persisted source-identifier allowlist.
@@ -112,21 +112,38 @@ function assertSpecification(spec) {
     spec.schema_version !== 1 ||
     spec.anchor_date !== "2026-08-31" ||
     spec.profile !== "showcase" ||
-    spec.viewport?.width !== VIEWPORT.width ||
-    spec.viewport?.height !== VIEWPORT.height ||
+    spec.viewport?.width !== APPROVED_VIEWPORT.width ||
+    spec.viewport?.height !== APPROVED_VIEWPORT.height ||
     spec.primary_tenant?.name !== "clean-confluent" ||
     spec.primary_tenant?.id !== "northstar-confluent" ||
     spec.primary_tenant?.ecosystem !== "confluent_cloud"
   ) {
     fail("capture specification is not the approved Showcase input");
   }
-  if (spec.screenshots?.length !== SCREENSHOTS.length || spec.captions?.length !== CAPTIONS.length) {
+  if (spec.screenshots?.length !== APPROVED_SCREENSHOTS.length || spec.captions?.length !== APPROVED_CAPTIONS.length) {
     fail("capture specification does not contain the approved storyboard");
   }
-  if (spec.captions.some((caption, index) => caption.start !== CAPTIONS[index].start || caption.end !== CAPTIONS[index].end)) {
+  if (
+    spec.screenshots.some(
+      (screenshot, index) =>
+        screenshot.name !== APPROVED_SCREENSHOTS[index].name || screenshot.route !== APPROVED_SCREENSHOTS[index].route,
+    )
+  ) {
+    fail("capture specification does not contain the approved storyboard");
+  }
+  if (
+    spec.captions.some(
+      (caption, index) => caption.start !== APPROVED_CAPTIONS[index].start || caption.end !== APPROVED_CAPTIONS[index].end,
+    )
+  ) {
     fail("capture specification caption timing does not match the approved storyboard");
   }
-  if (spec.video?.target_seconds !== 75 || spec.video?.minimum_seconds !== 60 || spec.video?.maximum_seconds !== 90) {
+  if (
+    spec.video?.name !== APPROVED_VIDEO_NAME ||
+    spec.video?.target_seconds !== 75 ||
+    spec.video?.minimum_seconds !== 60 ||
+    spec.video?.maximum_seconds !== 90
+  ) {
     fail("capture specification does not contain the approved video duration");
   }
 }
@@ -207,9 +224,20 @@ function scenePath(scene) {
   return scene.route.split("?", 1)[0];
 }
 
+function dateDaysBefore(anchorDate, days) {
+  const date = new Date(`${anchorDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 function sceneUrl(scene, anchorDate) {
   const url = new URL(`${UI_ORIGIN}${scene.route}`);
-  if (scenePath(scene) === "/explorer") {
+  const route = scenePath(scene);
+  if (route === "/dashboard" || route === "/topic-attributions") {
+    url.searchParams.set("start_date", dateDaysBefore(anchorDate, 29));
+    url.searchParams.set("end_date", anchorDate);
+    url.searchParams.set("timezone", "UTC");
+  } else if (route === "/explorer") {
     url.searchParams.set("at", anchorDate);
   }
   return url.toString();
@@ -295,7 +323,8 @@ function monitorPage(
   });
 }
 
-async function waitForScene(page, scene, anchorDate) {
+async function waitForScene(page, scene, captureSpec) {
+  const anchorDate = captureSpec.anchor_date;
   let graphResponse;
   if (scenePath(scene) === "/explorer") {
     const expectedAt = `${anchorDate}T12:00:00Z`;
@@ -333,13 +362,13 @@ async function waitForScene(page, scene, anchorDate) {
   for (const marker of scene.markers) {
     await page.getByText(marker, { exact: false }).first().waitFor({ state: "visible", timeout: 45_000 });
   }
-  await page
-    .getByText("clean-confluent (confluent_cloud)", { exact: true })
+  const primaryTenantLabel = `${captureSpec.primary_tenant.name} (${captureSpec.primary_tenant.ecosystem})`;
+  await page.getByText(primaryTenantLabel, { exact: true })
     .first()
     .waitFor({ state: "visible", timeout: 45_000 });
   const bodyText = await page.locator("body").innerText();
-  if (!bodyText.includes("clean-confluent (confluent_cloud)")) {
-    fail("capture did not select the primary clean-confluent (confluent_cloud) tenant");
+  if (!bodyText.includes(primaryTenantLabel)) {
+    fail(`capture did not select the primary ${primaryTenantLabel} tenant`);
   }
   return bodyText;
 }
@@ -518,16 +547,17 @@ async function validateDomTopicNames(page, catalogTopicNames, errors) {
 async function captureStillScenes(
   page,
   outputRoot,
+  captureSpec,
   catalogStrings,
   catalogTopicNames,
   errors,
   runtimePreviewIds,
   inFlightRequests,
   responsePromises,
-  anchorDate,
 ) {
-  for (const scene of SCREENSHOTS) {
-    await waitForScene(page, scene, anchorDate);
+  for (const [index, screenshot] of captureSpec.screenshots.entries()) {
+    const scene = { ...screenshot, ...SCENE_MARKERS[index] };
+    await waitForScene(page, scene, captureSpec);
     if (scenePath(scene) === "/topic-attributions") {
       await prepareTopicAttribution(page);
     }
@@ -535,7 +565,7 @@ async function captureStillScenes(
       await preparePipeline(page);
     }
     if (scenePath(scene) === "/focus-preview") {
-      await prepareFocusPreview(page, anchorDate, runtimePreviewIds, catalogStrings);
+      await prepareFocusPreview(page, captureSpec.anchor_date, runtimePreviewIds, catalogStrings);
     }
     await waitForSceneQuiescence(inFlightRequests, responsePromises);
     await Promise.all(responsePromises);
@@ -553,6 +583,7 @@ async function captureStillScenes(
 async function captureVideo(
   browser,
   workRoot,
+  captureSpec,
   catalogStrings,
   catalogTopicNames,
   observations,
@@ -560,11 +591,10 @@ async function captureVideo(
   responsePromises,
   runtimePreviewIds,
   inFlightRequests,
-  anchorDate,
 ) {
   const context = await browser.newContext({
-    viewport: VIEWPORT,
-    recordVideo: { dir: workRoot, size: VIEWPORT },
+    viewport: captureSpec.viewport,
+    recordVideo: { dir: workRoot, size: captureSpec.viewport },
     timezoneId: "UTC",
     locale: "en-US",
     colorScheme: "dark",
@@ -583,9 +613,13 @@ async function captureVideo(
   );
   try {
     const recordingStarted = Date.now();
-    for (let index = 0; index < CAPTIONS.length; index += 1) {
-      const interval = CAPTIONS[index];
-      await waitForScene(page, SCREENSHOTS[index], anchorDate);
+    const finalCaption = captureSpec.captions[captureSpec.captions.length - 1];
+    if (finalCaption.end !== captureSpec.video.target_seconds) {
+      fail("capture caption timing does not reach the approved video target");
+    }
+    for (const [index, interval] of captureSpec.captions.entries()) {
+      const scene = { ...captureSpec.screenshots[index], ...SCENE_MARKERS[index] };
+      await waitForScene(page, scene, captureSpec);
       if (index === 1) {
         await focusCommerceEnvironment(page);
       }
@@ -593,7 +627,7 @@ async function captureVideo(
         await prepareTopicAttribution(page);
       }
       if (index === 4) {
-        await prepareFocusPreview(page, anchorDate, runtimePreviewIds, catalogStrings);
+        await prepareFocusPreview(page, captureSpec.anchor_date, runtimePreviewIds, catalogStrings);
       }
       await waitForSceneQuiescence(inFlightRequests, responsePromises);
       await Promise.all(responsePromises);
@@ -614,16 +648,18 @@ async function captureVideo(
     await context.close();
     if (recording) {
       const source = await recording.path();
-      await rename(source, path.join(workRoot, "chitragupta-demo-walkthrough.webm"));
+      const rawVideoName = captureSpec.video.name.replace(/\.mp4$/, ".webm");
+      await rename(source, path.join(workRoot, rawVideoName));
     }
   }
 }
 
 async function main() {
   const args = parseArguments(process.argv.slice(2));
-  const spec = await readJson(args.spec, "capture specification");
+  const captureSpec = await readJson(args.spec, "capture specification");
   const catalog = await readJson(args.catalog, "synthetic catalog");
-  assertSpecification(spec);
+  assertSpecification(captureSpec);
+  const { chromium } = await import("playwright-core");
   const catalogStrings = collectStrings(catalog);
   const catalogTopicNames = collectTopicNames(catalog.scenarios);
   const outputRoot = path.resolve(args.output);
@@ -642,7 +678,7 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
     const context = await browser.newContext({
-      viewport: VIEWPORT,
+      viewport: captureSpec.viewport,
       timezoneId: "UTC",
       locale: "en-US",
       colorScheme: "dark",
@@ -663,18 +699,19 @@ async function main() {
     await captureStillScenes(
       page,
       outputRoot,
+      captureSpec,
       catalogStrings,
       catalogTopicNames,
       errors,
       runtimePreviewIds,
       inFlightRequests,
       responsePromises,
-      spec.anchor_date,
     );
     await context.close();
     await captureVideo(
       browser,
       workRoot,
+      captureSpec,
       catalogStrings,
       catalogTopicNames,
       observations,
@@ -682,7 +719,6 @@ async function main() {
       responsePromises,
       runtimePreviewIds,
       inFlightRequests,
-      spec.anchor_date,
     );
     await Promise.all(responsePromises);
     apiIdentifiersMatchCatalog = !errors.some(

@@ -783,6 +783,33 @@ media_poststart_failure() {
     exit "${status}"
 }
 
+read_media_argument_vector() {
+    local path=$1 expected_count=$2 line count=0
+    MEDIA_ARGUMENT_VECTOR=()
+    if [[ ! -f "${path}" ]]; then
+        echo "Demo media argument vector is missing: ${path}" >&2
+        return 1
+    fi
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ -z "${line}" ]]; then
+            echo "Demo media argument vector contains a blank record: ${path}" >&2
+            return 1
+        fi
+        case "${line}" in
+            *$'\r'*)
+                echo "Demo media argument vector contains an invalid record: ${path}" >&2
+                return 1
+                ;;
+        esac
+        MEDIA_ARGUMENT_VECTOR[count]="${line}"
+        count=$((count + 1))
+    done < "${path}"
+    if ((count != expected_count)); then
+        echo "Demo media argument vector has ${count} records; expected ${expected_count}: ${path}" >&2
+        return 1
+    fi
+}
+
 media_set_environment() {
     DEMO_IMAGE_TAG=local
     DEMO_MEDIA_PATH=.demo/media
@@ -836,6 +863,8 @@ media_check_retained_stack() {
 
 media_capture() {
     local source_commit source_worktree_clean output status spec_result git_status spec_profile spec_anchor
+    local poster_source
+    local -a encoder_arguments
     media_set_environment
     media_check_interactive_stack
     media_check_retained_stack
@@ -903,6 +932,7 @@ media_capture() {
         --config /app/config/config.yaml \
         --output /app/media/work/synthetic-catalog.json \
         --srt-output /app/media/work/captions.srt \
+        --encoder-arguments-output /app/media/work/encoder-arguments.list \
         --state-dir /app/media/state 2>&1); then
         printf '%s\n' "${output}"
     else
@@ -910,7 +940,6 @@ media_capture() {
         printf '%s\n' "${output}" >&2
         media_prestart_failure "${status}" "Demo media catalog validation failed."
     fi
-
     if output=$(media_compose up --detach --wait --force-recreate chitragupta chitragupta-ui 2>&1); then
         printf '%s\n' "${output}"
     else
@@ -928,8 +957,12 @@ media_capture() {
         printf '%s\n' "${output}" >&2
         media_poststart_failure "${status}" "Demo media browser capture failed."
     fi
+    if ! read_media_argument_vector "${DEMO_MEDIA_DIR}/work/encoder-arguments.list" 11; then
+        media_poststart_failure 1 "Demo media encoding failed."
+    fi
+    encoder_arguments=("${MEDIA_ARGUMENT_VECTOR[@]}")
     if output=$(media_compose run --rm --no-deps media-encoder \
-        /opt/chitragupta-demo-media/capture-spec.json /app/media 2>&1); then
+        /app/media "${encoder_arguments[@]}" 2>&1); then
         printf '%s\n' "${output}"
     else
         status=$?
@@ -948,6 +981,7 @@ media_capture() {
         --config /app/config/config.yaml \
         --output /app/media/work/synthetic-catalog.json \
         --srt-output /app/media/work/captions.srt \
+        --encoder-arguments-output /app/media/work/encoder-arguments.list \
         --state-dir /app/media/state 2>&1); then
         printf '%s\n' "${output}"
     else
@@ -967,14 +1001,15 @@ media_capture() {
         media_poststart_failure "${status}" "Demo media manifest validation failed."
     fi
     if [[ "${source_worktree_clean}" == false ]]; then
+        poster_source="${DEMO_MEDIA_DIR}/${encoder_arguments[4]}"
         if ! mkdir -p -- docs/assets/demo ||
-            ! cat -- "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard-poster.webp" \
+            ! cat -- "${poster_source}" \
                 > docs/assets/demo/chitragupta-demo-dashboard-poster.webp; then
             media_poststart_failure 1 "Demo media poster copy failed."
         fi
-        echo "Reviewed poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp (copied from .demo/media/assets/chitragupta-demo-dashboard-poster.webp)"
+        echo "Reviewed poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp (copied from ${DEMO_MEDIA_PATH}/${encoder_arguments[4]})"
     else
-        echo "Release poster: .demo/media/assets/chitragupta-demo-dashboard-poster.webp (tracked poster unchanged)"
+        echo "Release poster: ${DEMO_MEDIA_PATH}/${encoder_arguments[4]} (tracked poster unchanged)"
     fi
     if output=$(media_compose down 2>&1); then
         printf '%s\n' "${output}"
@@ -999,12 +1034,15 @@ media_diagnostic() {
 media_publish() {
     local output status source_commit source_worktree_clean manifest_path captured_commit stable_tag stable_release git_status
     local stable_probe_status stable_probe_output stable_release_status release_view_status release_output
+    local relative_path
+    local -a publication_arguments upload_arguments
     media_set_environment
     command -v git >/dev/null 2>&1 || { echo "git is required for Demo media publication." >&2; exit 1; }
     command -v gh >/dev/null 2>&1 || { echo "gh is required for Demo media publication." >&2; exit 1; }
     if output=$(media_compose run --pull never --rm --no-deps media-tool validate \
         --spec /opt/chitragupta-demo-media/capture-spec.json \
-        --media-root /app/media 2>&1); then
+        --media-root /app/media \
+        --publication-arguments-output /app/media/work/publication-arguments.list 2>&1); then
         printf '%s\n' "${output}"
     else
         status=$?
@@ -1013,6 +1051,16 @@ media_publish() {
         echo "Validated Demo media is unavailable. Run './demo media' first." >&2
         exit "${status}"
     fi
+    if ! read_media_argument_vector "${DEMO_MEDIA_DIR}/work/publication-arguments.list" 7; then
+        echo "Demo media validation failed; publication was not attempted." >&2
+        echo "Validated Demo media is unavailable. Run './demo media' first." >&2
+        exit 1
+    fi
+    publication_arguments=("${MEDIA_ARGUMENT_VECTOR[@]}")
+    upload_arguments=()
+    for relative_path in "${publication_arguments[@]}"; do
+        upload_arguments+=("${DEMO_MEDIA_DIR}/${relative_path}")
+    done
     manifest_path="${DEMO_MEDIA_DIR}/manifest.json"
     if [[ ! -f "${manifest_path}" ]]; then
         echo "Validated Demo media is unavailable. Run './demo media' first." >&2
@@ -1121,13 +1169,7 @@ media_publish() {
         exit "${release_view_status}"
     fi
     if output=$(gh release upload demo-media \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard.png" \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-cost-explorer.png" \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-topic-attribution.png" \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-pipeline-status.png" \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-focus-mapping-preview.png" \
-        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-walkthrough.mp4" \
-        "${DEMO_MEDIA_DIR}/manifest.json" --clobber 2>&1); then
+        "${upload_arguments[@]}" --clobber 2>&1); then
         :
     else
         status=$?

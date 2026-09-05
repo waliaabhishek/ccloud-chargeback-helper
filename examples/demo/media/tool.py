@@ -61,34 +61,34 @@ STATE_METADATA_KEYS = frozenset({"schema_version", "generator_version", "profile
 DATABASE_EVIDENCE_KEYS = frozenset({"schema_version", "validated", "state_metadata", "files"})
 DATABASE_FILE_KEYS = frozenset({"path", "sha256", "bytes"})
 
-PNG_ASSETS = (
+APPROVED_PNG_ASSETS = (
     "chitragupta-demo-dashboard.png",
     "chitragupta-demo-cost-explorer.png",
     "chitragupta-demo-topic-attribution.png",
     "chitragupta-demo-pipeline-status.png",
     "chitragupta-demo-focus-mapping-preview.png",
 )
-POSTER_ASSET = "chitragupta-demo-dashboard-poster.webp"
-VIDEO_ASSET = "chitragupta-demo-walkthrough.mp4"
-EXPECTED_ASSETS = (*PNG_ASSETS, POSTER_ASSET, VIDEO_ASSET)
-CAPTIONS = (
+APPROVED_POSTER_ASSET = "chitragupta-demo-dashboard-poster.webp"
+APPROVED_VIDEO_ASSET = "chitragupta-demo-walkthrough.mp4"
+APPROVED_ASSETS = (*APPROVED_PNG_ASSETS, APPROVED_POSTER_ASSET, APPROVED_VIDEO_ASSET)
+APPROVED_CAPTIONS = (
     (0, 13, "Synthetic tenant cost reconciles across usage and shared spend."),
     (13, 30, "Tenant cost is the analytical root."),
     (30, 44, "Topic-level attribution exposes cost concentration and candidates for review."),
     (44, 56, "Persisted processing state remains inspectable in API-only mode."),
     (56, 75, "Generate a FOCUS 1.4 mapping preview from synthetic persisted evidence."),
 )
-PRIMARY_TENANT = {
+APPROVED_PRIMARY_TENANT = {
     "name": "clean-confluent",
     "id": "northstar-confluent",
     "ecosystem": "confluent_cloud",
 }
-SCREENSHOT_ROUTES = (
-    (PNG_ASSETS[0], "/dashboard"),
-    (PNG_ASSETS[1], "/explorer"),
-    (PNG_ASSETS[2], "/topic-attributions"),
-    (PNG_ASSETS[3], "/pipeline"),
-    (PNG_ASSETS[4], "/focus-preview"),
+APPROVED_SCREENSHOT_ROUTES = (
+    (APPROVED_PNG_ASSETS[0], "/dashboard"),
+    (APPROVED_PNG_ASSETS[1], "/explorer"),
+    (APPROVED_PNG_ASSETS[2], "/topic-attributions"),
+    (APPROVED_PNG_ASSETS[3], "/pipeline"),
+    (APPROVED_PNG_ASSETS[4], "/focus-preview"),
 )
 VALIDATION_FIELDS = (
     "fresh_showcase_state",
@@ -225,12 +225,12 @@ def _validate_spec_payload(raw: object) -> dict[str, Any]:
         _integer(poster["width"], "poster.width"),
         _integer(poster["height"], "poster.height"),
         _string(poster["name"], "poster.name"),
-    ) != (960, 540, POSTER_ASSET):
+    ) != (960, 540, APPROVED_POSTER_ASSET):
         _fail("capture specification poster is not canonical")
 
     video = _mapping(spec["video"], "video")
     _keys(video, VIDEO_KEYS, "video")
-    if _string(video["name"], "video.name") != VIDEO_ASSET:
+    if _string(video["name"], "video.name") != APPROVED_VIDEO_ASSET:
         _fail("capture specification video name is not canonical")
     for field in ("target_seconds", "minimum_seconds", "maximum_seconds"):
         _integer(video[field], f"video.{field}")
@@ -239,13 +239,13 @@ def _validate_spec_payload(raw: object) -> dict[str, Any]:
 
     tenant = _mapping(spec["primary_tenant"], "primary_tenant")
     _keys(tenant, TENANT_KEYS, "primary_tenant")
-    if tenant != PRIMARY_TENANT:
+    if tenant != APPROVED_PRIMARY_TENANT:
         _fail("capture specification primary tenant is not canonical")
 
     screenshots = spec["screenshots"]
-    if not isinstance(screenshots, list) or len(screenshots) != len(SCREENSHOT_ROUTES):
+    if not isinstance(screenshots, list) or len(screenshots) != len(APPROVED_SCREENSHOT_ROUTES):
         _fail("capture specification must contain exactly five screenshots")
-    for index, (expected_name, expected_route) in enumerate(SCREENSHOT_ROUTES):
+    for index, (expected_name, expected_route) in enumerate(APPROVED_SCREENSHOT_ROUTES):
         screenshot = _mapping(screenshots[index], f"screenshots[{index}]")
         _keys(screenshot, SCREENSHOT_KEYS, f"screenshots[{index}]")
         if (
@@ -255,9 +255,9 @@ def _validate_spec_payload(raw: object) -> dict[str, Any]:
             _fail(f"screenshots[{index}] is not canonical")
 
     captions = spec["captions"]
-    if not isinstance(captions, list) or len(captions) != len(CAPTIONS):
+    if not isinstance(captions, list) or len(captions) != len(APPROVED_CAPTIONS):
         _fail("capture specification must contain exactly five contiguous captions")
-    for index, (expected_start, expected_end, expected_text) in enumerate(CAPTIONS):
+    for index, (expected_start, expected_end, expected_text) in enumerate(APPROVED_CAPTIONS):
         caption = _mapping(captions[index], f"captions[{index}]")
         _keys(caption, CAPTION_KEYS, f"captions[{index}]")
         values = (
@@ -313,6 +313,54 @@ def _captions_srt(spec: Mapping[str, Any]) -> str:
         for index, caption in enumerate(spec["captions"], start=1)
     ]
     return "\n\n".join(entries) + "\n"
+
+
+def _runtime_asset_names(spec: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the validated runtime assets in their stable publication order."""
+    screenshots = tuple(cast("Mapping[str, Any]", screenshot) for screenshot in spec["screenshots"])
+    return (
+        *(cast("str", screenshot["name"]) for screenshot in screenshots),
+        cast("str", spec["poster"]["name"]),
+        cast("str", spec["video"]["name"]),
+    )
+
+
+def _encoder_arguments(spec: Mapping[str, Any]) -> tuple[str, ...]:
+    """Build the fixed, newline-safe encoder argument protocol."""
+    video_name = cast("str", spec["video"]["name"])
+    if not video_name.endswith(".mp4"):
+        _fail("capture specification video name must end with .mp4")
+    viewport = cast("Mapping[str, Any]", spec["viewport"])
+    poster = cast("Mapping[str, Any]", spec["poster"])
+    return (
+        f"work/{video_name[:-4]}.webm",
+        "work/captions.srt",
+        f"assets/{cast('str', spec['screenshots'][0]['name'])}",
+        f"assets/{video_name}",
+        f"assets/{cast('str', poster['name'])}",
+        str(viewport["width"]),
+        str(viewport["height"]),
+        str(poster["width"]),
+        str(poster["height"]),
+        str(spec["video"]["minimum_seconds"]),
+        str(spec["video"]["maximum_seconds"]),
+    )
+
+
+def _publication_arguments(spec: Mapping[str, Any]) -> tuple[str, ...]:
+    """Build the fixed, poster-free publication argument protocol."""
+    names = _runtime_asset_names(spec)
+    return tuple(f"assets/{name}" for name in names if name != spec["poster"]["name"]) + ("manifest.json",)
+
+
+def _write_argument_vector(path: Path, values: Sequence[str]) -> None:
+    """Write one validated shell argument per line without evaluation semantics."""
+    records = tuple(values)
+    for value in records:
+        if not isinstance(value, str) or any(character in value for character in ("\n", "\r", "\x00")):
+            _fail("argument vector contains a newline or NUL character")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{value}\n" for value in records), encoding="utf-8")
 
 
 def _tenant_items(settings: Any) -> list[tuple[str, Any]]:
@@ -438,6 +486,7 @@ def build_catalog(
     config_path: Path,
     output_path: Path,
     srt_output_path: Path,
+    encoder_arguments_output: Path,
     state_dir: Path | None = None,
 ) -> None:
     """Project the current pure demo scenarios into a capture allowlist."""
@@ -479,6 +528,7 @@ def build_catalog(
     _write_json(output_path, catalog)
     srt_output_path.parent.mkdir(parents=True, exist_ok=True)
     srt_output_path.write_text(_captions_srt(spec), encoding="utf-8")
+    _write_argument_vector(encoder_arguments_output, _encoder_arguments(spec))
 
 
 def _sha256(path: Path) -> str:
@@ -535,31 +585,36 @@ def _asset_entry(path: Path, **properties: object) -> dict[str, object]:
     return {"sha256": _sha256(path), "bytes": path.stat().st_size, **properties}
 
 
-def _validate_png(path: Path, name: str) -> dict[str, object]:
+def _validate_png(path: Path, name: str, width: int, height: int) -> dict[str, object]:
     dimensions = _png_dimensions(path)
-    if dimensions != (1600, 900):
-        _fail(f"{name} is not a 1600x900 PNG")
-    return _asset_entry(path, width=1600, height=900, media_type="image/png")
+    if dimensions != (width, height):
+        _fail(f"{name} is not a {width}x{height} PNG")
+    return _asset_entry(path, width=width, height=height, media_type="image/png")
 
 
-def _validate_poster(path: Path, dashboard: Path) -> dict[str, object]:
-    if _webp_dimensions(path) != (960, 540):
-        _fail("dashboard poster is not a 960x540 WebP")
+def _validate_poster(path: Path, dashboard: Path, width: int, height: int) -> dict[str, object]:
+    if _webp_dimensions(path) != (width, height):
+        _fail(f"dashboard poster is not a {width}x{height} WebP")
     if path.stat().st_size >= dashboard.stat().st_size:
         _fail("dashboard poster must be smaller than the dashboard PNG")
-    return _asset_entry(path, width=960, height=540, media_type="image/webp")
+    return _asset_entry(path, width=width, height=height, media_type="image/webp")
 
 
 def _validate_encoder_result(media_root: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
     raw = _mapping(_read_json(media_root / "work" / "encoder-result.json", "encoder result"), "encoder result")
     _keys(raw, ENCODER_RESULT_KEYS, "encoder result")
     duration = _number(raw["duration_seconds"], "encoder duration_seconds")
-    if not spec["video"]["minimum_seconds"] <= duration <= spec["video"]["maximum_seconds"]:
-        _fail("encoded video duration is outside the approved 60-90 second range")
+    minimum_seconds = spec["video"]["minimum_seconds"]
+    maximum_seconds = spec["video"]["maximum_seconds"]
+    if not minimum_seconds <= duration <= maximum_seconds:
+        _fail(f"encoded video duration is outside the approved {minimum_seconds}-{maximum_seconds} second range")
     if _string(raw["video_codec"], "encoder video_codec") != "h264":
         _fail("encoded video codec must be h264")
-    if (_integer(raw["width"], "encoder width"), _integer(raw["height"], "encoder height")) != (1600, 900):
-        _fail("encoded video dimensions must be 1600x900")
+    viewport = cast("Mapping[str, Any]", spec["viewport"])
+    video_width = _integer(raw["width"], "encoder width")
+    video_height = _integer(raw["height"], "encoder height")
+    if (video_width, video_height) != (viewport["width"], viewport["height"]):
+        _fail(f"encoded video dimensions must be {viewport['width']}x{viewport['height']}")
     frame_rate = _number(raw["frame_rate"], "encoder frame_rate")
     if frame_rate != 30:
         _fail("encoded video frame rate must be 30")
@@ -573,7 +628,8 @@ def _validate_encoder_result(media_root: Path, spec: Mapping[str, Any]) -> dict[
         _fail("encoded video was not produced from captions.srt")
     if not _boolean(raw["webm_removed"], "encoder webm_removed"):
         _fail("raw WebM was not removed after successful encoding")
-    if (media_root / "work" / "chitragupta-demo-walkthrough.webm").exists():
+    video_name = cast("str", spec["video"]["name"])
+    if (media_root / "work" / f"{video_name[:-4]}.webm").exists():
         _fail("raw WebM was not removed after successful encoding")
     return raw
 
@@ -713,23 +769,40 @@ def _validate_database_evidence(media_root: Path, spec: Mapping[str, Any]) -> tu
     return fresh_showcase_state, database_matches_catalog
 
 
-def _asset_entries(media_root: Path, encoder: Mapping[str, Any]) -> dict[str, dict[str, object]]:
+def _asset_entries(
+    media_root: Path,
+    spec: Mapping[str, Any],
+    encoder: Mapping[str, Any],
+) -> dict[str, dict[str, object]]:
     assets = media_root / "assets"
     entries: dict[str, dict[str, object]] = {}
-    for name in PNG_ASSETS:
+    viewport = cast("Mapping[str, Any]", spec["viewport"])
+    viewport_width = _integer(viewport["width"], "viewport.width")
+    viewport_height = _integer(viewport["height"], "viewport.height")
+    poster = cast("Mapping[str, Any]", spec["poster"])
+    poster_width = _integer(poster["width"], "poster.width")
+    poster_height = _integer(poster["height"], "poster.height")
+    screenshot_names = tuple(cast("str", screenshot["name"]) for screenshot in spec["screenshots"])
+    for name in screenshot_names:
         path = _asset_path(media_root, name)
         if not path.is_file():
             _fail(f"missing required screenshot: {name}")
-        entries[name] = _validate_png(path, name)
-    dashboard = _asset_path(media_root, PNG_ASSETS[0])
-    poster = _asset_path(media_root, POSTER_ASSET)
-    if not poster.is_file():
-        _fail(f"missing required poster: {POSTER_ASSET}")
-    entries[POSTER_ASSET] = _validate_poster(poster, dashboard)
-    video = _asset_path(media_root, VIDEO_ASSET)
+        entries[name] = _validate_png(path, name, viewport_width, viewport_height)
+    dashboard = _asset_path(media_root, screenshot_names[0])
+    poster_path = _asset_path(media_root, cast("str", poster["name"]))
+    if not poster_path.is_file():
+        _fail(f"missing required poster: {poster['name']}")
+    entries[cast("str", poster["name"])] = _validate_poster(
+        poster_path,
+        dashboard,
+        poster_width,
+        poster_height,
+    )
+    video_name = cast("str", spec["video"]["name"])
+    video = _asset_path(media_root, video_name)
     if not video.is_file():
-        _fail(f"missing required walkthrough: {VIDEO_ASSET}")
-    entries[VIDEO_ASSET] = _asset_entry(
+        _fail(f"missing required walkthrough: {video_name}")
+    entries[video_name] = _asset_entry(
         video,
         duration_seconds=encoder["duration_seconds"],
         video_codec=encoder["video_codec"],
@@ -739,7 +812,7 @@ def _asset_entries(media_root: Path, encoder: Mapping[str, Any]) -> dict[str, di
         audio_stream_count=encoder["audio_stream_count"],
         media_type="video/mp4",
     )
-    if set(path.name for path in assets.iterdir() if path.is_file()) != set(EXPECTED_ASSETS):
+    if set(path.name for path in assets.iterdir() if path.is_file()) != set(_runtime_asset_names(spec)):
         _fail("media assets contain an unexpected or missing publish asset")
     return entries
 
@@ -789,7 +862,7 @@ def _validate_manifest_payload(
     if manifest["primary_tenant"] != spec["primary_tenant"]:
         _fail("media manifest primary tenant does not match the capture specification")
     expected_assets = manifest["expected_assets"]
-    if not isinstance(expected_assets, list) or expected_assets != list(EXPECTED_ASSETS):
+    if not isinstance(expected_assets, list) or expected_assets != list(APPROVED_ASSETS):
         _fail("media manifest expected_assets is not the exact approved asset set")
 
     validation = _mapping(manifest["validation"], "manifest.validation")
@@ -799,7 +872,7 @@ def _validate_manifest_payload(
         _fail("media manifest validation is incomplete")
 
     raw_assets = _mapping(manifest["assets"], "manifest.assets")
-    if set(raw_assets) != set(EXPECTED_ASSETS):
+    if set(raw_assets) != set(APPROVED_ASSETS):
         _fail("media manifest assets do not match the exact approved asset set")
     _validate_browser_observations(media_root)
     encoder = _validate_encoder_result(media_root, spec)
@@ -809,8 +882,8 @@ def _validate_manifest_payload(
         _fail("media manifest fresh_showcase_state evidence does not match persisted state")
     if validation["database_matches_catalog"] is not database_matches_catalog:
         _fail("media manifest database_matches_catalog evidence does not match the catalog")
-    actual_assets = _asset_entries(media_root, encoder)
-    for name in EXPECTED_ASSETS:
+    actual_assets = _asset_entries(media_root, spec, encoder)
+    for name in APPROVED_ASSETS:
         entry = _mapping(raw_assets[name], f"manifest.assets.{name}")
         actual = actual_assets[name]
         if set(entry) != set(actual):
@@ -839,7 +912,7 @@ def create_manifest(
     encoder = _validate_encoder_result(media_root, spec)
     _validate_captions(media_root, spec)
     fresh_showcase_state, database_matches_catalog = _validate_database_evidence(media_root, spec)
-    assets = _asset_entries(media_root, encoder)
+    assets = _asset_entries(media_root, spec, encoder)
     manifest = {
         "schema_version": 1,
         "source_commit": source_commit,
@@ -847,7 +920,7 @@ def create_manifest(
         "anchor_date": spec["anchor_date"],
         "profile": spec["profile"],
         "primary_tenant": spec["primary_tenant"],
-        "expected_assets": list(EXPECTED_ASSETS),
+        "expected_assets": list(_runtime_asset_names(spec)),
         "assets": assets,
         "validation": _validation_payload(
             observations=observations,
@@ -860,11 +933,17 @@ def create_manifest(
     _write_json(media_root / "manifest.json", manifest)
 
 
-def validate_manifest(spec_path: Path, media_root: Path) -> None:
+def validate_manifest(
+    spec_path: Path,
+    media_root: Path,
+    publication_arguments_output: Path | None = None,
+) -> None:
     """Revalidate a complete, clean media capture without changing it."""
     spec = load_spec(spec_path)
     manifest = _read_json(media_root / "manifest.json", "media manifest")
     _validate_manifest_payload(manifest, spec, media_root, require_clean=True)
+    if publication_arguments_output is not None:
+        _write_argument_vector(publication_arguments_output, _publication_arguments(spec))
     print(json.dumps({"manifest": str(media_root / "manifest.json"), "valid": True}))
 
 
@@ -880,6 +959,7 @@ def _parser() -> argparse.ArgumentParser:
     catalog_parser.add_argument("--config", type=Path, required=True)
     catalog_parser.add_argument("--output", type=Path, required=True)
     catalog_parser.add_argument("--srt-output", type=Path, required=True)
+    catalog_parser.add_argument("--encoder-arguments-output", type=Path, required=True)
     catalog_parser.add_argument("--state-dir", type=Path)
 
     manifest_parser = subparsers.add_parser("manifest")
@@ -891,6 +971,7 @@ def _parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("--spec", type=Path, required=True)
     validate_parser.add_argument("--media-root", type=Path, required=True)
+    validate_parser.add_argument("--publication-arguments-output", type=Path)
     return parser
 
 
@@ -902,11 +983,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             spec = load_spec(args.spec)
             print(json.dumps({"profile": spec["profile"], "anchor_date": spec["anchor_date"]}))
         elif args.command == "catalog":
-            build_catalog(args.spec, args.config, args.output, args.srt_output, args.state_dir)
+            build_catalog(
+                args.spec,
+                args.config,
+                args.output,
+                args.srt_output,
+                args.encoder_arguments_output,
+                args.state_dir,
+            )
         elif args.command == "manifest":
             create_manifest(args.spec, args.media_root, args.source_commit, args.source_worktree_clean == "true")
         elif args.command == "validate":
-            validate_manifest(args.spec, args.media_root)
+            validate_manifest(args.spec, args.media_root, args.publication_arguments_output)
         else:
             _fail(f"unsupported media command: {args.command}")
     except MediaError as exc:

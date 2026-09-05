@@ -26,6 +26,30 @@ MEDIA_FILES = ("-f", INTERNAL, "-f", MEDIA)
 MEDIA_PROJECT = ("-p", "chitragupta-demo-media")
 MEDIA_SPEC_PATH = "/opt/chitragupta-demo-media/capture-spec.json"
 MEDIA_ROOT_PATH = "/app/media"
+MEDIA_ENCODER_ARGUMENTS_PATH = "/app/media/work/encoder-arguments.list"
+MEDIA_PUBLICATION_ARGUMENTS_PATH = "/app/media/work/publication-arguments.list"
+MEDIA_ENCODER_ARGUMENTS = (
+    "work/chitragupta-demo-walkthrough.webm",
+    "work/captions.srt",
+    "assets/chitragupta-demo-dashboard.png",
+    "assets/chitragupta-demo-walkthrough.mp4",
+    "assets/chitragupta-demo-dashboard-poster.webp",
+    "1600",
+    "900",
+    "960",
+    "540",
+    "60",
+    "90",
+)
+MEDIA_PUBLICATION_ARGUMENTS = (
+    "assets/chitragupta-demo-dashboard.png",
+    "assets/chitragupta-demo-cost-explorer.png",
+    "assets/chitragupta-demo-topic-attribution.png",
+    "assets/chitragupta-demo-pipeline-status.png",
+    "assets/chitragupta-demo-focus-mapping-preview.png",
+    "assets/chitragupta-demo-walkthrough.mp4",
+    "manifest.json",
+)
 GRAFANA_PLUGIN_ENV_PATH = "examples/shared/grafana/plugins.env"
 GRAFANA_PLUGIN_ENV_REFERENCE = "../shared/grafana/plugins.env"
 GRAFANA_PLUGIN_ENV_KEY = "GF_PLUGINS_PREINSTALL_SYNC"
@@ -125,7 +149,12 @@ def _fake_environment(
     media_fixture: Path | None = None,
     cat_failure: bool = False,
     dispatch_real_media_validator: bool = False,
+    dispatch_real_media_catalog: bool = False,
     require_stop_before_manifest: bool = False,
+    missing_encoder_arguments: bool = False,
+    missing_publication_arguments: bool = False,
+    encoder_arguments: tuple[str, ...] = MEDIA_ENCODER_ARGUMENTS,
+    publication_arguments: tuple[str, ...] = MEDIA_PUBLICATION_ARGUMENTS,
 ) -> tuple[dict[str, str], Path]:
     """Copy only host-process boundaries; launcher and Compose files stay real."""
     fake_bin = tmp_path / "fake-bin"
@@ -164,9 +193,20 @@ if [[ "$command" == *" build "* ]]; then
   echo BUILT; exit
 fi
 if [[ "$command" == *" run "* ]]; then
+  if [[ "$command" == *" media-tool catalog "* && "$DEMO_DISPATCH_REAL_MEDIA_CATALOG" == 1 ]]; then
+    PYTHONPATH="$DEMO_MEDIA_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+      "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" catalog \
+      --spec "$DEMO_MEDIA_SPEC" --config "$DEMO_MEDIA_CONFIG" \
+      --output "$DEMO_MEDIA_DIR/work/synthetic-catalog.json" \
+      --srt-output "$DEMO_MEDIA_DIR/work/captions.srt" \
+      --encoder-arguments-output "$DEMO_MEDIA_DIR/work/encoder-arguments.list"
+    exit $?
+  fi
   if [[ "$command" == *" media-tool validate "* && "$DEMO_DISPATCH_REAL_MEDIA_VALIDATOR" == 1 ]]; then
-    "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" validate \
-      --spec "$DEMO_MEDIA_SPEC" --media-root "$DEMO_MEDIA_DIR"
+    PYTHONPATH="$DEMO_MEDIA_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+      "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" validate \
+      --spec "$DEMO_MEDIA_SPEC" --media-root "$DEMO_MEDIA_DIR" \
+      --publication-arguments-output "$DEMO_MEDIA_DIR/work/publication-arguments.list"
     exit $?
   fi
   case "$DEMO_FAILURE" in
@@ -187,6 +227,18 @@ if [[ "$command" == *" run "* ]]; then
   if [[ "$command" == *" media-tool spec "* ]]; then
     printf '%s\n' '{"profile":"showcase","anchor_date":"2026-08-31"}'
     exit
+  fi
+  if [[ "$command" == *" media-tool catalog "* ]]; then
+    mkdir -p "$DEMO_MEDIA_DIR/work"
+    if [[ "$DEMO_MISSING_ENCODER_ARGUMENTS" != 1 ]]; then
+      printf '%s\n' "$DEMO_MEDIA_ENCODER_ARGUMENTS" >"$DEMO_MEDIA_DIR/work/encoder-arguments.list"
+    fi
+  fi
+  if [[ "$command" == *" media-tool validate "* ]]; then
+    mkdir -p "$DEMO_MEDIA_DIR/work"
+    if [[ "$DEMO_MISSING_PUBLICATION_ARGUMENTS" != 1 ]]; then
+      printf '%s\n' "$DEMO_MEDIA_PUBLICATION_ARGUMENTS" >"$DEMO_MEDIA_DIR/work/publication-arguments.list"
+    fi
   fi
   if [[ "$DEMO_MEDIA_OUTPUTS" == 1 && "$command" == *" media-tool manifest "* ]]; then
     if [[ "$DEMO_REQUIRE_STOP_BEFORE_MANIFEST" == 1 && ! -f "$DEMO_MEDIA_DIR/.api-stopped" ]]; then
@@ -433,10 +485,17 @@ exec /usr/bin/cat "$@"
             "DEMO_MEDIA_CATALOG_MARKER": str(tmp_path / "media-catalog.marker"),
             "DEMO_CAT_FAILURE": "1" if cat_failure else "0",
             "DEMO_DISPATCH_REAL_MEDIA_VALIDATOR": "1" if dispatch_real_media_validator else "0",
+            "DEMO_DISPATCH_REAL_MEDIA_CATALOG": "1" if dispatch_real_media_catalog else "0",
             "DEMO_REQUIRE_STOP_BEFORE_MANIFEST": "1" if require_stop_before_manifest else "0",
+            "DEMO_MISSING_ENCODER_ARGUMENTS": "1" if missing_encoder_arguments else "0",
+            "DEMO_MISSING_PUBLICATION_ARGUMENTS": "1" if missing_publication_arguments else "0",
+            "DEMO_MEDIA_ENCODER_ARGUMENTS": "\n".join(encoder_arguments),
+            "DEMO_MEDIA_PUBLICATION_ARGUMENTS": "\n".join(publication_arguments),
             "DEMO_TEST_PYTHON": sys.executable,
             "DEMO_MEDIA_TOOL_PATH": str(tmp_path / "workspace" / "examples" / "demo" / "media" / "tool.py"),
             "DEMO_MEDIA_SPEC": str(tmp_path / "workspace" / "examples" / "demo" / "media" / "capture-spec.json"),
+            "DEMO_MEDIA_CONFIG": str(tmp_path / "workspace" / "examples" / "demo" / "config.yaml"),
+            "DEMO_MEDIA_PYTHONPATH": str(PROJECT_ROOT / "src"),
             "DEMO_LAN_ADDRESS": lan_address,
             "DEMO_DOCKER_PORTS": docker_ports,
             "DEMO_LSOF_OUTPUT": lsof_output,
@@ -2820,6 +2879,8 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
         "/app/media/work/synthetic-catalog.json",
         "--srt-output",
         "/app/media/work/captions.srt",
+        "--encoder-arguments-output",
+        MEDIA_ENCODER_ARGUMENTS_PATH,
         "--state-dir",
         "/app/media/state",
     )
@@ -2840,7 +2901,17 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
         )
         in commands
     )
-    assert _media_compose("run", "--rm", "--no-deps", "media-encoder", MEDIA_SPEC_PATH, MEDIA_ROOT_PATH) in commands
+    assert (
+        _media_compose(
+            "run",
+            "--rm",
+            "--no-deps",
+            "media-encoder",
+            MEDIA_ROOT_PATH,
+            *MEDIA_ENCODER_ARGUMENTS,
+        )
+        in commands
+    )
     stop_command = _media_compose("stop", "chitragupta", "chitragupta-ui")
     manifest_command = _media_compose(
         "run",
@@ -2889,6 +2960,45 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
     assert (workspace / ".demo/media/assets/chitragupta-demo-walkthrough.mp4").is_file()
     assert ".demo/media" in _output(result)
     assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize(
+    "encoder_arguments",
+    [
+        pytest.param(MEDIA_ENCODER_ARGUMENTS[:-1], id="truncated"),
+        pytest.param((*MEDIA_ENCODER_ARGUMENTS[:4], "", *MEDIA_ENCODER_ARGUMENTS[5:]), id="blank-record"),
+        pytest.param((*MEDIA_ENCODER_ARGUMENTS, "unexpected"), id="extra-record"),
+    ],
+)
+def test_demo_media_rejects_malformed_encoder_vectors_before_starting_the_encoder(
+    tmp_path: Path,
+    encoder_arguments: tuple[str, ...],
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(
+        tmp_path,
+        media_outputs=True,
+        encoder_arguments=encoder_arguments,
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    assert "Demo media encoding failed." in _output(result)
+    assert not any("run" in command and "media-encoder" in command for command in _commands(command_log))
+
+
+def test_demo_media_rejects_a_missing_encoder_vector_before_starting_the_encoder(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, media_outputs=True, missing_encoder_arguments=True)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    output = _output(result)
+    assert "Demo media argument vector is missing:" in output
+    assert "Demo media encoding failed." in output
+    assert not any("run" in command and "media-encoder" in command for command in _commands(command_log))
 
 
 def test_demo_media_dirty_authoring_capture_copies_reviewed_poster_to_docs(tmp_path: Path) -> None:
@@ -3033,6 +3143,8 @@ def test_demo_media_publish_dispatches_the_real_validator_through_the_compose_bo
         MEDIA_SPEC_PATH,
         "--media-root",
         MEDIA_ROOT_PATH,
+        "--publication-arguments-output",
+        MEDIA_PUBLICATION_ARGUMENTS_PATH,
     ) in _commands(command_log)
     assert _gh_commands(environment) == []
 
@@ -3054,6 +3166,8 @@ def test_demo_media_publish_warns_for_an_unreleased_clean_commit_and_uploads_onl
     for name in stable_assets:
         destination = media_root / name if name == "manifest.json" else assets / name
         destination.write_text(name, encoding="utf-8")
+    (assets / "chitragupta-demo-dashboard-poster.webp").write_text("poster", encoding="utf-8")
+    (assets / "unrelated-decoy.txt").write_text("decoy", encoding="utf-8")
     environment, command_log = _fake_environment(tmp_path)
 
     result = _run(workspace, environment, "media", "publish")
@@ -3069,8 +3183,67 @@ def test_demo_media_publish_warns_for_an_unreleased_clean_commit_and_uploads_onl
     )
     upload = next(command for command in gh_commands if command.startswith("release upload demo-media"))
     assert "--clobber" in upload
-    assert {Path(path).name for path in upload.split() if path.startswith(str(media_root))} == set(stable_assets)
-    assert "chitragupta-demo-dashboard-poster.webp" not in upload
+    assert upload.split() == [
+        "release",
+        "upload",
+        "demo-media",
+        *[str(media_root / relative_path) for relative_path in MEDIA_PUBLICATION_ARGUMENTS],
+        "--clobber",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("publication_arguments", "expected_diagnostic"),
+    [
+        pytest.param(
+            MEDIA_PUBLICATION_ARGUMENTS[:-1],
+            "Demo media argument vector has 6 records; expected 7:",
+            id="truncated",
+        ),
+        pytest.param(
+            (*MEDIA_PUBLICATION_ARGUMENTS[:3], "", *MEDIA_PUBLICATION_ARGUMENTS[4:]),
+            "Demo media argument vector contains a blank record:",
+            id="blank-record",
+        ),
+        pytest.param(
+            (*MEDIA_PUBLICATION_ARGUMENTS, "assets/unexpected.txt"),
+            "Demo media argument vector has 8 records; expected 7:",
+            id="extra-record",
+        ),
+    ],
+)
+def test_demo_media_publish_rejects_malformed_publication_vectors_before_github_upload(
+    tmp_path: Path,
+    publication_arguments: tuple[str, ...],
+    expected_diagnostic: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, publication_arguments=publication_arguments)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode != 0
+    output = _output(result)
+    assert expected_diagnostic in output
+    assert "Demo media validation failed; publication was not attempted." in output
+    assert "Validated Demo media is unavailable. Run './demo media' first." in output
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_publish_rejects_a_missing_publication_vector_before_github_upload(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, missing_publication_arguments=True)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode != 0
+    output = _output(result)
+    assert "Demo media argument vector is missing:" in output
+    assert "Demo media validation failed; publication was not attempted." in output
+    assert "Validated Demo media is unavailable. Run './demo media' first." in output
+    assert _gh_commands(environment) == []
 
 
 def test_demo_media_publish_rejects_a_real_git_describe_failure(tmp_path: Path) -> None:
@@ -3221,6 +3394,7 @@ def test_demo_media_public_launcher_can_publish_a_production_shaped_capture(tmp_
         media_outputs=True,
         media_fixture=media_fixture,
         dispatch_real_media_validator=True,
+        dispatch_real_media_catalog=True,
     )
 
     capture = _run(workspace, environment, "media")
@@ -3229,7 +3403,24 @@ def test_demo_media_public_launcher_can_publish_a_production_shaped_capture(tmp_
 
     assert publication.returncode == 0, _output(publication)
     assert 'valid": true' in _output(publication)
-    assert any(command.startswith("release upload demo-media") for command in _gh_commands(environment))
+    assert (workspace / ".demo/media/work/encoder-arguments.list").read_text(encoding="utf-8").splitlines() == list(
+        MEDIA_ENCODER_ARGUMENTS
+    )
+    assert (workspace / ".demo/media/work/publication-arguments.list").read_text(encoding="utf-8").splitlines() == list(
+        MEDIA_PUBLICATION_ARGUMENTS
+    )
+    commands = _commands(command_log)
+    assert (
+        _media_compose("run", "--rm", "--no-deps", "media-encoder", MEDIA_ROOT_PATH, *MEDIA_ENCODER_ARGUMENTS)
+        in commands
+    )
+    assert _gh_commands(environment)[-1].split() == [
+        "release",
+        "upload",
+        "demo-media",
+        *[str(workspace / ".demo" / "media" / relative_path) for relative_path in MEDIA_PUBLICATION_ARGUMENTS],
+        "--clobber",
+    ]
     assert _media_compose("down") in _commands(command_log)
 
 

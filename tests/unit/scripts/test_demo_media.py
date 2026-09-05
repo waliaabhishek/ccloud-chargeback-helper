@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -94,6 +95,11 @@ def _capture_spec() -> dict[str, Any]:
 def _write_json(path: Path, contents: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(contents, indent=2), encoding="utf-8")
+
+
+def _write_executable(path: Path, contents: str) -> None:
+    path.write_text(contents, encoding="utf-8")
+    path.chmod(0o755)
 
 
 def _png(width: int = 1600, height: int = 900) -> bytes:
@@ -268,6 +274,31 @@ def _validate_workspace(spec_path: Path, media_root: Path) -> subprocess.Complet
     return _run_tool("validate", "--spec", str(spec_path), "--media-root", str(media_root))
 
 
+def _run_capture_entrypoint(
+    spec_path: Path,
+    catalog_path: Path,
+    output_path: Path,
+) -> subprocess.CompletedProcess[str]:
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required to execute the media capture entrypoint"
+    return subprocess.run(
+        [
+            node,
+            str(MEDIA_DIR / "capture.mjs"),
+            "--spec",
+            str(spec_path),
+            "--catalog",
+            str(catalog_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_committed_capture_specification_is_the_exact_reproducible_media_input() -> None:
     assert SPEC_PATH.is_file(), "committed media capture specification is not implemented"
     assert json.loads(SPEC_PATH.read_text(encoding="utf-8")) == _capture_spec()
@@ -290,11 +321,31 @@ def test_media_tool_reports_the_validated_showcase_profile_and_committed_anchor(
         pytest.param(lambda spec: spec.update({"unexpected": True}), id="unknown-field"),
         pytest.param(lambda spec: spec.update({"schema_version": "1"}), id="wrong-field-type"),
         pytest.param(lambda spec: spec.update({"profile": "clean"}), id="wrong-profile"),
-        pytest.param(lambda spec: spec["screenshots"].pop(), id="missing-approved-screen"),
+        pytest.param(lambda spec: spec["viewport"].update({"width": 1280}), id="viewport-width"),
+        pytest.param(lambda spec: spec["viewport"].update({"height": 720}), id="viewport-height"),
+        pytest.param(lambda spec: spec["poster"].update({"width": 1280}), id="poster-width"),
+        pytest.param(lambda spec: spec["poster"].update({"height": 720}), id="poster-height"),
+        pytest.param(lambda spec: spec["poster"].update({"name": "poster.webp"}), id="poster-name"),
+        pytest.param(lambda spec: spec["video"].update({"name": "walkthrough.mp4"}), id="video-name"),
+        pytest.param(lambda spec: spec["video"].update({"target_seconds": 74}), id="video-target"),
+        pytest.param(lambda spec: spec["video"].update({"minimum_seconds": 59}), id="video-minimum"),
+        pytest.param(lambda spec: spec["video"].update({"maximum_seconds": 91}), id="video-maximum"),
+        pytest.param(lambda spec: spec["primary_tenant"].update({"name": "other"}), id="tenant-name"),
+        pytest.param(lambda spec: spec["primary_tenant"].update({"id": "other"}), id="tenant-id"),
         pytest.param(
-            lambda spec: spec["captions"].__setitem__(0, {"start": 1, "end": 13, "text": "shifted"}),
-            id="gap",
+            lambda spec: spec["primary_tenant"].update({"ecosystem": "self_managed_kafka"}),
+            id="tenant-ecosystem",
         ),
+        pytest.param(lambda spec: spec["screenshots"].pop(), id="missing-approved-screen"),
+        pytest.param(lambda spec: spec["screenshots"][0].update({"name": "other.png"}), id="screenshot-name"),
+        pytest.param(lambda spec: spec["screenshots"][0].update({"route": "/other"}), id="screenshot-route"),
+        pytest.param(lambda spec: spec["captions"].pop(), id="missing-caption"),
+        pytest.param(
+            lambda spec: spec["captions"][0].update({"start": 1}),
+            id="caption-start",
+        ),
+        pytest.param(lambda spec: spec["captions"][0].update({"end": 12}), id="caption-end"),
+        pytest.param(lambda spec: spec["captions"][0].update({"text": "shifted"}), id="caption-text"),
     ],
 )
 def test_media_tool_rejects_noncanonical_capture_specifications(
@@ -315,6 +366,7 @@ def test_media_tool_catalog_projects_current_scenarios_with_both_tenants_and_no_
     spec_path = tmp_path / "capture-spec.json"
     catalog_path = tmp_path / "synthetic-catalog.json"
     srt_path = tmp_path / "captions.srt"
+    encoder_arguments_path = tmp_path / "encoder-arguments.list"
     _write_json(spec_path, _capture_spec())
 
     result = _run_tool(
@@ -327,6 +379,8 @@ def test_media_tool_catalog_projects_current_scenarios_with_both_tenants_and_no_
         str(catalog_path),
         "--srt-output",
         str(srt_path),
+        "--encoder-arguments-output",
+        str(encoder_arguments_path),
     )
 
     assert result.returncode == 0, result.stderr
@@ -354,12 +408,460 @@ def test_media_tool_catalog_projects_current_scenarios_with_both_tenants_and_no_
     )
 
 
+def test_media_tool_catalog_writes_the_exact_validated_encoder_argument_vector(tmp_path: Path) -> None:
+    spec_path = tmp_path / "capture-spec.json"
+    catalog_path = tmp_path / "synthetic-catalog.json"
+    srt_path = tmp_path / "captions.srt"
+    encoder_arguments_path = tmp_path / "encoder-arguments.list"
+    _write_json(spec_path, _capture_spec())
+
+    result = _run_tool(
+        "catalog",
+        "--spec",
+        str(spec_path),
+        "--config",
+        str(PROJECT_ROOT / "examples/demo/config.yaml"),
+        "--output",
+        str(catalog_path),
+        "--srt-output",
+        str(srt_path),
+        "--encoder-arguments-output",
+        str(encoder_arguments_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert encoder_arguments_path.read_text(encoding="utf-8").splitlines() == [
+        "work/chitragupta-demo-walkthrough.webm",
+        "work/captions.srt",
+        "assets/chitragupta-demo-dashboard.png",
+        "assets/chitragupta-demo-walkthrough.mp4",
+        "assets/chitragupta-demo-dashboard-poster.webp",
+        "1600",
+        "900",
+        "960",
+        "540",
+        "60",
+        "90",
+    ]
+
+
 def test_media_tool_validate_accepts_a_complete_clean_manifest_and_exact_asset_set(tmp_path: Path) -> None:
     spec_path, media_root = _write_media_workspace(tmp_path)
 
     result = _validate_workspace(spec_path, media_root)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_media_tool_manifest_constructs_the_exact_approved_asset_order_from_the_validated_specification(
+    tmp_path: Path,
+) -> None:
+    spec_path, media_root = _write_media_workspace(tmp_path)
+    (media_root / "manifest.json").unlink()
+
+    result = _run_tool(
+        "manifest",
+        "--spec",
+        str(spec_path),
+        "--media-root",
+        str(media_root),
+        "--source-commit",
+        SOURCE_COMMIT,
+        "--source-worktree-clean",
+        "true",
+    )
+
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((media_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
+    assert manifest["source_commit"] == SOURCE_COMMIT
+    assert manifest["source_worktree_clean"] is True
+    assert manifest["anchor_date"] == "2026-08-31"
+    assert manifest["profile"] == "showcase"
+    assert manifest["primary_tenant"] == PRIMARY_TENANT
+    assert manifest["expected_assets"] == list(EXPECTED_ASSETS)
+    assert list(manifest["assets"]) == list(EXPECTED_ASSETS)
+
+
+def test_media_tool_validate_writes_only_the_exact_release_argument_vector_after_complete_revalidation(
+    tmp_path: Path,
+) -> None:
+    spec_path, media_root = _write_media_workspace(tmp_path)
+    publication_arguments_path = media_root / "work/publication-arguments.list"
+
+    result = _run_tool(
+        "validate",
+        "--spec",
+        str(spec_path),
+        "--media-root",
+        str(media_root),
+        "--publication-arguments-output",
+        str(publication_arguments_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert publication_arguments_path.read_text(encoding="utf-8").splitlines() == [
+        "assets/chitragupta-demo-dashboard.png",
+        "assets/chitragupta-demo-cost-explorer.png",
+        "assets/chitragupta-demo-topic-attribution.png",
+        "assets/chitragupta-demo-pipeline-status.png",
+        "assets/chitragupta-demo-focus-mapping-preview.png",
+        "assets/chitragupta-demo-walkthrough.mp4",
+        "manifest.json",
+    ]
+
+
+def test_media_tool_does_not_create_a_publication_vector_when_revalidation_rejects_a_decoy_asset(
+    tmp_path: Path,
+) -> None:
+    spec_path, media_root = _write_media_workspace(tmp_path)
+    publication_arguments_path = media_root / "work/publication-arguments.list"
+    (media_root / "assets/unexpected.png").write_bytes(b"decoy")
+
+    result = _run_tool(
+        "validate",
+        "--spec",
+        str(spec_path),
+        "--media-root",
+        str(media_root),
+        "--publication-arguments-output",
+        str(publication_arguments_path),
+    )
+
+    assert result.returncode != 0
+    assert not publication_arguments_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        pytest.param(
+            lambda spec: spec.update({"schema_version": 2}),
+            "capture specification is not the approved Showcase input",
+            id="schema-version",
+        ),
+        pytest.param(
+            lambda spec: spec.update({"anchor_date": "2026-09-01"}),
+            "capture specification is not the approved Showcase input",
+            id="anchor",
+        ),
+        pytest.param(
+            lambda spec: spec.update({"profile": "clean"}),
+            "capture specification is not the approved Showcase input",
+            id="profile",
+        ),
+        pytest.param(
+            lambda spec: spec["viewport"].update({"width": 1280}),
+            "capture specification is not the approved Showcase input",
+            id="viewport",
+        ),
+        pytest.param(
+            lambda spec: spec["primary_tenant"].update({"name": "other"}),
+            "capture specification is not the approved Showcase input",
+            id="primary-tenant",
+        ),
+        pytest.param(
+            lambda spec: spec["screenshots"].pop(),
+            "capture specification does not contain the approved storyboard",
+            id="screenshot-count",
+        ),
+        pytest.param(
+            lambda spec: spec["screenshots"][0].update({"name": "other.png"}),
+            "capture specification does not contain the approved storyboard",
+            id="screenshot-name",
+        ),
+        pytest.param(
+            lambda spec: spec["screenshots"][0].update({"route": "/other"}),
+            "capture specification does not contain the approved storyboard",
+            id="screenshot-route",
+        ),
+        pytest.param(
+            lambda spec: spec["captions"].pop(),
+            "capture specification does not contain the approved storyboard",
+            id="caption-count",
+        ),
+        pytest.param(
+            lambda spec: spec["captions"][0].update({"start": 1}),
+            "capture specification caption timing does not match the approved storyboard",
+            id="caption-start",
+        ),
+        pytest.param(
+            lambda spec: spec["captions"][0].update({"end": 12}),
+            "capture specification caption timing does not match the approved storyboard",
+            id="caption-end",
+        ),
+        pytest.param(
+            lambda spec: spec["video"].update({"name": "walkthrough.mp4"}),
+            "capture specification does not contain the approved video duration",
+            id="video-name",
+        ),
+        pytest.param(
+            lambda spec: spec["video"].update({"target_seconds": 74}),
+            "capture specification does not contain the approved video duration",
+            id="video-target",
+        ),
+        pytest.param(
+            lambda spec: spec["video"].update({"minimum_seconds": 59}),
+            "capture specification does not contain the approved video duration",
+            id="video-minimum",
+        ),
+        pytest.param(
+            lambda spec: spec["video"].update({"maximum_seconds": 91}),
+            "capture specification does not contain the approved video duration",
+            id="video-maximum",
+        ),
+    ],
+)
+def test_capture_entrypoint_rejects_tampered_approved_inputs_before_playwright_or_output_creation(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, Any]], object],
+    expected_error: str,
+) -> None:
+    spec_path = tmp_path / "capture-spec.json"
+    catalog_path = tmp_path / "synthetic-catalog.json"
+    output_path = tmp_path / "media-output"
+    specification = deepcopy(_capture_spec())
+    mutate(specification)
+    _write_json(spec_path, specification)
+    _write_json(catalog_path, {})
+
+    result = _run_capture_entrypoint(spec_path, catalog_path, output_path)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not output_path.exists()
+
+
+def test_capture_operational_paths_consume_the_prevalidated_specification_and_preserve_effective_routes() -> None:
+    capture_source = (MEDIA_DIR / "capture.mjs").read_text(encoding="utf-8")
+    operations = capture_source[
+        capture_source.index("async function waitForScene") : capture_source.index("main().catch")
+    ]
+    route_builder = capture_source[
+        capture_source.index("function scenePath") : capture_source.index("function monitorPage")
+    ]
+
+    for field in (
+        "captureSpec.viewport",
+        "captureSpec.screenshots",
+        "captureSpec.captions",
+        "captureSpec.primary_tenant",
+        "captureSpec.video.name",
+    ):
+        assert field in operations
+    for obsolete_operational_contract in (
+        "viewport: VIEWPORT",
+        "recordVideo: { dir: workRoot, size: VIEWPORT }",
+        "for (const scene of SCREENSHOTS)",
+        "CAPTIONS.length",
+        '"clean-confluent (confluent_cloud)"',
+        '"chitragupta-demo-walkthrough.webm"',
+    ):
+        assert obsolete_operational_contract not in operations
+    for query_parameter in ("start_date", "end_date", "timezone", "at"):
+        assert query_parameter in route_builder
+
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required to execute the capture route helpers"
+    helper_script = (
+        "const UI_ORIGIN = 'http://chitragupta-ui';\n"
+        + route_builder
+        + "\n"
+        + """
+const scenes = [
+  { route: "/dashboard" },
+  { route: "/topic-attributions" },
+  { route: "/explorer" },
+  { route: "/pipeline" },
+  { route: "/focus-preview" },
+];
+console.log(JSON.stringify(scenes.map((scene) => sceneUrl(scene, "2026-08-31"))));
+"""
+    )
+    helper_result = subprocess.run(
+        [node, "--input-type=module", "--eval", helper_script],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert helper_result.returncode == 0, helper_result.stderr
+    assert json.loads(helper_result.stdout) == [
+        "http://chitragupta-ui/dashboard?start_date=2026-08-02&end_date=2026-08-31&timezone=UTC",
+        "http://chitragupta-ui/topic-attributions?start_date=2026-08-02&end_date=2026-08-31&timezone=UTC",
+        "http://chitragupta-ui/explorer?at=2026-08-31",
+        "http://chitragupta-ui/pipeline",
+        "http://chitragupta-ui/focus-preview",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("duration", "width", "expected_error"),
+    [
+        pytest.param("75", "1600", None, id="approved-probe"),
+        pytest.param("59", "1600", "encoded video duration is outside 60-90 seconds: 59", id="short-video"),
+        pytest.param("75", "1280", "encoded video dimensions are not 1600x900: 1280x900", id="wrong-width"),
+    ],
+)
+def test_encoder_consumes_the_exact_validated_argument_vector_and_preserves_media_evidence(
+    tmp_path: Path,
+    duration: str,
+    width: str,
+    expected_error: str | None,
+) -> None:
+    media_root = tmp_path / "media"
+    work_dir = media_root / "work"
+    assets_dir = media_root / "assets"
+    work_dir.mkdir(parents=True)
+    assets_dir.mkdir()
+    raw_video = work_dir / "chitragupta-demo-walkthrough.webm"
+    captions = work_dir / "captions.srt"
+    dashboard = assets_dir / PNG_ASSETS[0]
+    video = assets_dir / VIDEO
+    poster = assets_dir / POSTER
+    raw_video.write_bytes(b"raw-recording")
+    captions.write_text(_captions_srt(), encoding="utf-8")
+    dashboard.write_bytes(_png())
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    command_log = tmp_path / "encoder-tools.log"
+    _write_executable(
+        fake_bin / "ffmpeg",
+        """#!/usr/bin/env bash
+set -eu
+printf 'ffmpeg\\t%s\\n' "$*" >>"$DEMO_ENCODER_TOOL_LOG"
+: > "${!#}"
+""",
+    )
+    _write_executable(
+        fake_bin / "ffprobe",
+        """#!/usr/bin/env bash
+set -eu
+printf 'ffprobe\\t%s\\n' "$*" >>"$DEMO_ENCODER_TOOL_LOG"
+case "$*" in
+  *format=duration*) printf '%s\\n' "$DEMO_ENCODER_DURATION" ;;
+  *codec_name*) printf 'h264\\n' ;;
+  *stream=width*) printf '%s\\n' "$DEMO_ENCODER_WIDTH" ;;
+  *stream=height*) printf '900\\n' ;;
+  *avg_frame_rate*) printf '30/1\\n' ;;
+  *stream=index*) ;;
+  *) exit 11 ;;
+esac
+""",
+    )
+    environment = {
+        **os.environ,
+        "DEMO_ENCODER_TOOL_LOG": str(command_log),
+        "DEMO_ENCODER_DURATION": duration,
+        "DEMO_ENCODER_WIDTH": width,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+    }
+    arguments = (
+        str(media_root),
+        "work/chitragupta-demo-walkthrough.webm",
+        "work/captions.srt",
+        f"assets/{PNG_ASSETS[0]}",
+        f"assets/{VIDEO}",
+        f"assets/{POSTER}",
+        "1600",
+        "900",
+        "960",
+        "540",
+        "60",
+        "90",
+    )
+
+    result = subprocess.run(
+        ["sh", str(MEDIA_DIR / "encode.sh"), *arguments],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    calls = command_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 8
+    caption_filter = (
+        f"subtitles={captions}:force_style='FontName=DejaVu Sans,FontSize=24,Outline=2,Shadow=1,MarginV=40'"
+    )
+    assert calls[0] == (
+        f"ffmpeg\t-hide_banner -loglevel error -y -i {raw_video} -vf {caption_filter} "
+        f"-r 30 -c:v libx264 -profile:v high -pix_fmt yuv420p -movflags +faststart -an {video}"
+    )
+    assert calls[1] == (
+        f"ffmpeg\t-hide_banner -loglevel error -y -i {dashboard} "
+        f"-vf scale=960:540:flags=lanczos -frames:v 1 -c:v libwebp -lossless 0 -q:v 80 -an {poster}"
+    )
+    assert all(call.endswith(str(video)) for call in calls[2:])
+    if expected_error is not None:
+        assert result.returncode != 0
+        assert expected_error in result.stderr
+        assert raw_video.exists()
+        assert not (work_dir / "encoder-result.json").exists()
+        return
+
+    assert result.returncode == 0, result.stderr
+    assert not raw_video.exists()
+    assert json.loads((work_dir / "encoder-result.json").read_text(encoding="utf-8")) == {
+        "duration_seconds": 75,
+        "video_codec": "h264",
+        "width": 1600,
+        "height": 900,
+        "frame_rate": 30,
+        "audio_stream_count": 0,
+        "captions_burned_in": True,
+        "caption_filter": "subtitles",
+        "caption_source": "captions.srt",
+        "webm_removed": True,
+    }
+
+
+def test_encoder_rejects_an_incomplete_argument_vector_before_invoking_media_tools(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    command_log = tmp_path / "encoder-tools.log"
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "ffmpeg",
+        "#!/usr/bin/env sh\nprintf 'ffmpeg\\n' >>\"$DEMO_ENCODER_TOOL_LOG\"\nexit 99\n",
+    )
+    _write_executable(
+        fake_bin / "ffprobe",
+        "#!/usr/bin/env sh\nprintf 'ffprobe\\n' >>\"$DEMO_ENCODER_TOOL_LOG\"\nexit 99\n",
+    )
+    environment = {
+        **os.environ,
+        "DEMO_ENCODER_TOOL_LOG": str(command_log),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+    }
+
+    result = subprocess.run(
+        [
+            "sh",
+            str(MEDIA_DIR / "encode.sh"),
+            str(media_root),
+            "work/chitragupta-demo-walkthrough.webm",
+            "work/captions.srt",
+            f"assets/{PNG_ASSETS[0]}",
+            f"assets/{VIDEO}",
+            f"assets/{POSTER}",
+            "1600",
+            "900",
+            "960",
+            "540",
+            "60",
+        ],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert not command_log.exists()
 
 
 def test_capture_video_uses_one_recording_epoch_for_nominal_seventy_five_seconds() -> None:
@@ -384,7 +886,7 @@ def test_capture_explorer_readiness_uses_current_stable_contracts() -> None:
     for selector in ("breadcrumb-trail", "graph-container", "timeline-scrubber"):
         assert f'[data-testid="{selector}"]' in capture_source
     assert "page.getByText(anchorDate, { exact: true })" in capture_source
-    assert 'getByText("clean-confluent (confluent_cloud)", { exact: true })' in capture_source
+    assert "page.getByText(primaryTenantLabel, { exact: true })" in capture_source
 
 
 def test_capture_pipeline_uses_icon_compatible_button_contract() -> None:
@@ -689,7 +1191,7 @@ def test_media_compose_wires_current_images_read_only_inputs_and_isolated_networ
     assert capture["networks"] == ["demo"]
     assert encoder["entrypoint"] == ["/bin/sh", "/opt/chitragupta-demo-media/encode.sh"]
     assert "/opt/chitragupta-demo-media/encode.sh" in "\n".join(encoder["volumes"])
-    assert "/opt/chitragupta-demo-media/capture-spec.json" in "\n".join(encoder["volumes"])
+    assert "/opt/chitragupta-demo-media/capture-spec.json" not in "\n".join(encoder["volumes"])
     assert encoder["network_mode"] == "none"
     for service in (tool, capture, encoder):
         assert "${DEMO_MEDIA_DIR}:/app/media:rw" in service["volumes"]

@@ -1,26 +1,44 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-    echo "usage: encode.sh SPEC_PATH MEDIA_ROOT" >&2
+if [ "$#" -ne 12 ]; then
+    echo "usage: encode.sh MEDIA_ROOT RAW_VIDEO CAPTIONS DASHBOARD VIDEO POSTER VIDEO_WIDTH VIDEO_HEIGHT POSTER_WIDTH POSTER_HEIGHT MIN_SECONDS MAX_SECONDS" >&2
     exit 2
 fi
 
-spec_path=$1
-media_root=$2
+media_root=$1
+raw_video_relative=$2
+captions_relative=$3
+dashboard_relative=$4
+video_relative=$5
+poster_relative=$6
+video_width=$7
+video_height=$8
+poster_width=$9
+poster_height=${10}
+minimum_seconds=${11}
+maximum_seconds=${12}
+
+resolve_media_path() {
+    relative_path=$1
+    case "$relative_path" in
+        ""|/*|.|..|./*|*/./*|*/.|../*|*/../*|*/..)
+            echo "media path must be relative and stay beneath MEDIA_ROOT: $relative_path" >&2
+            exit 2
+            ;;
+    esac
+    printf '%s/%s' "$media_root" "$relative_path"
+}
+
+raw_video=$(resolve_media_path "$raw_video_relative")
+captions=$(resolve_media_path "$captions_relative")
+dashboard=$(resolve_media_path "$dashboard_relative")
+video=$(resolve_media_path "$video_relative")
+poster=$(resolve_media_path "$poster_relative")
 work_dir=$media_root/work
 assets_dir=$media_root/assets
-raw_video=$work_dir/chitragupta-demo-walkthrough.webm
-captions=$work_dir/captions.srt
-dashboard=$assets_dir/chitragupta-demo-dashboard.png
-video=$assets_dir/chitragupta-demo-walkthrough.mp4
-poster=$assets_dir/chitragupta-demo-dashboard-poster.webp
 encoder_result=$work_dir/encoder-result.json
 
-[ -f "$spec_path" ] || {
-    echo "capture specification is missing: $spec_path" >&2
-    exit 1
-}
 [ -f "$raw_video" ] || {
     echo "raw browser recording is missing: $raw_video" >&2
     exit 1
@@ -42,7 +60,7 @@ ffmpeg -hide_banner -loglevel error -y \
     -r 30 -c:v libx264 -profile:v high -pix_fmt yuv420p -movflags +faststart -an "$video"
 
 ffmpeg -hide_banner -loglevel error -y \
-    -i "$dashboard" -vf "scale=960:540:flags=lanczos" \
+    -i "$dashboard" -vf "scale=${poster_width}:${poster_height}:flags=lanczos" \
     -frames:v 1 -c:v libwebp -lossless 0 -q:v 80 -an "$poster"
 
 duration=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$video")
@@ -58,8 +76,8 @@ case "$frame_rate" in
 esac
 
 [ "$codec" = h264 ] || { echo "encoded video codec is not h264: $codec" >&2; exit 1; }
-[ "$width" = 1600 ] && [ "$height" = 900 ] || {
-    echo "encoded video dimensions are not 1600x900: ${width}x${height}" >&2
+[ "$width" = "$video_width" ] && [ "$height" = "$video_height" ] || {
+    echo "encoded video dimensions are not ${video_width}x${video_height}: ${width}x${height}" >&2
     exit 1
 }
 [ "$audio_stream_count" -eq 0 ] || {
@@ -67,8 +85,9 @@ esac
     exit 1
 }
 
-awk -v duration="$duration" 'BEGIN { exit !(duration >= 60 && duration <= 90) }' || {
-    echo "encoded video duration is outside 60-90 seconds: $duration" >&2
+awk -v duration="$duration" -v minimum="$minimum_seconds" -v maximum="$maximum_seconds" \
+    'BEGIN { exit !(duration >= minimum && duration <= maximum) }' || {
+    echo "encoded video duration is outside ${minimum_seconds}-${maximum_seconds} seconds: $duration" >&2
     exit 1
 }
 
