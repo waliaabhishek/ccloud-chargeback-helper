@@ -1803,6 +1803,10 @@ def test_demo_grafana_override_mounts_selected_profile_read_only_and_uses_conflu
     datasource = datasource_path.read_text(encoding="utf-8")
 
     assert grafana["image"] == "grafana/grafana:12.4.0"
+    assert grafana["environment"]["GF_PLUGINS_PREINSTALL_SYNC"] == (
+        "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
+    )
+    assert "GF_INSTALL_PLUGINS" not in grafana["environment"]
     assert grafana["ports"] == ["${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_GRAFANA_PORT:-3000}:3000"]
     assert "${DEMO_STATE_DIR:-../../.demo/state/clean}:/var/lib/grafana/data/demo:ro" in grafana["volumes"]
     assert "examples/shared/grafana/provisioning/dashboards" in "\n".join(grafana["volumes"])
@@ -2189,6 +2193,11 @@ def test_demo_production_compose_renders_base_and_grafana_with_nondefault_runtim
     assert api_port[0]["target"] == 8080
     assert grafana_port[0]["published"] == "3900"
     assert grafana_port[0]["target"] == 3000
+    grafana_environment = config["services"]["grafana"]["environment"]
+    assert grafana_environment["GF_PLUGINS_PREINSTALL_SYNC"] == (
+        "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
+    )
+    assert "GF_INSTALL_PLUGINS" not in grafana_environment
     assert any(
         mount["target"] == "/var/lib/grafana/data/demo" and mount["read_only"]
         for mount in config["services"]["grafana"]["volumes"]
@@ -2255,6 +2264,11 @@ def test_demo_renders_base_and_merged_definitions_with_every_available_compose_f
             assert config["networks"][published_network].get("internal", False) is False
             assert published_network not in services["demo-generator"]["networks"]
         assert merged_config["services"]["grafana"]["networks"] == {"default": None}
+        grafana_environment = merged_config["services"]["grafana"]["environment"]
+        assert grafana_environment["GF_PLUGINS_PREINSTALL_SYNC"] == (
+            "frser-sqlite-datasource@4.0.6,marcusolsson-treemap-panel@2.1.1"
+        )
+        assert "GF_INSTALL_PLUGINS" not in grafana_environment
         grafana_volumes = merged_config["services"]["grafana"]["volumes"]
         state_mount = next(mount for mount in grafana_volumes if mount["target"] == "/var/lib/grafana/data/demo")
         datasource_mount = next(
