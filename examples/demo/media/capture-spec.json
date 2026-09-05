@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "anchor_date": "2026-08-31",
+  "profile": "showcase",
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "poster": {
+    "width": 960,
+    "height": 540,
+    "name": "chitragupta-demo-dashboard-poster.webp"
+  },
+  "video": {
+    "target_seconds": 75,
+    "minimum_seconds": 60,
+    "maximum_seconds": 90,
+    "name": "chitragupta-demo-walkthrough.mp4"
+  },
+  "primary_tenant": {
+    "name": "clean-confluent",
+    "id": "northstar-confluent",
+    "ecosystem": "confluent_cloud"
+  },
+  "screenshots": [
+    {
+      "name": "chitragupta-demo-dashboard.png",
+      "route": "/dashboard"
+    },
+    {
+      "name": "chitragupta-demo-cost-explorer.png",
+      "route": "/explorer"
+    },
+    {
+      "name": "chitragupta-demo-topic-attribution.png",
+      "route": "/topic-attributions"
+    },
+    {
+      "name": "chitragupta-demo-pipeline-status.png",
+      "route": "/pipeline"
+    },
+    {
+      "name": "chitragupta-demo-focus-mapping-preview.png",
+      "route": "/focus-preview"
+    }
+  ],
+  "captions": [
+    {
+      "start": 0,
+      "end": 13,
+      "text": "Synthetic tenant cost reconciles across usage and shared spend."
+    },
+    {
+      "start": 13,
+      "end": 30,
+      "text": "Tenant cost is the analytical root."
+    },
+    {
+      "start": 30,
+      "end": 44,
+      "text": "Topic-level attribution exposes cost concentration and candidates for review."
+    },
+    {
+      "start": 44,
+      "end": 56,
+      "text": "Persisted processing state remains inspectable in API-only mode."
+    },
+    {
+      "start": 56,
+      "end": 75,
+      "text": "Generate a FOCUS 1.4 mapping preview from synthetic persisted evidence."
+    }
+  ]
+}

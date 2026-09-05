@@ -60,7 +60,7 @@ export function App(): React.JSX.Element {
                     { name: "pipeline", list: "/pipeline" },
                     { name: "tags", list: "/tags" },
                   ]}
-                  options={{ syncWithLocation: true }}
+                  options={{ disableTelemetry: true, syncWithLocation: true }}
                 >
                   <AppShellContext.Provider
                     value={{ isDark, setSidebarCollapsed }}

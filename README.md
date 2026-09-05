@@ -56,6 +56,15 @@ and run `./demo` from the repository root. It covers Clean and Showcase
 profiles, optional Grafana, LAN exposure, port overrides, lifecycle commands,
 and raw Compose escape hatches.
 
+### Demo media
+
+![Chitragupta Demo dashboard](docs/assets/demo/chitragupta-demo-dashboard-poster.webp)
+
+The [Demo media release](https://github.com/waliaabhishek/chitragupta/releases/tag/demo-media)
+contains stable screenshots and a walkthrough generated from synthetic data. The
+[Demo guide](docs/getting-started/demo.md#demo-media) explains how to capture,
+review, and publish the bundle.
+
 ```bash
 git clone https://github.com/waliaabhishek/chitragupta.git
 cd chitragupta/examples/ccloud-full

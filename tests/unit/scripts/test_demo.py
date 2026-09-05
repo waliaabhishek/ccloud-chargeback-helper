@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
@@ -13,8 +17,13 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BASE = "examples/demo/docker-compose.yml"
 GRAFANA = "examples/demo/docker-compose.grafana.yml"
+MEDIA = "examples/demo/docker-compose.media.yml"
 BASE_FILES = ("-f", BASE)
 ALL_FILES = ("-f", BASE, "-f", GRAFANA)
+MEDIA_FILES = ("-f", BASE, "-f", MEDIA)
+MEDIA_PROJECT = ("-p", "chitragupta-demo-media")
+MEDIA_SPEC_PATH = "/opt/chitragupta-demo-media/capture-spec.json"
+MEDIA_ROOT_PATH = "/app/media"
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -56,6 +65,23 @@ def _fake_environment(
     include_lsof: bool = True,
     ss_output: str | None = None,
     fuser_output: str | None = None,
+    interactive_services: str = "",
+    interactive_service_ids: str = "",
+    media_services: str = "",
+    media_service_ids: str = "",
+    git_head: str = "a" * 40,
+    git_status: str = "",
+    git_describe_status: int = 128,
+    git_describe_output: str | None = None,
+    gh_available: bool = True,
+    gh_release_exists: bool = False,
+    gh_stable_release_exists: bool | None = None,
+    gh_failure: str = "",
+    media_outputs: bool = False,
+    media_fixture: Path | None = None,
+    cat_failure: bool = False,
+    dispatch_real_media_validator: bool = False,
+    require_stop_before_manifest: bool = False,
 ) -> tuple[dict[str, str], Path]:
     """Copy only host-process boundaries; launcher and Compose files stay real."""
     fake_bin = tmp_path / "fake-bin"
@@ -79,8 +105,11 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$DEMO_UI_PORT" "$DEMO_API_PORT" "$DEMO_GRAFANA_PORT" \
   "$DEMO_PROFILE" "$DEMO_STATE_DIR" "$*" >>"$DEMO_COMMAND_LOG"
 printf '%s\t%s\n' "$DEMO_ANCHOR_DATE" "$DEMO_UID:$DEMO_GID" >>"$DEMO_RUNTIME_LOG"
+printf '%s\t%s\n' "${DEMO_MEDIA_DIR:-}" "${COMPOSE_PROJECT_NAME:-}" >>"$DEMO_MEDIA_RUNTIME_LOG"
 if [[ "$1" == version ]]; then [[ "$DEMO_FORM" == "$DEMO_SUPPORT" ]]; exit; fi
 command=" $* "
+is_media_project=0
+[[ "$command" == *" chitragupta-demo-media "* ]] && is_media_project=1
 if [[ "$command" == *" port "* ]]; then printf '%s' "$DEMO_OWNED_PORT"; exit; fi
 if [[ "$command" == *" pull "* ]]; then
   [[ "$DEMO_FAILURE" != pull ]] || { echo "pull denied" >&2; exit 71; }
@@ -91,7 +120,49 @@ if [[ "$command" == *" build "* ]]; then
   echo BUILT; exit
 fi
 if [[ "$command" == *" run "* ]]; then
+  if [[ "$command" == *" media-tool validate "* && "$DEMO_DISPATCH_REAL_MEDIA_VALIDATOR" == 1 ]]; then
+    "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" validate \
+      --spec "$DEMO_MEDIA_SPEC" --media-root "$DEMO_MEDIA_DIR"
+    exit $?
+  fi
+  case "$DEMO_FAILURE" in
+    media-spec) [[ "$command" != *" media-tool spec "* ]] || { echo "invalid media spec" >&2; exit 80; } ;;
+    media-catalog) [[ "$command" != *" media-tool catalog "* ]] || { echo "catalog rejected" >&2; exit 81; } ;;
+    media-capture) [[ "$command" != *" media-capture "* ]] || { echo "capture failed" >&2; exit 82; } ;;
+    media-encoder) [[ "$command" != *" media-encoder "* ]] || { echo "encoder failed" >&2; exit 83; } ;;
+    media-manifest) [[ "$command" != *" media-tool manifest "* ]] || { echo "manifest rejected" >&2; exit 84; } ;;
+  esac
+  if [[ "$DEMO_FAILURE" == media-final-catalog && "$command" == *" media-tool catalog "* ]]; then
+    if [[ -f "$DEMO_MEDIA_CATALOG_MARKER" ]]; then
+      echo "final catalog rejected" >&2
+      exit 86
+    fi
+    : >"$DEMO_MEDIA_CATALOG_MARKER"
+  fi
   [[ "$DEMO_FAILURE" != generator ]] || { echo "generator failed" >&2; exit 73; }
+  if [[ "$command" == *" media-tool spec "* ]]; then
+    printf '%s\n' '{"profile":"showcase","anchor_date":"2026-08-31"}'
+    exit
+  fi
+  if [[ "$DEMO_MEDIA_OUTPUTS" == 1 && "$command" == *" media-tool manifest "* ]]; then
+    if [[ "$DEMO_REQUIRE_STOP_BEFORE_MANIFEST" == 1 && ! -f "$DEMO_MEDIA_DIR/.api-stopped" ]]; then
+      echo "manifest ran before API/UI stop" >&2
+      exit 85
+    fi
+    if [[ -n "$DEMO_MEDIA_FIXTURE" ]]; then
+      mkdir -p "$DEMO_MEDIA_DIR"
+      cp -R "$DEMO_MEDIA_FIXTURE"/. "$DEMO_MEDIA_DIR/"
+      echo GENERATED; exit
+    fi
+    mkdir -p "$DEMO_MEDIA_DIR/assets"
+    for asset in chitragupta-demo-dashboard.png chitragupta-demo-cost-explorer.png \
+      chitragupta-demo-topic-attribution.png chitragupta-demo-pipeline-status.png \
+      chitragupta-demo-focus-mapping-preview.png chitragupta-demo-dashboard-poster.webp \
+      chitragupta-demo-walkthrough.mp4; do
+      printf 'generated-%s' "$asset" >"$DEMO_MEDIA_DIR/assets/$asset"
+    done
+    printf '{"generated": true}\\n' >"$DEMO_MEDIA_DIR/manifest.json"
+  fi
   echo GENERATED; exit
 fi
 if [[ "$command" == *" up "* ]]; then
@@ -117,9 +188,30 @@ if [[ "$command" == *" up "* ]]; then
   esac
   echo SERVICES_HEALTHY; exit
 fi
-if [[ "$command" == *" ps "* || "$command" == *" logs "* || \
-      "$command" == *" down "* || "$command" == *" stop "* ]]; then
+if [[ "$command" == *" ps "* ]]; then
   [[ "$DEMO_FAILURE" != operation ]] || { echo "Compose operation failed" >&2; exit 76; }
+  if ((is_media_project)); then
+    if [[ "$command" == *" --quiet "* ]]; then
+      printf '%s' "$DEMO_MEDIA_SERVICE_IDS"
+    else
+      printf '%s' "$DEMO_MEDIA_SERVICES"
+    fi
+  else
+    if [[ "$command" == *" --quiet "* ]]; then
+      printf '%s' "$DEMO_INTERACTIVE_SERVICE_IDS"
+    else
+      printf '%s' "$DEMO_INTERACTIVE_SERVICES"
+    fi
+  fi
+  exit
+fi
+if [[ "$command" == *" logs "* || "$command" == *" down "* || "$command" == *" stop "* ]]; then
+  [[ "$DEMO_FAILURE" != operation ]] || { echo "Compose operation failed" >&2; exit 76; }
+  [[ "$DEMO_FAILURE" != teardown || "$command" != *" down "* ]] || { echo "media teardown failed" >&2; exit 79; }
+  if [[ "$DEMO_REQUIRE_STOP_BEFORE_MANIFEST" == 1 && "$command" == *" stop "* ]]; then
+    mkdir -p "$DEMO_MEDIA_DIR"
+    : >"$DEMO_MEDIA_DIR/.api-stopped"
+  fi
   echo COMPOSE_OPERATION; exit
 fi
 echo "Unsupported fake Compose command: $*" >&2; exit 77
@@ -145,12 +237,42 @@ DEMO_FORM=standalone exec "$DEMO_HANDLER" "$@"
         """#!/usr/bin/env bash
 set -euo pipefail
 [[ "$DEMO_GIT_AVAILABLE" == 1 ]] || exit 127
-if [[ "$*" == "describe --tags --exact-match --match v*.*.* HEAD" && -n "$DEMO_GIT_TAG" ]]; then
-  echo "$DEMO_GIT_TAG"; exit
+printf '%s\\n' "$*" >>"$DEMO_GIT_LOG"
+if [[ "$*" == "rev-parse HEAD" ]]; then echo "$DEMO_GIT_HEAD"; exit; fi
+if [[ "$*" == "status --porcelain" ]]; then printf '%s' "$DEMO_GIT_STATUS"; exit; fi
+if [[ "$*" == "describe --tags --exact-match --match v*.*.* HEAD" ]]; then
+  if [[ -n "$DEMO_GIT_TAG" ]]; then echo "$DEMO_GIT_TAG"; exit; fi
+  printf '%s\n' "$DEMO_GIT_DESCRIBE_OUTPUT" >&2
+  exit "$DEMO_GIT_DESCRIBE_STATUS"
 fi
 exit 1
 """,
     )
+    _write_executable(
+        fake_bin / "gh",
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ "$DEMO_GH_AVAILABLE" == 1 ]] || exit 127
+printf '%s\\n' "$*" >>"$DEMO_GH_LOG"
+case "$DEMO_GH_FAILURE" in
+  stable-view) [[ "$*" != *"release view v"* ]] || exit 5 ;;
+  release-view) [[ "$*" != *"release view demo-media"* ]] || exit 6 ;;
+  release-create) [[ "$*" != *"release create"* ]] || exit 7 ;;
+  release-edit) [[ "$*" != *"release edit"* ]] || exit 8 ;;
+  release-upload) [[ "$*" != *"release upload"* ]] || exit 9 ;;
+esac
+if [[ "$*" == *"release view demo-media"* && "$DEMO_GH_RELEASE_EXISTS" != 1 ]]; then exit 1; fi
+if [[ "$*" == *"release view v"* && "$DEMO_GH_STABLE_RELEASE_EXISTS" != 1 ]]; then exit 1; fi
+if [[ "$*" == *"release view"* ]]; then
+  printf '%s\\n' '{"isDraft":false,"isPrerelease":false,"isLatest":false,"url":"https://example.test/demo-media"}'
+fi
+if [[ "$*" == *"release create"* || "$*" == *"release edit"* || "$*" == *"release upload"* ]]; then
+  printf '%s\\n' 'https://example.test/demo-media'
+fi
+""",
+    )
+    if not gh_available:
+        (fake_bin / "gh").unlink()
     _write_executable(
         fake_bin / "id",
         """#!/usr/bin/env bash
@@ -207,10 +329,22 @@ printf 'fuser\t%s\n' "$*" >>"$DEMO_HOST_LOG"
 printf '%s' "$DEMO_FUSER_OUTPUT"
 """,
         )
-    for command in ("awk", "cat", "cut", "find", "grep", "mkdir", "readlink", "rm", "rmdir", "sed", "sort", "tr"):
+    for command in ("awk", "cat", "cp", "cut", "find", "grep", "mkdir", "readlink", "rm", "rmdir", "sed", "sort", "tr"):
         source = shutil.which(command)
         assert source is not None
         shutil.copy2(source, runtime_bin / command)
+    if cat_failure:
+        _write_executable(
+            runtime_bin / "cat",
+            """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"chitragupta-demo-dashboard-poster.webp"* ]]; then
+  echo "poster copy failed" >&2
+  exit 91
+fi
+exec /usr/bin/cat "$@"
+""",
+        )
     bash = shutil.which("bash")
     assert bash is not None
     shutil.copy2(bash, runtime_bin / "bash")
@@ -226,6 +360,33 @@ printf '%s' "$DEMO_FUSER_OUTPUT"
             "DEMO_FAILURE": failure,
             "DEMO_GIT_TAG": git_tag,
             "DEMO_GIT_AVAILABLE": "1" if git_available else "0",
+            "DEMO_GIT_HEAD": git_head,
+            "DEMO_GIT_STATUS": git_status,
+            "DEMO_GIT_DESCRIBE_STATUS": str(git_describe_status),
+            "DEMO_GIT_DESCRIBE_OUTPUT": (
+                git_describe_output
+                if git_describe_output is not None
+                else f"fatal: no tag exactly matches '{git_head}'"
+            ),
+            "DEMO_GIT_LOG": str(tmp_path / "git.log"),
+            "DEMO_GH_AVAILABLE": "1" if gh_available else "0",
+            "DEMO_GH_LOG": str(tmp_path / "gh.log"),
+            "DEMO_GH_RELEASE_EXISTS": "1" if gh_release_exists else "0",
+            "DEMO_GH_STABLE_RELEASE_EXISTS": "1" if gh_stable_release_exists else "0",
+            "DEMO_GH_FAILURE": gh_failure,
+            "DEMO_INTERACTIVE_SERVICES": interactive_services,
+            "DEMO_INTERACTIVE_SERVICE_IDS": interactive_service_ids,
+            "DEMO_MEDIA_SERVICES": media_services,
+            "DEMO_MEDIA_SERVICE_IDS": media_service_ids,
+            "DEMO_MEDIA_OUTPUTS": "1" if media_outputs else "0",
+            "DEMO_MEDIA_FIXTURE": str(media_fixture) if media_fixture is not None else "",
+            "DEMO_MEDIA_CATALOG_MARKER": str(tmp_path / "media-catalog.marker"),
+            "DEMO_CAT_FAILURE": "1" if cat_failure else "0",
+            "DEMO_DISPATCH_REAL_MEDIA_VALIDATOR": "1" if dispatch_real_media_validator else "0",
+            "DEMO_REQUIRE_STOP_BEFORE_MANIFEST": "1" if require_stop_before_manifest else "0",
+            "DEMO_TEST_PYTHON": sys.executable,
+            "DEMO_MEDIA_TOOL_PATH": str(tmp_path / "workspace" / "examples" / "demo" / "media" / "tool.py"),
+            "DEMO_MEDIA_SPEC": str(tmp_path / "workspace" / "examples" / "demo" / "media" / "capture-spec.json"),
             "DEMO_LAN_ADDRESS": lan_address,
             "DEMO_DOCKER_PORTS": docker_ports,
             "DEMO_LSOF_OUTPUT": lsof_output,
@@ -237,6 +398,7 @@ printf '%s' "$DEMO_FUSER_OUTPUT"
             "DEMO_OWNED_PORT": "",
             "DEMO_PROC_ROOT": str(proc_root),
             "DEMO_RUNTIME_LOG": str(tmp_path / "runtime.log"),
+            "DEMO_MEDIA_RUNTIME_LOG": str(tmp_path / "media-runtime.log"),
             "DEMO_IMAGE_TAG": "",
             "DEMO_BIND_ADDRESS": "",
             "DEMO_UI_PORT": "",
@@ -329,6 +491,187 @@ def _up(*, grafana: bool = False) -> tuple[str, ...]:
     services = ("chitragupta", "chitragupta-ui", "grafana") if grafana else ("chitragupta", "chitragupta-ui")
     orphan_flag = () if grafana else ("--remove-orphans",)
     return (*files, "up", "--detach", "--wait", "--force-recreate", *orphan_flag, *services)
+
+
+def _media_compose(*arguments: str) -> tuple[str, ...]:
+    return (*MEDIA_PROJECT, *MEDIA_FILES, *arguments)
+
+
+def _media_commands(command_log: Path) -> list[tuple[str, ...]]:
+    return [command for command in _commands(command_log) if MEDIA in command]
+
+
+def _gh_commands(environment: dict[str, str]) -> list[str]:
+    gh_log = Path(environment["DEMO_GH_LOG"])
+    if not gh_log.exists():
+        return []
+    return gh_log.read_text(encoding="utf-8").splitlines()
+
+
+def _write_fake_publish_workspace(workspace: Path) -> Path:
+    media_root = workspace / ".demo" / "media"
+    assets = media_root / "assets"
+    assets.mkdir(parents=True)
+    for name in (
+        "chitragupta-demo-dashboard.png",
+        "chitragupta-demo-cost-explorer.png",
+        "chitragupta-demo-topic-attribution.png",
+        "chitragupta-demo-pipeline-status.png",
+        "chitragupta-demo-focus-mapping-preview.png",
+        "chitragupta-demo-walkthrough.mp4",
+    ):
+        (assets / name).write_text(name, encoding="utf-8")
+    (media_root / "manifest.json").write_text(
+        '{"source_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_worktree_clean":true}\n',
+        encoding="utf-8",
+    )
+    return media_root
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def _valid_png() -> bytes:
+    width, height = 1600, 900
+
+    def chunk(kind: bytes, contents: bytes) -> bytes:
+        checksum = struct.pack(">I", zlib.crc32(kind + contents) & 0xFFFFFFFF)
+        return struct.pack(">I", len(contents)) + kind + contents + checksum
+
+    row = b"\x00" + (b"\x1a\x2b\x3c" * width)
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + b"".join(
+        (chunk(b"IHDR", header), chunk(b"IDAT", zlib.compress(row * height)), chunk(b"IEND", b""))
+    )
+
+
+def _valid_webp() -> bytes:
+    width, height = 960, 540
+    payload = b"\x00\x00\x00\x00" + (width - 1).to_bytes(3, "little") + (height - 1).to_bytes(3, "little")
+    chunk = b"VP8X" + struct.pack("<I", len(payload)) + payload
+    return b"RIFF" + struct.pack("<I", len(b"WEBP") + len(chunk)) + b"WEBP" + chunk
+
+
+def _write_real_media_fixture(workspace: Path, fixture_root: Path) -> Path:
+    media_root = fixture_root / "media"
+    assets = media_root / "assets"
+    assets.mkdir(parents=True)
+    png_names = (
+        "chitragupta-demo-dashboard.png",
+        "chitragupta-demo-cost-explorer.png",
+        "chitragupta-demo-topic-attribution.png",
+        "chitragupta-demo-pipeline-status.png",
+        "chitragupta-demo-focus-mapping-preview.png",
+    )
+    for name in png_names:
+        (assets / name).write_bytes(_valid_png())
+    (assets / "chitragupta-demo-dashboard-poster.webp").write_bytes(_valid_webp())
+    (assets / "chitragupta-demo-walkthrough.mp4").write_bytes(b"production-shaped-mp4")
+    state = media_root / "state"
+    state.mkdir()
+    state_metadata = {
+        "schema_version": 1,
+        "generator_version": 1,
+        "profile": "showcase",
+        "anchor_date": "2026-08-31",
+    }
+    _write_json(state / "demo-state.json", state_metadata)
+    for name in ("confluent-cloud.db", "self-managed-kafka.db"):
+        (state / name).write_bytes(name.encode())
+    work = media_root / "work"
+    work.mkdir()
+    (work / "captions.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:13,000\nSynthetic tenant cost reconciles across usage and shared spend.\n\n"
+        "2\n00:00:13,000 --> 00:00:30,000\nTenant cost is the analytical root.\n\n"
+        "3\n00:00:30,000 --> 00:00:44,000\n"
+        "Topic-level attribution exposes cost concentration and candidates for review.\n\n"
+        "4\n00:00:44,000 --> 00:00:56,000\nPersisted processing state remains inspectable in API-only mode.\n\n"
+        "5\n00:00:56,000 --> 00:01:15,000\nGenerate a FOCUS 1.4 mapping preview from synthetic persisted evidence.\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        work / "browser-observations.json",
+        {
+            "ui_origin": "http://chitragupta-ui",
+            "requests": [{"url": "http://chitragupta-ui/dashboard", "kind": "document"}],
+            "api_identifiers_match_catalog": True,
+            "dom_identifiers_match_catalog": True,
+        },
+    )
+    _write_json(
+        work / "encoder-result.json",
+        {
+            "duration_seconds": 75,
+            "video_codec": "h264",
+            "width": 1600,
+            "height": 900,
+            "frame_rate": 30,
+            "audio_stream_count": 0,
+            "captions_burned_in": True,
+            "caption_filter": "subtitles",
+            "caption_source": "captions.srt",
+            "webm_removed": True,
+        },
+    )
+    source_identifiers = [
+        "11111111-1111-4111-8111-111111111111",
+        "lkc-commerce:topic:orders.created.v1",
+    ]
+    evidence_files = []
+    for name in ("demo-state.json", "confluent-cloud.db", "self-managed-kafka.db"):
+        path = state / name
+        evidence_files.append(
+            {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+        )
+    _write_json(
+        work / "synthetic-catalog.json",
+        {
+            "schema_version": 1,
+            "anchor_date": "2026-08-31",
+            "profile": "showcase",
+            "primary_tenant": {
+                "name": "clean-confluent",
+                "id": "northstar-confluent",
+                "ecosystem": "confluent_cloud",
+            },
+            "representative_identifiers": ["cluster-commerce", "topic-orders"],
+            "source_identifiers": source_identifiers,
+            "tenants": [],
+            "scenarios": [
+                {"scenario": {"organization_id": source_identifiers[0], "resource_id": source_identifiers[1]}}
+            ],
+            "database_evidence": {
+                "schema_version": 1,
+                "validated": True,
+                "state_metadata": state_metadata,
+                "files": evidence_files,
+            },
+        },
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(workspace / "examples/demo/media/tool.py"),
+            "manifest",
+            "--spec",
+            str(workspace / "examples/demo/media/capture-spec.json"),
+            "--media-root",
+            str(media_root),
+            "--source-commit",
+            "a" * 40,
+            "--source-worktree-clean",
+            "true",
+        ],
+        cwd=workspace,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return media_root
 
 
 @pytest.mark.parametrize(
@@ -1929,3 +2272,583 @@ def test_demo_prints_exact_default_ui_api_and_grafana_urls(tmp_path: Path) -> No
     assert "UI: http://127.0.0.1:8081" in _output(result)
     assert "API: http://127.0.0.1:8080" in _output(result)
     assert "Grafana: http://127.0.0.1:3000" in _output(result)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("media", "--build"),
+        ("media", "publish", "again"),
+        ("media", "status", "--showcase"),
+        ("media", "unknown"),
+    ],
+)
+def test_demo_rejects_invalid_media_grammar_before_docker_git_or_media_mutation(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "retain-before-grammar-check"
+    sentinel.write_text("retain", encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path)
+
+    result = _run(workspace, environment, *arguments)
+
+    assert result.returncode == 2
+    assert "./demo media" in _output(result)
+    assert "./demo media publish" in _output(result)
+    assert _commands(command_log) == []
+    assert not Path(environment["DEMO_GIT_LOG"]).exists()
+    assert _gh_commands(environment) == []
+    assert sentinel.read_text(encoding="utf-8") == "retain"
+
+
+def test_demo_media_refuses_active_interactive_stack_before_build_or_media_deletion(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "previous-capture.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    environment, command_log = _fake_environment(
+        tmp_path,
+        interactive_services="chitragupta running (healthy)\n",
+        interactive_service_ids="running-id\n",
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 1
+    assert "Interactive Demo Stack is active. Run './demo down' before './demo media'." in _output(result)
+    assert any(command[-2:] == ("ps", "--quiet") and GRAFANA in command for command in _commands(command_log))
+    assert not any("build" in command or "pull" in command or "up" in command for command in _commands(command_log))
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_ignores_stopped_interactive_services_before_build(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(
+        tmp_path,
+        interactive_services="chitragupta exited (0)\nchitragupta-ui exited (0)\n",
+        interactive_service_ids="",
+        failure="build",
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 72
+    assert "Interactive Demo Stack is active" not in _output(result)
+    assert _media_compose("build", "chitragupta", "chitragupta-ui", "media-capture") in _commands(command_log)
+    assert any(command[-2:] == ("ps", "--quiet") and GRAFANA in command for command in _commands(command_log))
+
+
+def test_demo_media_refuses_retained_media_stack_without_replacing_capture_evidence(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "failed-encoder.webm"
+    sentinel.write_text("inspect", encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path, media_services="NAME\n", media_service_ids="media-capture\n")
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 1
+    expected_detail = "A Demo media stack already exists. Inspect it or run './demo media down' before capturing again."
+    assert expected_detail in _output(result)
+    commands = _commands(command_log)
+    assert any(command[-3:] == ("ps", "--all", "--quiet") and MEDIA in command for command in commands)
+    assert not any(
+        "build" in command or "pull" in command or "up" in command or "down" in command for command in commands
+    )
+    assert sentinel.read_text(encoding="utf-8") == "inspect"
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_all_state_probe_accepts_a_header_only_empty_stack(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "previous-capture.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    environment, command_log = _fake_environment(
+        tmp_path,
+        media_services="NAME IMAGE COMMAND SERVICE STATUS\n",
+        media_service_ids="",
+        failure="build",
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    assert "A Demo media stack already exists" not in _output(result)
+    assert any(command[-3:] == ("ps", "--all", "--quiet") for command in _commands(command_log))
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_demo_media_all_state_probe_blocks_a_stopped_container_id(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "stopped-capture.webm"
+    sentinel.write_text("inspect", encoding="utf-8")
+    environment, command_log = _fake_environment(
+        tmp_path,
+        media_services="media-capture exited (0)\n",
+        media_service_ids="deadbeef\n",
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 1
+    assert "A Demo media stack already exists" in _output(result)
+    assert any(command[-3:] == ("ps", "--all", "--quiet") for command in _commands(command_log))
+    assert sentinel.read_text(encoding="utf-8") == "inspect"
+
+
+def test_demo_media_prepares_bind_mount_directories_before_spec_preflight(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    environment, command_log = _fake_environment(tmp_path, failure="media-spec")
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 80
+    assert media_root.is_dir()
+    assert (media_root / "state").is_dir()
+    assert _media_compose("run", "--rm", "--no-deps", "media-tool", "spec", "--spec", MEDIA_SPEC_PATH) in _commands(
+        command_log
+    )
+
+
+def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_and_cleans_only_media_project(
+    tmp_path: Path,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    interactive_state = workspace / ".demo" / "state" / "showcase"
+    interactive_state.mkdir(parents=True)
+    interactive_sentinel = interactive_state / "interactive.db"
+    interactive_sentinel.write_text("do not delete", encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path, media_outputs=True, require_stop_before_manifest=True)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 0, _output(result)
+    commands = _commands(command_log)
+    media_commands = _media_commands(command_log)
+    assert all(MEDIA_PROJECT[1] in command and command[2:6] == MEDIA_FILES for command in media_commands)
+    assert _media_compose("build", "chitragupta", "chitragupta-ui", "media-capture") in commands
+    assert _media_compose("pull", "media-encoder") in commands
+    assert _media_compose("run", "--rm", "--no-deps", "media-tool", "spec", "--spec", MEDIA_SPEC_PATH) in commands
+    assert _media_compose("run", "--rm", "demo-generator") in commands
+    catalog_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "catalog",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--config",
+        "/app/config/config.yaml",
+        "--output",
+        "/app/media/work/synthetic-catalog.json",
+        "--srt-output",
+        "/app/media/work/captions.srt",
+        "--state-dir",
+        "/app/media/state",
+    )
+    assert catalog_command in commands
+    assert _media_compose("up", "--detach", "--wait", "--force-recreate", "chitragupta", "chitragupta-ui") in commands
+    assert (
+        _media_compose(
+            "run",
+            "--rm",
+            "--no-deps",
+            "media-capture",
+            "--spec",
+            MEDIA_SPEC_PATH,
+            "--catalog",
+            "/app/media/work/synthetic-catalog.json",
+            "--output",
+            MEDIA_ROOT_PATH,
+        )
+        in commands
+    )
+    assert _media_compose("run", "--rm", "--no-deps", "media-encoder", MEDIA_SPEC_PATH, MEDIA_ROOT_PATH) in commands
+    stop_command = _media_compose("stop", "chitragupta", "chitragupta-ui")
+    manifest_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "manifest",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--media-root",
+        MEDIA_ROOT_PATH,
+        "--source-commit",
+        "a" * 40,
+        "--source-worktree-clean",
+        "true",
+    )
+    down_command = _media_compose("down")
+    catalog_indexes = [index for index, command in enumerate(commands) if command == catalog_command]
+    assert len(catalog_indexes) == 2
+    assert stop_command in commands
+    assert manifest_command in commands
+    assert down_command in commands
+    stop_index = commands.index(stop_command)
+    manifest_index = commands.index(manifest_command)
+    assert catalog_indexes[0] < stop_index < catalog_indexes[1] < manifest_index < commands.index(down_command)
+    assert (
+        commands.index(_media_compose("build", "chitragupta", "chitragupta-ui", "media-capture"))
+        < commands.index(_media_compose("run", "--rm", "demo-generator"))
+        < commands.index(
+            _media_compose("up", "--detach", "--wait", "--force-recreate", "chitragupta", "chitragupta-ui")
+        )
+    )
+    generator_call = next(
+        call for call in _calls(command_log) if call[-1] == _media_compose("run", "--rm", "demo-generator")
+    )
+    assert generator_call[1] == "local"
+    assert generator_call[6] == "showcase"
+    assert Path(generator_call[7]) == (workspace / ".demo" / "media" / "state").resolve()
+    assert interactive_sentinel.read_text(encoding="utf-8") == "do not delete"
+    assert (workspace / "docs/assets/demo/chitragupta-demo-dashboard-poster.webp").is_file()
+    docs_assets = workspace / "docs/assets/demo"
+    assert not any(path.suffix in {".png", ".mp4", ".webm"} for path in docs_assets.glob("*"))
+    assert (workspace / ".demo/media/assets/chitragupta-demo-walkthrough.mp4").is_file()
+    assert ".demo/media" in _output(result)
+    assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize("action", ["status", "logs", "down"])
+def test_demo_media_diagnostics_target_only_the_retained_media_project(tmp_path: Path, action: str) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "captured.mp4"
+    sentinel.write_text("retain output", encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path, media_services="chitragupta\n")
+
+    result = _run(workspace, environment, "media", action)
+
+    assert result.returncode == 0, _output(result)
+    expected_action = ("ps", "--all") if action == "status" else (action,)
+    assert _commands(command_log)[-1] == _media_compose(*expected_action)
+    assert sentinel.read_text(encoding="utf-8") == "retain output"
+    assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize("failure", ["up", "media-capture", "media-encoder", "media-final-catalog", "media-manifest"])
+def test_demo_media_retains_post_start_failures_for_diagnosis_without_interactive_teardown(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, failure=failure)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    assert "Demo media capture failed. Media containers were left in place for diagnosis." in _output(result)
+    assert "Run './demo media status' to inspect service state." in _output(result)
+    assert "Run './demo media logs' to inspect service output." in _output(result)
+    assert "Run './demo media down' to stop the media stack." in _output(result)
+    commands = _commands(command_log)
+    assert _media_compose("down") not in commands
+    assert not any(command == (*ALL_FILES, "down") for command in commands)
+    assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize("failure", ["build", "pull", "media-spec", "generator", "media-catalog"])
+def test_demo_media_reports_pre_start_failure_without_claiming_retained_containers(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, failure=failure)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    assert "Media containers were left in place" not in _output(result)
+    assert _media_compose("down") not in _commands(command_log)
+    assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize("failure", ["build", "pull", "media-spec"])
+def test_demo_media_does_not_delete_previous_outputs_until_preflight_build_and_specification_succeed(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    sentinel = media_root / "previous-manifest.json"
+    sentinel.write_text("retain until preflight completes", encoding="utf-8")
+    environment, _command_log = _fake_environment(tmp_path, failure=failure)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "retain until preflight completes"
+
+
+def test_demo_media_publish_rejects_unvalidated_local_state_without_github_or_capture_activity(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 1
+    assert "Validated Demo media is unavailable. Run './demo media' first." in _output(result)
+    assert _gh_commands(environment) == []
+    generation_tokens = ("build", "demo-generator", "media-capture", "media-encoder")
+    assert not any(token in command for command in _commands(command_log) for token in generation_tokens)
+
+
+def test_demo_media_publish_dispatches_the_real_validator_through_the_compose_boundary(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    (media_root / "manifest.json").write_text("{}", encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path, dispatch_real_media_validator=True)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 1
+    assert "Demo media validation failed; publication was not attempted." in _output(result)
+    assert _media_compose(
+        "run",
+        "--pull",
+        "never",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "validate",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--media-root",
+        MEDIA_ROOT_PATH,
+    ) in _commands(command_log)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_publish_warns_for_an_unreleased_clean_commit_and_uploads_only_stable_assets(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    assets = media_root / "assets"
+    assets.mkdir(parents=True)
+    stable_assets = (
+        "chitragupta-demo-dashboard.png",
+        "chitragupta-demo-cost-explorer.png",
+        "chitragupta-demo-topic-attribution.png",
+        "chitragupta-demo-pipeline-status.png",
+        "chitragupta-demo-focus-mapping-preview.png",
+        "chitragupta-demo-walkthrough.mp4",
+        "manifest.json",
+    )
+    for name in stable_assets:
+        destination = media_root / name if name == "manifest.json" else assets / name
+        destination.write_text(name, encoding="utf-8")
+    environment, command_log = _fake_environment(tmp_path)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 0, _output(result)
+    warning = "WARNING: source commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is not a published stable release"
+    assert warning in _output(result)
+    generation_tokens = ("build", "demo-generator", "media-capture", "media-encoder")
+    assert not any(token in command for command in _commands(command_log) for token in generation_tokens)
+    gh_commands = _gh_commands(environment)
+    assert any(
+        command.startswith("release create demo-media") and "--latest=false" in command for command in gh_commands
+    )
+    upload = next(command for command in gh_commands if command.startswith("release upload demo-media"))
+    assert "--clobber" in upload
+    assert {Path(path).name for path in upload.split() if path.startswith(str(media_root))} == set(stable_assets)
+    assert "chitragupta-demo-dashboard-poster.webp" not in upload
+
+
+def test_demo_media_publish_rejects_a_real_git_describe_failure(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(
+        tmp_path,
+        git_describe_status=128,
+        git_describe_output="fatal: not a git repository (or any of the parent directories): .git",
+    )
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 128
+    assert "Unable to inspect the source stable tag (git describe exited 128)." in _output(result)
+    assert "not a git repository" in _output(result)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_publish_keeps_a_published_exact_stable_tag_silent(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(
+        tmp_path,
+        git_tag="v1.2.3",
+        gh_stable_release_exists=True,
+    )
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 0, _output(result)
+    assert "not a published stable release" not in _output(result)
+    assert "has no published GitHub Release" not in _output(result)
+
+
+def test_demo_media_publish_keeps_an_existing_release_non_latest(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = workspace / ".demo" / "media"
+    media_root.mkdir(parents=True)
+    (media_root / "manifest.json").write_text("{}", encoding="utf-8")
+    environment, _command_log = _fake_environment(tmp_path, gh_release_exists=True)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 0, _output(result)
+    gh_commands = _gh_commands(environment)
+    assert not any(command.startswith("release create demo-media") for command in gh_commands)
+    assert any(command.startswith("release edit demo-media") and "--latest=false" in command for command in gh_commands)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "diagnostic"),
+    [
+        ("release-create", 7, "Demo media GitHub Release creation failed"),
+        ("release-edit", 8, "Demo media GitHub Release edit failed"),
+        ("release-upload", 9, "Demo media GitHub Release upload failed"),
+    ],
+)
+def test_demo_media_publish_preserves_github_failure_status_and_branch(
+    tmp_path: Path,
+    failure: str,
+    expected_status: int,
+    diagnostic: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(
+        tmp_path,
+        gh_release_exists=failure == "release-edit",
+        gh_failure=failure,
+    )
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == expected_status
+    assert diagnostic in _output(result)
+
+
+def test_demo_media_publish_rejects_dirty_worktree_before_github_release_actions(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, git_status=" M demo")
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 1
+    assert "Demo media publication requires a clean worktree." in _output(result)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_publish_rejects_capture_from_a_different_head(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    media_root = _write_fake_publish_workspace(workspace)
+    (media_root / "manifest.json").write_text(
+        '{"source_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source_worktree_clean":true}\n',
+        encoding="utf-8",
+    )
+    environment, _command_log = _fake_environment(tmp_path)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 1
+    assert "does not match current HEAD" in _output(result)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_publish_distinguishes_missing_gh_from_release_probe_failure(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, gh_available=False)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 1
+    assert "gh is required for Demo media publication." in _output(result)
+
+
+def test_demo_media_publish_allows_an_exact_stable_tag_without_a_published_release(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, git_tag="v1.2.3", gh_stable_release_exists=False)
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 0, _output(result)
+    assert "has no published GitHub Release; continuing" in _output(result)
+
+
+def test_demo_media_publish_stops_on_stable_release_infrastructure_failure(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    _write_fake_publish_workspace(workspace)
+    environment, _command_log = _fake_environment(tmp_path, git_tag="v1.2.3", gh_failure="stable-view")
+
+    result = _run(workspace, environment, "media", "publish")
+
+    assert result.returncode == 5
+    assert "Unable to verify the source release v1.2.3" in _output(result)
+
+
+def test_demo_media_public_launcher_can_publish_a_production_shaped_capture(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    fixture_root = tmp_path / "fixture"
+    fixture_root.mkdir()
+    media_fixture = _write_real_media_fixture(workspace, fixture_root)
+    environment, command_log = _fake_environment(
+        tmp_path,
+        media_outputs=True,
+        media_fixture=media_fixture,
+        dispatch_real_media_validator=True,
+    )
+
+    capture = _run(workspace, environment, "media")
+    assert capture.returncode == 0, _output(capture)
+    publication = _run(workspace, environment, "media", "publish")
+
+    assert publication.returncode == 0, _output(publication)
+    assert 'valid": true' in _output(publication)
+    assert any(command.startswith("release upload demo-media") for command in _gh_commands(environment))
+    assert _media_compose("down") in _commands(command_log)
+
+
+def test_demo_media_capture_distinguishes_poster_copy_and_teardown_failures(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, media_outputs=True, cat_failure=True)
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 1
+    assert "Demo media poster copy failed." in _output(result)
+    assert _media_compose("down") not in _commands(command_log)
+
+    teardown_root = tmp_path / "teardown"
+    teardown_root.mkdir()
+    workspace = _copy_public_demo(teardown_root)
+    environment, command_log = _fake_environment(teardown_root, media_outputs=True, failure="teardown")
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 79
+    assert "Demo media teardown failed." in _output(result)
+    assert _media_compose("down") in _commands(command_log)

@@ -10,6 +10,11 @@ Usage:
   ./demo status
   ./demo logs
   ./demo down
+  ./demo media
+  ./demo media publish
+  ./demo media status
+  ./demo media logs
+  ./demo media down
 EOF
 }
 
@@ -752,6 +757,388 @@ Run './demo down' to stop the stack.
 EOF
 }
 
+media_retained_failure_diagnostic() {
+    cat >&2 <<'EOF'
+Demo media capture failed. Media containers were left in place for diagnosis.
+Run './demo media status' to inspect service state.
+Run './demo media logs' to inspect service output.
+Run './demo media down' to stop the media stack.
+EOF
+}
+
+media_compose() {
+    "${COMPOSE[@]}" "${MEDIA_COMPOSE[@]}" "$@"
+}
+
+media_prestart_failure() {
+    local status=$1 message=$2
+    echo "${message}" >&2
+    exit "${status}"
+}
+
+media_poststart_failure() {
+    local status=$1 message=$2
+    echo "${message}" >&2
+    media_retained_failure_diagnostic
+    exit "${status}"
+}
+
+media_set_environment() {
+    DEMO_IMAGE_TAG=local
+    DEMO_MEDIA_PATH=.demo/media
+    DEMO_MEDIA_DIR="$REPO_ROOT/.demo/media"
+    DEMO_STATE_DIR="$DEMO_MEDIA_DIR/state"
+    DEMO_BIND_ADDRESS=127.0.0.1
+    DEMO_DISPLAY_HOST=127.0.0.1
+    DEMO_UI_PORT=8081
+    DEMO_API_PORT=8080
+    DEMO_GRAFANA_PORT=3000
+    export DEMO_IMAGE_TAG DEMO_MEDIA_DIR DEMO_STATE_DIR
+    export DEMO_BIND_ADDRESS DEMO_DISPLAY_HOST DEMO_UI_PORT DEMO_API_PORT DEMO_GRAFANA_PORT
+}
+
+media_service_output_has_container() {
+    local output=$1 service=$2
+    compose_service_in_output "${output}" "${service}"
+}
+
+media_check_interactive_stack() {
+    local output status
+    if output=$("${COMPOSE[@]}" "${ALL_COMPOSE[@]}" ps --quiet 2>&1); then
+        :
+    else
+        status=$?
+        echo "Unable to inspect the interactive Demo Stack." >&2
+        printf '%s\n' "${output}" >&2
+        exit "${status}"
+    fi
+    if [[ -n "${output//[[:space:]]/}" ]]; then
+        echo "Interactive Demo Stack is active. Run './demo down' before './demo media'." >&2
+        exit 1
+    fi
+}
+
+media_check_retained_stack() {
+    local output status
+    if output=$(media_compose ps --all --quiet 2>&1); then
+        :
+    else
+        status=$?
+        echo "Unable to inspect the Demo media stack." >&2
+        printf '%s\n' "${output}" >&2
+        exit "${status}"
+    fi
+    if [[ -n "${output//[[:space:]]/}" ]]; then
+        echo "A Demo media stack already exists. Inspect it or run './demo media down' before capturing again." >&2
+        exit 1
+    fi
+}
+
+media_capture() {
+    local source_commit source_worktree_clean output status spec_result git_status spec_profile spec_anchor
+    media_set_environment
+    media_check_interactive_stack
+    media_check_retained_stack
+
+    if ! source_commit=$(git rev-parse HEAD 2>/dev/null); then
+        echo "Unable to identify the Demo media source commit." >&2
+        exit 1
+    fi
+    if ! git_status=$(git status --porcelain 2>/dev/null); then
+        echo "Unable to determine the Demo media source worktree state." >&2
+        exit 1
+    fi
+    if [[ -z "${git_status}" ]]; then
+        source_worktree_clean=true
+    else
+        source_worktree_clean=false
+    fi
+
+    if output=$(media_compose build chitragupta chitragupta-ui media-capture 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_prestart_failure "${status}" "Demo media checkout build failed."
+    fi
+    if output=$(media_compose pull media-encoder 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_prestart_failure "${status}" "Demo media encoder acquisition failed."
+    fi
+    if ! mkdir -p -- "${DEMO_MEDIA_DIR}" "${DEMO_STATE_DIR}"; then
+        media_prestart_failure 1 "Unable to prepare Demo media bind-mount directories."
+    fi
+    if spec_result=$(media_compose run --rm --no-deps media-tool spec --spec /opt/chitragupta-demo-media/capture-spec.json 2>&1); then
+        printf '%s\n' "${spec_result}"
+    else
+        status=$?
+        printf '%s\n' "${spec_result}" >&2
+        media_prestart_failure "${status}" "Invalid Demo media capture specification."
+    fi
+
+    spec_profile=$(printf '%s\n' "${spec_result}" | sed -n 's/.*"profile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    spec_anchor=$(printf '%s\n' "${spec_result}" | sed -n 's/.*"anchor_date"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [[ "${spec_profile}" != showcase || ! "${spec_anchor}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        media_prestart_failure 1 "Demo media specification did not provide a valid profile and anchor."
+    fi
+    DEMO_PROFILE=${spec_profile}
+    DEMO_ANCHOR_DATE=${spec_anchor}
+    export DEMO_PROFILE DEMO_ANCHOR_DATE
+
+    rm -rf -- "${DEMO_MEDIA_DIR}"
+    mkdir -p -- "${DEMO_MEDIA_DIR}/state" "${DEMO_MEDIA_DIR}/assets" "${DEMO_MEDIA_DIR}/work"
+
+    if output=$(media_compose run --rm demo-generator 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_prestart_failure "${status}" "Demo media generation failed."
+    fi
+    if output=$(media_compose run --rm --no-deps media-tool catalog \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --config /app/config/config.yaml \
+        --output /app/media/work/synthetic-catalog.json \
+        --srt-output /app/media/work/captions.srt \
+        --state-dir /app/media/state 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_prestart_failure "${status}" "Demo media catalog validation failed."
+    fi
+
+    if output=$(media_compose up --detach --wait --force-recreate chitragupta chitragupta-ui 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media API/UI startup failed."
+    fi
+    if output=$(media_compose run --rm --no-deps media-capture \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --catalog /app/media/work/synthetic-catalog.json \
+        --output /app/media 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media browser capture failed."
+    fi
+    if output=$(media_compose run --rm --no-deps media-encoder \
+        /opt/chitragupta-demo-media/capture-spec.json /app/media 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media encoding failed."
+    fi
+    if output=$(media_compose stop chitragupta chitragupta-ui 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media API/UI shutdown failed."
+    fi
+    if output=$(media_compose run --rm --no-deps media-tool catalog \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --config /app/config/config.yaml \
+        --output /app/media/work/synthetic-catalog.json \
+        --srt-output /app/media/work/captions.srt \
+        --state-dir /app/media/state 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media final catalog validation failed."
+    fi
+    if output=$(media_compose run --rm --no-deps media-tool manifest \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --media-root /app/media \
+        --source-commit "${source_commit}" \
+        --source-worktree-clean "${source_worktree_clean}" 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media manifest validation failed."
+    fi
+    if ! mkdir -p -- docs/assets/demo ||
+        ! cat -- "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard-poster.webp" \
+            > docs/assets/demo/chitragupta-demo-dashboard-poster.webp; then
+        media_poststart_failure 1 "Demo media poster copy failed."
+    fi
+    if output=$(media_compose down 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media teardown failed."
+    fi
+    echo "Demo media capture complete: ${DEMO_MEDIA_PATH}"
+    echo "Poster: docs/assets/demo/chitragupta-demo-dashboard-poster.webp"
+}
+
+media_diagnostic() {
+    media_set_environment
+    case "${DEMO_ACTION}" in
+        media_status) media_compose ps --all ;;
+        media_logs) media_compose logs ;;
+        media_down) media_compose down ;;
+    esac
+    exit $?
+}
+
+media_publish() {
+    local output status source_commit source_worktree_clean manifest_path captured_commit stable_tag stable_release git_status
+    local stable_probe_status stable_probe_output stable_release_status release_view_status release_output
+    media_set_environment
+    command -v git >/dev/null 2>&1 || { echo "git is required for Demo media publication." >&2; exit 1; }
+    command -v gh >/dev/null 2>&1 || { echo "gh is required for Demo media publication." >&2; exit 1; }
+    if output=$(media_compose run --pull never --rm --no-deps media-tool validate \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --media-root /app/media 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        echo "Demo media validation failed; publication was not attempted." >&2
+        echo "Validated Demo media is unavailable. Run './demo media' first." >&2
+        exit "${status}"
+    fi
+    manifest_path="${DEMO_MEDIA_DIR}/manifest.json"
+    if [[ ! -f "${manifest_path}" ]]; then
+        echo "Validated Demo media is unavailable. Run './demo media' first." >&2
+        exit 1
+    fi
+    source_commit=$(git rev-parse HEAD 2>/dev/null) || {
+        echo "Unable to identify the Demo media source commit." >&2
+        exit 1
+    }
+    if ! git_status=$(git status --porcelain 2>/dev/null); then
+        echo "Unable to determine the Demo media source worktree state." >&2
+        exit 1
+    fi
+    if [[ -n "${git_status}" ]]; then
+        echo "Demo media publication requires a clean worktree." >&2
+        exit 1
+    fi
+    captured_commit=$(sed -n 's/.*"source_commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "${manifest_path}" 2>/dev/null || true)
+    if [[ -n "${captured_commit}" && "${captured_commit}" != "${source_commit}" ]]; then
+        echo "Demo media source commit ${captured_commit} does not match current HEAD ${source_commit}. Run './demo media'." >&2
+        exit 1
+    fi
+    source_worktree_clean=$(sed -n 's/.*"source_worktree_clean"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "${manifest_path}" 2>/dev/null || true)
+    if [[ "${source_worktree_clean}" == false ]]; then
+        echo "Validated Demo media is unavailable. Run './demo media' first." >&2
+        exit 1
+    fi
+
+    stable_tag=
+    stable_probe_status=0
+    stable_probe_output=
+    if stable_probe_output=$(git describe --tags --exact-match --match 'v*.*.*' HEAD 2>&1); then
+        stable_tag=${stable_probe_output}
+    else
+        stable_probe_status=$?
+        if ((stable_probe_status != 128)); then
+            printf '%s\n' "${stable_probe_output}" >&2
+            echo "Unable to inspect the source stable tag (git describe exited ${stable_probe_status})." >&2
+            exit "${stable_probe_status}"
+        fi
+        case "${stable_probe_output}" in
+            "fatal: no tag exactly matches '"*"'") ;;
+            *)
+                printf '%s\n' "${stable_probe_output}" >&2
+                echo "Unable to inspect the source stable tag (git describe exited ${stable_probe_status})." >&2
+                exit "${stable_probe_status}"
+                ;;
+        esac
+    fi
+    if ((stable_probe_status == 0)) && [[ ! "${stable_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        stable_tag=
+    fi
+    if [[ -n "${stable_tag}" ]]; then
+        stable_release=
+        stable_release_status=0
+        stable_release=$(gh release view "${stable_tag}" --json isDraft,isPrerelease 2>&1) || stable_release_status=$?
+        if ((stable_release_status > 1)); then
+            echo "Unable to verify the source release ${stable_tag} (gh release view exited ${stable_release_status})." >&2
+            exit "${stable_release_status}"
+        fi
+        if ((stable_release_status == 1)) && [[ -z "${stable_release}" || "${stable_release}" == *"release not found"* ||
+            "${stable_release}" == *"HTTP 404"* ]]; then
+            echo "WARNING: stable tag ${stable_tag} has no published GitHub Release; continuing."
+            stable_tag=
+        elif ((stable_release_status != 0)); then
+            printf '%s\n' "${stable_release}" >&2
+            echo "Unable to verify the source release ${stable_tag}." >&2
+            exit "${stable_release_status}"
+        elif [[ "${stable_release}" == *'"isDraft":true'* ||
+            "${stable_release}" == *'"isDraft": true'* ||
+            "${stable_release}" == *'"isPrerelease":true'* ||
+            "${stable_release}" == *'"isPrerelease": true'* ]]; then
+            stable_tag=
+        fi
+    fi
+    if [[ -z "${stable_tag}" ]]; then
+        echo "WARNING: source commit ${source_commit} is not a published stable release; demo media may be newer than the default GHCR images. Continuing."
+    fi
+
+    release_view_status=0
+    release_output=$(gh release view demo-media --json isDraft,isPrerelease,isLatest,url 2>&1) || release_view_status=$?
+    if ((release_view_status == 0)); then
+        output=
+        if output=$(gh release edit demo-media --draft=false --prerelease=false --latest=false 2>&1); then
+            :
+        else
+            status=$?
+            printf '%s\n' "${output}" >&2
+            echo "Demo media GitHub Release edit failed (gh exited ${status})." >&2
+            exit "${status}"
+        fi
+    elif ((release_view_status == 1)) && [[ -z "${release_output}" || "${release_output}" == *"release not found"* ||
+        "${release_output}" == *"HTTP 404"* ]]; then
+        output=
+        if output=$(gh release create demo-media --title "Chitragupta Demo Media" --notes "Synthetic Demo Experience media." --latest=false 2>&1); then
+            :
+        else
+            status=$?
+            printf '%s\n' "${output}" >&2
+            echo "Demo media GitHub Release creation failed (gh exited ${status})." >&2
+            exit "${status}"
+        fi
+    else
+        printf '%s\n' "${release_output}" >&2
+        echo "Unable to inspect the demo-media GitHub Release (gh release view exited ${release_view_status})." >&2
+        exit "${release_view_status}"
+    fi
+    if output=$(gh release upload demo-media \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-dashboard.png" \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-cost-explorer.png" \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-topic-attribution.png" \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-pipeline-status.png" \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-focus-mapping-preview.png" \
+        "${DEMO_MEDIA_DIR}/assets/chitragupta-demo-walkthrough.mp4" \
+        "${DEMO_MEDIA_DIR}/manifest.json" --clobber 2>&1); then
+        :
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        echo "Demo media GitHub Release upload failed (gh exited ${status})." >&2
+        exit "${status}"
+    fi
+    printf '%s\n' "${output}"
+    if [[ -n "${release_output:-}" ]]; then
+        printf '%s\n' "${release_output}"
+    else
+        echo "https://github.com/waliaabhishek/chitragupta/releases/tag/demo-media"
+    fi
+}
+
 DEMO_ACTION=start
 DEMO_PROFILE=
 DEMO_GRAFANA_ENABLED=0
@@ -769,6 +1156,21 @@ elif [[ "$1" == reset ]]; then
         :
     elif (($# == 2)) && [[ "$2" == --clean || "$2" == --showcase ]]; then
         DEMO_PROFILE=${2#--}
+    else
+        invalid_usage
+    fi
+elif [[ "$1" == media ]]; then
+    DEMO_PROFILE=
+    if (($# == 1)); then
+        DEMO_ACTION=media_capture
+    elif (($# == 2)); then
+        case "$2" in
+            publish) DEMO_ACTION=media_publish ;;
+            status) DEMO_ACTION=media_status ;;
+            logs) DEMO_ACTION=media_logs ;;
+            down) DEMO_ACTION=media_down ;;
+            *) invalid_usage ;;
+        esac
     else
         invalid_usage
     fi
@@ -803,7 +1205,9 @@ else
     done
     [[ -n "$DEMO_PROFILE" ]] || DEMO_PROFILE=clean
 fi
-if [[ "$DEMO_ACTION" != reset && -z "$DEMO_PROFILE" ]]; then
+if [[ "$DEMO_ACTION" != reset && "$DEMO_ACTION" != media_capture && "$DEMO_ACTION" != media_publish &&
+    "$DEMO_ACTION" != media_status && "$DEMO_ACTION" != media_logs && "$DEMO_ACTION" != media_down &&
+    -z "$DEMO_PROFILE" ]]; then
     DEMO_PROFILE=clean
 fi
 
@@ -843,17 +1247,23 @@ if [[ "$DEMO_ACTION" == reset && -z "$DEMO_PROFILE" ]]; then
     fi
 fi
 
-case "$DEMO_PROFILE" in
-    clean) DEMO_STATE_PATH=.demo/state/clean; DEMO_STATE_DIR=../../.demo/state/clean ;;
-    showcase) DEMO_STATE_PATH=.demo/state/showcase; DEMO_STATE_DIR=../../.demo/state/showcase ;;
-    *) echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2; exit 1 ;;
-esac
+if [[ "$DEMO_ACTION" == media_* ]]; then
+    DEMO_STATE_PATH=.demo/state/media
+    DEMO_STATE_DIR=
+else
+    case "$DEMO_PROFILE" in
+        clean) DEMO_STATE_PATH=.demo/state/clean; DEMO_STATE_DIR=../../.demo/state/clean ;;
+        showcase) DEMO_STATE_PATH=.demo/state/showcase; DEMO_STATE_DIR=../../.demo/state/showcase ;;
+        *) echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2; exit 1 ;;
+    esac
+fi
 export DEMO_PROFILE DEMO_STATE_DIR
 
 BASE_COMPOSE_FILE=examples/demo/docker-compose.yml
 GRAFANA_COMPOSE_FILE=examples/demo/docker-compose.grafana.yml
 BASE_COMPOSE=(-f "$BASE_COMPOSE_FILE")
 ALL_COMPOSE=(-f "$BASE_COMPOSE_FILE" -f "$GRAFANA_COMPOSE_FILE")
+MEDIA_COMPOSE=(-p chitragupta-demo-media -f "$BASE_COMPOSE_FILE" -f examples/demo/docker-compose.media.yml)
 
 COMPOSE=()
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -874,6 +1284,16 @@ if ! DEMO_GID=$(id -g) || [[ ! "$DEMO_GID" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 export DEMO_UID DEMO_GID
+
+if [[ "$DEMO_ACTION" == media_capture ]]; then
+    media_capture
+    exit $?
+elif [[ "$DEMO_ACTION" == media_publish ]]; then
+    media_publish
+    exit $?
+elif [[ "$DEMO_ACTION" == media_status || "$DEMO_ACTION" == media_logs || "$DEMO_ACTION" == media_down ]]; then
+    media_diagnostic
+fi
 
 if [[ "$DEMO_ACTION" == status || "$DEMO_ACTION" == logs || "$DEMO_ACTION" == down ]]; then
     DEMO_BIND_ADDRESS=127.0.0.1

@@ -2,6 +2,8 @@
 
 ### Added
 
+- Document the synthetic Demo media bundle, stable release assets, lifecycle
+  commands, and maintainer refresh workflow.
 - Add a portable root `./demo` launcher with Clean and Showcase profiles,
   optional Grafana, localhost/LAN controls, release-image pulls or source
   builds, lifecycle operations, and port-ownership diagnostics.

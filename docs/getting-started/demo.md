@@ -137,6 +137,84 @@ native IPv6 wildcard listener was recorded, the launcher prints the matching
 process/PID conflict before this retained-container guidance. Health and
 other non-bind failures do not produce that port diagnosis.
 
+## Demo media
+
+![Chitragupta Demo dashboard](../assets/demo/chitragupta-demo-dashboard-poster.webp)
+
+The media bundle uses the Showcase profile and fully synthetic data. It does not
+call a provider or require provider credentials. The poster above is the only
+capture asset tracked in this repository. Screenshots, the walkthrough video,
+the generated database evidence, and the capture manifest are kept out of git;
+the approved screenshots, video, and manifest are available from the stable
+[`demo-media` GitHub Release](https://github.com/waliaabhishek/chitragupta/releases/tag/demo-media).
+
+Stable release assets:
+
+| Asset | Link |
+|---|---|
+| Dashboard screenshot | [chitragupta-demo-dashboard.png](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-dashboard.png) |
+| Cost explorer screenshot | [chitragupta-demo-cost-explorer.png](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-cost-explorer.png) |
+| Topic attribution screenshot | [chitragupta-demo-topic-attribution.png](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-topic-attribution.png) |
+| Pipeline status screenshot | [chitragupta-demo-pipeline-status.png](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-pipeline-status.png) |
+| FOCUS Mapping Preview screenshot | [chitragupta-demo-focus-mapping-preview.png](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-focus-mapping-preview.png) |
+| Walkthrough video | [chitragupta-demo-walkthrough.mp4](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-walkthrough.mp4) |
+| Capture manifest | [manifest.json](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/manifest.json) |
+
+### Capture and operate the media stack
+
+From the repository root, capture the current checkout with:
+
+```bash
+./demo media
+```
+
+This creates an isolated media workspace under `.demo/media`, generates fresh
+Showcase state, captures the five still scenes and walkthrough, validates the
+catalog and manifest, and copies the poster to
+`docs/assets/demo/chitragupta-demo-dashboard-poster.webp`. A successful run
+stops the API and UI before removing the media Compose containers and network;
+the generated evidence remains under `.demo/media` for inspection.
+
+Use these commands to inspect or clean up the media stack:
+
+```bash
+./demo media status
+./demo media logs
+./demo media down
+```
+
+If capture, validation, or teardown fails, the launcher retains the media
+containers and prints the failure-specific diagnostic. Run `./demo media
+status` and `./demo media logs` before cleanup; run `./demo media down` after
+collecting the evidence. A retained media stack must be removed before a new
+capture.
+
+After a clean, reviewed capture, publish the existing validated assets
+explicitly:
+
+```bash
+./demo media publish
+```
+
+Publication does not recapture the Demo. It requires a clean checkout, a
+manifest produced from the current commit, and an authenticated GitHub CLI. It
+uploads the stable screenshot, video, and manifest asset names listed above to
+the `demo-media` release.
+
+### Refresh media after a material change
+
+Maintainers own the refresh when a UI, data, or capture change materially
+changes the Demo experience:
+
+1. Run `./demo media` and inspect every generated screenshot and the full video.
+2. Review the visuals and the manifest values; correct the change if the
+   capture no longer represents the intended experience.
+3. Commit the implementation, documentation, and updated poster after review.
+4. From that clean commit, run `./demo media` again to create the publishable
+   capture and verify the result once more.
+5. Run `./demo media publish` explicitly, then open the `demo-media` release and
+   verify each published asset and its stable URL.
+
 ## Raw Compose escape hatch
 
 Run these commands from the repository root. Set the same values that the
