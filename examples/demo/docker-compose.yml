@@ -1,74 +1,26 @@
 services:
   demo-generator:
-    image: ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}
-    user: "${DEMO_UID}:${DEMO_GID}"
-    entrypoint: ["python", "-m", "demo.generator"]
-    command:
-      [
-        "--config",
-        "/app/config/config.yaml",
-        "--anchor",
-        "${DEMO_ANCHOR_DATE:-}",
-        "--profile",
-        "${DEMO_PROFILE:-clean}",
-        "--state-dir",
-        "/app/data",
-      ]
-    volumes:
-      - ./config.yaml:/app/config/config.yaml:ro
-      - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw
-    networks:
-      - demo
-    restart: "no"
+    extends:
+      file: docker-compose.internal.yml
+      service: demo-generator
 
   chitragupta:
-    image: ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}
-    user: "${DEMO_UID}:${DEMO_GID}"
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    command:
-      ["--config-file", "/app/config/config.yaml", "--mode", "api"]
-    volumes:
-      - ./config.yaml:/app/config/config.yaml:ro
-      - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw
+    extends:
+      file: docker-compose.internal.yml
+      service: chitragupta
     ports:
       - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"
     networks:
-      - demo
       - demo-public
-    restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import json, urllib.request; health = urllib.request.urlopen('http://127.0.0.1:8080/health'); readiness = urllib.request.urlopen('http://127.0.0.1:8080/api/v1/readiness'); payload = json.load(readiness); assert health.status == 200 and payload.get('status') == 'ready' and payload.get('mode') == 'api'\"",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
 
   chitragupta-ui:
-    image: ghcr.io/waliaabhishek/chitragupta-ui:${DEMO_IMAGE_TAG:-latest}
-    build:
-      context: ../../frontend
-      dockerfile: Dockerfile
+    extends:
+      file: docker-compose.internal.yml
+      service: chitragupta-ui
     ports:
       - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"
     networks:
-      - demo
       - demo-public
-    restart: unless-stopped
-    depends_on:
-      chitragupta:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
 
 networks:
   demo:

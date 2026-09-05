@@ -42,5 +42,8 @@
   it uses the last-active profile and defaults to Clean when none exists. Stored
   compatibility checks stop with a profile-specific reset command, and state
   older than 15 days gets a reset recommendation without automatic refresh.
+- Keep Demo media capture API and UI services internal-only so host ports 8080
+  and 8081 do not need to be available; normal interactive port publication is
+  unchanged.
 
 --8<-- "CHANGELOG.md"

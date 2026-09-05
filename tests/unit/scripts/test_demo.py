@@ -18,10 +18,11 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BASE = "examples/demo/docker-compose.yml"
 GRAFANA = "examples/demo/docker-compose.grafana.yml"
+INTERNAL = "examples/demo/docker-compose.internal.yml"
 MEDIA = "examples/demo/docker-compose.media.yml"
 BASE_FILES = ("-f", BASE)
 ALL_FILES = ("-f", BASE, "-f", GRAFANA)
-MEDIA_FILES = ("-f", BASE, "-f", MEDIA)
+MEDIA_FILES = ("-f", INTERNAL, "-f", MEDIA)
 MEDIA_PROJECT = ("-p", "chitragupta-demo-media")
 MEDIA_SPEC_PATH = "/opt/chitragupta-demo-media/capture-spec.json"
 MEDIA_ROOT_PATH = "/app/media"
@@ -69,6 +70,9 @@ def _copy_grafana_compose_fixture(tmp_path: Path) -> Path:
             destination = workspace / compose_file
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PROJECT_ROOT / compose_file, destination)
+    internal_destination = workspace / INTERNAL
+    internal_destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(PROJECT_ROOT / INTERNAL, internal_destination)
     for environment_example in GRAFANA_EXAMPLE_ENV_FILES:
         destination = workspace / Path(environment_example).with_suffix("")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1110,21 +1114,26 @@ def test_demo_builds_current_checkout_without_pulling_released_application_image
     assert {call[1] for call in _non_port_calls(command_log)[1:]} == {"local"}
 
 
-def test_demo_compose_uses_published_images_checkout_builds_and_parameterized_bindings() -> None:
-    compose = yaml.safe_load((PROJECT_ROOT / BASE).read_text(encoding="utf-8"))
-    services = compose["services"]
+def test_demo_compose_uses_shared_images_and_builds_with_public_parameterized_bindings() -> None:
+    internal = yaml.safe_load((PROJECT_ROOT / INTERNAL).read_text(encoding="utf-8"))
+    wrapper = yaml.safe_load((PROJECT_ROOT / BASE).read_text(encoding="utf-8"))
+    services = internal["services"]
 
     assert services["demo-generator"]["image"] == "ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}"
     assert services["chitragupta"]["image"] == "ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-latest}"
     assert services["chitragupta-ui"]["image"] == "ghcr.io/waliaabhishek/chitragupta-ui:${DEMO_IMAGE_TAG:-latest}"
     assert services["chitragupta"]["build"] == {"context": "../..", "dockerfile": "Dockerfile"}
     assert services["chitragupta-ui"]["build"] == {"context": "../../frontend", "dockerfile": "Dockerfile"}
-    assert services["chitragupta"]["ports"] == ["${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"]
-    assert services["chitragupta-ui"]["ports"] == ["${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"]
+    assert wrapper["services"]["chitragupta"]["ports"] == [
+        "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"
+    ]
+    assert wrapper["services"]["chitragupta-ui"]["ports"] == [
+        "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"
+    ]
 
 
 def test_demo_compose_preserves_generator_profile_and_selected_state_ownership_contracts() -> None:
-    compose = yaml.safe_load((PROJECT_ROOT / BASE).read_text(encoding="utf-8"))
+    compose = yaml.safe_load((PROJECT_ROOT / INTERNAL).read_text(encoding="utf-8"))
     services = compose["services"]
     generator = services["demo-generator"]
     state_mount = "$" + "{DEMO_STATE_DIR:-../../.demo/state/clean}:/app/data:rw"
@@ -1990,7 +1999,7 @@ def test_demo_preserves_profile_generator_health_uid_date_and_network_baseline_i
     clean_before = _snapshot(clean_state)
     showcase = _run(workspace, environment, "--showcase")
 
-    compose = yaml.safe_load((PROJECT_ROOT / BASE).read_text(encoding="utf-8"))
+    compose = yaml.safe_load((PROJECT_ROOT / INTERNAL).read_text(encoding="utf-8"))
     services = compose["services"]
     assert clean.returncode == showcase.returncode == 0
     assert _snapshot(clean_state) == clean_before
@@ -2244,6 +2253,139 @@ def _render_compose_config(
     return config
 
 
+def _assert_rendered_interactive_service(
+    service: dict[str, Any],
+    *,
+    published_port: str,
+    target_port: int,
+    bind_address: str,
+    networks: set[str],
+) -> None:
+    assert service["ports"] == [
+        {
+            "mode": "ingress",
+            "host_ip": bind_address,
+            "published": published_port,
+            "target": target_port,
+            "protocol": "tcp",
+        }
+    ]
+    assert set(service["networks"]) == networks
+
+
+def test_demo_shared_internal_services_leave_host_publication_to_the_public_wrapper() -> None:
+    internal = yaml.safe_load((PROJECT_ROOT / INTERNAL).read_text(encoding="utf-8"))
+    wrapper = yaml.safe_load((PROJECT_ROOT / BASE).read_text(encoding="utf-8"))
+
+    assert set(internal["services"]) == {"demo-generator", "chitragupta", "chitragupta-ui"}
+    assert internal["networks"] == {"demo": {"internal": True}}
+    for service_name in ("demo-generator", "chitragupta", "chitragupta-ui"):
+        assert internal["services"][service_name]["networks"] == ["demo"]
+    for service_name in ("chitragupta", "chitragupta-ui"):
+        assert "ports" not in internal["services"][service_name]
+
+    assert wrapper["services"]["demo-generator"] == {
+        "extends": {"file": "docker-compose.internal.yml", "service": "demo-generator"}
+    }
+    assert wrapper["services"]["chitragupta"]["extends"] == {
+        "file": "docker-compose.internal.yml",
+        "service": "chitragupta",
+    }
+    assert wrapper["services"]["chitragupta-ui"]["extends"] == {
+        "file": "docker-compose.internal.yml",
+        "service": "chitragupta-ui",
+    }
+    assert wrapper["services"]["chitragupta"]["ports"] == [
+        "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"
+    ]
+    assert wrapper["services"]["chitragupta-ui"]["ports"] == [
+        "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"
+    ]
+    assert wrapper["services"]["chitragupta"]["networks"] == ["demo-public"]
+    assert wrapper["services"]["chitragupta-ui"]["networks"] == ["demo-public"]
+    assert wrapper["networks"] == {
+        "demo": {"internal": True},
+        "demo-public": {"driver": "bridge"},
+    }
+
+
+def test_demo_renders_interactive_and_media_networks_with_every_available_compose_frontend() -> None:
+    compose_commands = _available_compose_commands()
+    if not compose_commands:
+        pytest.skip("Docker Compose is not available")
+
+    base_environment = os.environ.copy()
+    base_environment.update(
+        {
+            "DEMO_UID": "4242",
+            "DEMO_GID": "4343",
+            "DEMO_IMAGE_TAG": "v12.34.56",
+            "DEMO_PROFILE": "showcase",
+            "DEMO_STATE_DIR": "../../.demo/state/showcase",
+            "DEMO_MEDIA_DIR": str((PROJECT_ROOT / ".demo/media").resolve()),
+        }
+    )
+    interactive_cases = (
+        ("local", "127.0.0.1", "8080", "8081", "3000", (BASE,)),
+        ("lan", "0.0.0.0", "8080", "8081", "3000", (BASE,)),
+        ("custom", "127.0.0.1", "9080", "9081", "3900", (BASE,)),
+        ("grafana", "127.0.0.1", "9080", "9081", "3900", (BASE, GRAFANA)),
+    )
+
+    for compose_command in compose_commands:
+        for _name, bind_address, api_port, ui_port, grafana_port, compose_files in interactive_cases:
+            environment = {
+                **base_environment,
+                "DEMO_BIND_ADDRESS": bind_address,
+                "DEMO_API_PORT": api_port,
+                "DEMO_UI_PORT": ui_port,
+                "DEMO_GRAFANA_PORT": grafana_port,
+            }
+            config = _render_compose_config(compose_command, PROJECT_ROOT, environment, compose_files)
+            services = config["services"]
+
+            _assert_rendered_interactive_service(
+                services["chitragupta"],
+                published_port=api_port,
+                target_port=8080,
+                bind_address=bind_address,
+                networks={"demo", "demo-public"},
+            )
+            _assert_rendered_interactive_service(
+                services["chitragupta-ui"],
+                published_port=ui_port,
+                target_port=80,
+                bind_address=bind_address,
+                networks={"demo", "demo-public"},
+            )
+            assert config["networks"]["demo"]["internal"] is True
+            assert config["networks"]["demo-public"]["driver"] == "bridge"
+            if compose_files == (BASE, GRAFANA):
+                _assert_rendered_interactive_service(
+                    services["grafana"],
+                    published_port=grafana_port,
+                    target_port=3000,
+                    bind_address=bind_address,
+                    networks={"default"},
+                )
+            else:
+                assert "grafana" not in services
+
+        media_config = _render_compose_config(
+            compose_command,
+            PROJECT_ROOT,
+            base_environment,
+            (INTERNAL, MEDIA),
+        )
+        media_services = media_config["services"]
+        for service_name in ("chitragupta", "chitragupta-ui"):
+            assert not media_services[service_name].get("ports", [])
+            assert set(media_services[service_name]["networks"]) == {"demo"}
+        assert set(media_services["media-capture"]["networks"]) == {"demo"}
+        assert set(media_config["networks"]) == {"demo"}
+        assert media_config["networks"]["demo"]["internal"] is True
+
+
 def _assert_rendered_grafana_plugin_environment(config: dict[str, Any], expected_pins: str) -> None:
     grafana_environment = config["services"]["grafana"]["environment"]
 
@@ -2493,6 +2635,38 @@ def test_demo_rejects_invalid_media_grammar_before_docker_git_or_media_mutation(
     assert not Path(environment["DEMO_GIT_LOG"]).exists()
     assert _gh_commands(environment) == []
     assert sentinel.read_text(encoding="utf-8") == "retain"
+
+
+@pytest.mark.parametrize("compose_form", ["plugin", "standalone"])
+def test_demo_media_uses_internal_services_and_reaches_health_gated_startup_with_standard_ports_occupied(
+    tmp_path: Path,
+    compose_form: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, compose_form=compose_form, media_outputs=True)
+    proc_root = Path(environment["DEMO_PROC_ROOT"])
+    _write_proc_table(
+        proc_root / "net" / "tcp",
+        (("0100007F", 8080, 9001), ("0100007F", 8081, 9002)),
+    )
+
+    result = _run(workspace, environment, "media")
+
+    assert result.returncode == 0, _output(result)
+    commands = _commands(command_log)
+    media_commands = _media_commands(command_log)
+    expected_prefix = (*MEDIA_PROJECT, *MEDIA_FILES)
+    assert media_commands
+    assert all(command[: len(expected_prefix)] == expected_prefix for command in media_commands)
+    assert all(BASE not in command for command in media_commands)
+    assert _media_compose("up", "--detach", "--wait", "--force-recreate", "chitragupta", "chitragupta-ui") in commands
+    assert _media_compose("stop", "chitragupta", "chitragupta-ui") in commands
+    assert _media_compose("down") in commands
+    assert not any("port" in command for command in commands)
+    forms = [call[0] for call in _calls(command_log)]
+    probe_forms = ["plugin"] if compose_form == "plugin" else ["plugin", "standalone"]
+    assert forms[: len(probe_forms)] == probe_forms
+    assert all(form == compose_form for form in forms[len(probe_forms) :])
 
 
 def test_demo_media_refuses_active_interactive_stack_before_build_or_media_deletion(tmp_path: Path) -> None:

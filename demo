@@ -1267,7 +1267,7 @@ BASE_COMPOSE_FILE=examples/demo/docker-compose.yml
 GRAFANA_COMPOSE_FILE=examples/demo/docker-compose.grafana.yml
 BASE_COMPOSE=(-f "$BASE_COMPOSE_FILE")
 ALL_COMPOSE=(-f "$BASE_COMPOSE_FILE" -f "$GRAFANA_COMPOSE_FILE")
-MEDIA_COMPOSE=(-p chitragupta-demo-media -f "$BASE_COMPOSE_FILE" -f examples/demo/docker-compose.media.yml)
+MEDIA_COMPOSE=(-p chitragupta-demo-media -f examples/demo/docker-compose.internal.yml -f examples/demo/docker-compose.media.yml)
 
 COMPOSE=()
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
