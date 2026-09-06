@@ -16,6 +16,10 @@ import { server } from "../../test/mocks/server";
 import type { ChargebackDimensionResponse } from "../../types/api";
 import { ChargebackDetailDrawer } from "./ChargebackDetailDrawer";
 
+const mockRegisterIdentifier = vi.hoisted(() =>
+  vi.fn<(identifier: string) => () => void>(() => vi.fn()),
+);
+
 vi.mock("antd", () => ({
   Drawer: ({
     open,
@@ -179,9 +183,10 @@ vi.mock("antd", () => ({
 
 vi.mock("../../providers/ResourceLinkContext", () => ({
   useResourceLinks: vi.fn(() => ({
-    enabled: false,
+    enabled: true,
     setEnabled: vi.fn(),
     resolveUrl: vi.fn(() => null),
+    registerIdentifier: mockRegisterIdentifier,
     isLoading: false,
   })),
   ResourceLinkProvider: ({ children }: { children: React.ReactNode }) =>
@@ -229,6 +234,7 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
 }
 
 beforeEach(() => {
+  mockRegisterIdentifier.mockClear();
   server.use(
     http.get("/api/v1/tenants/acme/chargebacks/42", () => {
       return HttpResponse.json(dimensionFixture);
@@ -330,6 +336,22 @@ describe("ChargebackDetailDrawer", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Dimension not found.")).toBeTruthy();
+    });
+  });
+
+  it("keeps the loaded identity and resource values on the shared renderer", async () => {
+    render(
+      <ChargebackDetailDrawer
+        dimensionId={42}
+        inheritedTags={{}}
+        onClose={vi.fn()}
+      />,
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(mockRegisterIdentifier).toHaveBeenCalledWith("user@example.com");
+      expect(mockRegisterIdentifier).toHaveBeenCalledWith("r-001");
     });
   });
 });

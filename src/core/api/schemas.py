@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.models.counts import TypeStatusCounts  # noqa: TC001
 from core.preview.capability import (  # noqa: TC001  # Pydantic resolves these response annotations
@@ -268,6 +268,38 @@ class TenantStatusDetailResponse(BaseModel):
 
 
 # --- Resource ---
+
+
+MAX_LINK_CONTEXT_IDS = 100
+
+
+class ResourceLinkResolveRequest(BaseModel):
+    identifiers: Annotated[
+        list[str],
+        Field(min_length=1, max_length=MAX_LINK_CONTEXT_IDS),
+    ]
+
+    @field_validator("identifiers")
+    @classmethod
+    def reject_blank_identifiers(cls, identifiers: list[str]) -> list[str]:
+        if any(not identifier.strip() for identifier in identifiers):
+            raise ValueError("identifiers must not contain blank values")
+        return identifiers
+
+
+class ResourceLinkResourceResponse(BaseModel):
+    resource_type: str
+    parent_id: str | None
+    kafka_cluster_id: str | None
+
+
+class ResourceLinkIdentityResponse(BaseModel):
+    identity_type: str
+
+
+class ResourceLinkResolveResponse(BaseModel):
+    resources: dict[str, ResourceLinkResourceResponse]
+    identities: dict[str, ResourceLinkIdentityResponse]
 
 
 class ResourceResponse(BaseModel):

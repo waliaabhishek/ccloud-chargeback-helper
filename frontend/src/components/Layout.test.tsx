@@ -36,6 +36,7 @@ vi.mock("../providers/ResourceLinkContext", () => ({
     enabled: false,
     setEnabled: vi.fn(),
     resolveUrl: vi.fn(() => null),
+    registerIdentifier: vi.fn(() => vi.fn()),
     isLoading: false,
   })),
   ResourceLinkProvider: ({ children }: { children: React.ReactNode }) =>
@@ -250,6 +251,7 @@ describe("TASK-197: Links toggle tooltip", () => {
       enabled: true,
       setEnabled: mockSetEnabled,
       resolveUrl: vi.fn(() => null),
+      registerIdentifier: vi.fn(() => vi.fn()),
       isLoading: false,
     });
 

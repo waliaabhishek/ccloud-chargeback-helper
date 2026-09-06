@@ -2,6 +2,8 @@
 
 ### Added
 
+- Add bounded, on-demand Confluent resource and identity deep links for visible
+  web-interface values without loading each tenant's full catalog.
 - Document the synthetic Demo media bundle, stable release assets, lifecycle
   commands, and maintainer refresh workflow.
 - Add a portable root `./demo` launcher with Clean and Showcase profiles,
