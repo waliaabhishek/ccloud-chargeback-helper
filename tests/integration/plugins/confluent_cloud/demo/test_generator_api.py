@@ -3139,6 +3139,8 @@ printf '%s\\n' "$*" >>"$DEMO_COMPOSE_LOG"
 case "$*" in
     "compose version")
         ;;
+    "compose -f examples/demo/docker-compose.yml pull chitragupta chitragupta-ui")
+        ;;
     "compose -f examples/demo/docker-compose.yml build demo-generator chitragupta chitragupta-ui")
         ;;
     "compose -f examples/demo/docker-compose.yml run --rm demo-generator")
@@ -3146,9 +3148,11 @@ case "$*" in
         "$DEMO_PYTHON" -m demo.generator --config "$PWD/examples/demo/config.yaml" \\
             --state-dir "$state_dir" --anchor "$DEMO_ANCHOR_DATE" --profile "$DEMO_PROFILE"
         ;;
-    "compose -f examples/demo/docker-compose.yml stop chitragupta chitragupta-ui")
+    "compose -f examples/demo/docker-compose.yml -f examples/demo/docker-compose.grafana.yml \
+stop chitragupta chitragupta-ui grafana")
         ;;
-    "compose -f examples/demo/docker-compose.yml up --detach --wait --force-recreate chitragupta chitragupta-ui")
+    "compose -f examples/demo/docker-compose.yml up --detach --wait --force-recreate --remove-orphans \
+chitragupta chitragupta-ui")
         ;;
     *)
         exit 98
@@ -3186,6 +3190,66 @@ def _run_public_launcher(
         check=False,
         timeout=180,
     )
+
+
+def test_public_launcher_fake_compose_enforces_current_command_contract(tmp_path: Path) -> None:
+    workspace, _config_path, environment, _compose_log = _launcher_with_real_generator(tmp_path)
+    commands = {
+        "released-image-pull": [
+            "docker",
+            "compose",
+            "-f",
+            "examples/demo/docker-compose.yml",
+            "pull",
+            "chitragupta",
+            "chitragupta-ui",
+        ],
+        "reset-stop": [
+            "docker",
+            "compose",
+            "-f",
+            "examples/demo/docker-compose.yml",
+            "-f",
+            "examples/demo/docker-compose.grafana.yml",
+            "stop",
+            "chitragupta",
+            "chitragupta-ui",
+            "grafana",
+        ],
+        "startup": [
+            "docker",
+            "compose",
+            "-f",
+            "examples/demo/docker-compose.yml",
+            "up",
+            "--detach",
+            "--wait",
+            "--force-recreate",
+            "--remove-orphans",
+            "chitragupta",
+            "chitragupta-ui",
+        ],
+        "unsupported": ["docker", "compose", "unsupported-command"],
+    }
+
+    return_codes = {
+        name: subprocess.run(
+            command,
+            cwd=workspace,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).returncode
+        for name, command in commands.items()
+    }
+
+    assert return_codes == {
+        "released-image-pull": 0,
+        "reset-stop": 0,
+        "startup": 0,
+        "unsupported": 98,
+    }
 
 
 def test_public_launcher_runs_the_real_generator_and_reset_restores_baseline_tags(
@@ -3230,7 +3294,8 @@ def test_public_launcher_runs_the_real_generator_and_reset_restores_baseline_tag
     assert reset.returncode == 0, reset.stderr
     assert "Resetting clean demo state at .demo/state/clean" in reset.stdout
     assert compose_log.read_text(encoding="utf-8").splitlines()[-1] == (
-        "compose -f examples/demo/docker-compose.yml up --detach --wait --force-recreate chitragupta chitragupta-ui"
+        "compose -f examples/demo/docker-compose.yml up --detach --wait --force-recreate --remove-orphans "
+        "chitragupta chitragupta-ui"
     )
     backend = _create_real_backend(config_path)
     reset_scenario = build_clean_demo_scenario(tenant_id=TENANT_ID, anchor_date=ANCHOR_DATE + timedelta(days=1))
