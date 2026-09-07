@@ -28,17 +28,24 @@ MEDIA_SPEC_PATH = "/opt/chitragupta-demo-media/capture-spec.json"
 MEDIA_ROOT_PATH = "/app/media"
 MEDIA_ENCODER_ARGUMENTS_PATH = "/app/media/work/encoder-arguments.list"
 MEDIA_PUBLICATION_ARGUMENTS_PATH = "/app/media/work/publication-arguments.list"
+DRAFT_REVIEW_PATH = ".demo/media/review/chitragupta-demo-investigation-draft.mp4"
 MEDIA_ENCODER_ARGUMENTS = (
     "work/chitragupta-demo-walkthrough.webm",
     "work/captions.srt",
     "assets/chitragupta-demo-dashboard.png",
     "assets/chitragupta-demo-walkthrough.mp4",
     "assets/chitragupta-demo-dashboard-poster.webp",
+    "#00ff00",
+    "8",
+    "12",
+    "1.4375",
     "1600",
-    "900",
+    "800",
+    "100",
     "960",
     "540",
-    "60",
+    "32",
+    "0",
     "90",
 )
 MEDIA_PUBLICATION_ARGUMENTS = (
@@ -192,14 +199,17 @@ if [[ "$command" == *" build "* ]]; then
   [[ "$DEMO_FAILURE" != build ]] || { echo "build denied" >&2; exit 72; }
   echo BUILT; exit
 fi
-if [[ "$command" == *" run "* ]]; then
-  if [[ "$command" == *" media-tool catalog "* && "$DEMO_DISPATCH_REAL_MEDIA_CATALOG" == 1 ]]; then
-    PYTHONPATH="$DEMO_MEDIA_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
-      "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" catalog \
+  if [[ "$command" == *" run "* ]]; then
+    if [[ "$command" == *" media-tool catalog "* && "$DEMO_DISPATCH_REAL_MEDIA_CATALOG" == 1 ]]; then
+      if [[ -n "$DEMO_MEDIA_FIXTURE" && ! -f "$DEMO_MEDIA_DIR/state/demo-state.json" ]]; then
+        mkdir -p "$DEMO_MEDIA_DIR/state"
+        cp -R "$DEMO_MEDIA_FIXTURE"/state/. "$DEMO_MEDIA_DIR/state/"
+      fi
+      PYTHONPATH="$DEMO_MEDIA_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}" \
+        "$DEMO_TEST_PYTHON" "$DEMO_MEDIA_TOOL_PATH" catalog \
       --spec "$DEMO_MEDIA_SPEC" --config "$DEMO_MEDIA_CONFIG" \
       --output "$DEMO_MEDIA_DIR/work/synthetic-catalog.json" \
-      --srt-output "$DEMO_MEDIA_DIR/work/captions.srt" \
-      --encoder-arguments-output "$DEMO_MEDIA_DIR/work/encoder-arguments.list"
+      --state-dir "$DEMO_MEDIA_DIR/state"
     exit $?
   fi
   if [[ "$command" == *" media-tool validate "* && "$DEMO_DISPATCH_REAL_MEDIA_VALIDATOR" == 1 ]]; then
@@ -213,7 +223,14 @@ if [[ "$command" == *" run "* ]]; then
     media-spec) [[ "$command" != *" media-tool spec "* ]] || { echo "invalid media spec" >&2; exit 80; } ;;
     media-catalog) [[ "$command" != *" media-tool catalog "* ]] || { echo "catalog rejected" >&2; exit 81; } ;;
     media-capture) [[ "$command" != *" media-capture "* ]] || { echo "capture failed" >&2; exit 82; } ;;
+    media-edit) [[ "$command" != *" media-tool edit "* ]] || { echo "edit rejected" >&2; exit 87; } ;;
     media-encoder) [[ "$command" != *" media-encoder "* ]] || { echo "encoder failed" >&2; exit 83; } ;;
+    media-validate-encode)
+      [[ "$command" != *" media-tool validate-encode "* ]] || {
+        echo "encode validation rejected" >&2
+        exit 88
+      }
+      ;;
     media-manifest) [[ "$command" != *" media-tool manifest "* ]] || { echo "manifest rejected" >&2; exit 84; } ;;
   esac
   if [[ "$DEMO_FAILURE" == media-final-catalog && "$command" == *" media-tool catalog "* ]]; then
@@ -228,7 +245,7 @@ if [[ "$command" == *" run "* ]]; then
     printf '%s\n' '{"profile":"showcase","anchor_date":"2026-08-31"}'
     exit
   fi
-  if [[ "$command" == *" media-tool catalog "* ]]; then
+  if [[ "$command" == *" media-tool edit "* ]]; then
     mkdir -p "$DEMO_MEDIA_DIR/work"
     if [[ "$DEMO_MISSING_ENCODER_ARGUMENTS" != 1 ]]; then
       printf '%s\n' "$DEMO_MEDIA_ENCODER_ARGUMENTS" >"$DEMO_MEDIA_DIR/work/encoder-arguments.list"
@@ -258,6 +275,13 @@ if [[ "$command" == *" run "* ]]; then
       printf 'generated-%s' "$asset" >"$DEMO_MEDIA_DIR/assets/$asset"
     done
     printf '{"generated": true}\\n' >"$DEMO_MEDIA_DIR/manifest.json"
+  fi
+  draft_video="review/chitragupta-demo-investigation-draft.mp4"
+  if [[ "$DEMO_MEDIA_OUTPUTS" == 1 ]] && \
+    [[ "$command" == *" media-encoder "* ]] && \
+    [[ "$command" == *" $draft_video "* ]]; then
+    mkdir -p "$DEMO_MEDIA_DIR/review"
+    printf 'generated-draft' >"$DEMO_MEDIA_DIR/review/chitragupta-demo-investigation-draft.mp4"
   fi
   echo GENERATED; exit
 fi
@@ -686,20 +710,134 @@ def _write_real_media_fixture(workspace: Path, fixture_root: Path) -> Path:
         "profile": "showcase",
         "anchor_date": "2026-08-31",
     }
-    _write_json(state / "demo-state.json", state_metadata)
-    for name in ("confluent-cloud.db", "self-managed-kafka.db"):
-        (state / name).write_bytes(name.encode())
+    config_path = workspace / "examples/demo/config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["preview"]["artifact_root"] = str(state / "focus-artifacts")
+    for tenant_name, database_name in (
+        ("clean-confluent", "confluent-cloud.db"),
+        ("clean-self-managed", "self-managed-kafka.db"),
+    ):
+        config["tenants"][tenant_name]["storage"]["connection_string"] = f"sqlite:///{state / database_name}"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    generation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "demo.generator",
+            "--config",
+            str(config_path),
+            "--state-dir",
+            str(state),
+            "--anchor",
+            "2026-08-31",
+            "--profile",
+            "showcase",
+        ],
+        cwd=workspace,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert generation.returncode == 0, generation.stderr
     work = media_root / "work"
     work.mkdir()
-    (work / "captions.srt").write_text(
-        "1\n00:00:00,000 --> 00:00:13,000\nSynthetic tenant cost reconciles across usage and shared spend.\n\n"
-        "2\n00:00:13,000 --> 00:00:30,000\nTenant cost is the analytical root.\n\n"
-        "3\n00:00:30,000 --> 00:00:44,000\n"
-        "Topic-level attribution exposes cost concentration and candidates for review.\n\n"
-        "4\n00:00:44,000 --> 00:00:56,000\nPersisted processing state remains inspectable in API-only mode.\n\n"
-        "5\n00:00:56,000 --> 00:01:15,000\nGenerate a FOCUS 1.4 mapping preview from synthetic persisted evidence.\n",
-        encoding="utf-8",
+    scene_rows = (
+        ("dashboard-summary", 3, 3),
+        ("dashboard-cost-trend", 3, 3),
+        ("explorer-commerce", 3, 8),
+        ("explorer-customer-kafka", 3, 7),
+        ("topic-topics", 3, 6),
+        ("topic-filters", 3, 7),
+        ("topic-composition", 3, 2),
+        ("topic-movers", 4, 3),
+        ("topic-table", 4, 8),
+        ("pipeline-status", 3, 5),
+        ("focus-export", 3, 7),
     )
+    scroll_scene_ids = {
+        "dashboard-cost-trend",
+        "topic-composition",
+        "topic-movers",
+        "topic-table",
+        "pipeline-status",
+        "focus-export",
+    }
+    timeline_scenes = []
+    start_seconds = 0.0
+    for scene_id, read_seconds, action_seconds in scene_rows:
+        action_complete_seconds = start_seconds + action_seconds * 1.15
+        end_seconds = action_complete_seconds + read_seconds * 1.15
+        scroll_samples = []
+        if scene_id in scroll_scene_ids:
+            direction = -1 if scene_id == "topic-table" else 1
+            scroll_samples = [
+                {"elapsed_seconds": 0.0, "offset": 0.0},
+                {"elapsed_seconds": 0.5175, "offset": 90.0 * direction},
+                {"elapsed_seconds": 1.035, "offset": 180.0 * direction},
+            ]
+        timeline_scenes.append(
+            {
+                "id": scene_id,
+                "start_seconds": start_seconds,
+                "action_complete_seconds": action_complete_seconds,
+                "end_seconds": end_seconds,
+                "scroll_samples": scroll_samples,
+            }
+        )
+        start_seconds = end_seconds
+    rendered_duration = start_seconds / 1.4375
+    timeline_path = work / "edit-timeline.json"
+    _write_json(
+        timeline_path,
+        {
+            "mode": "full",
+            "speed": 1.15,
+            "markers": {
+                "color": "#00ff00",
+                "plane_average_tolerance": 8,
+                "within_plane_spread": 12,
+                "runs": [
+                    {"duration_seconds": 0.4, "frames": 12},
+                    {"duration_seconds": 0.4, "frames": 12},
+                ],
+            },
+            "scenes": timeline_scenes,
+            "framing": {
+                "zoom_percent": 150,
+                "minimum_playback_text_pixels": 11,
+                "minimum_playback_target_pixels": 24,
+            },
+            "evidence": {
+                "topic_tooltip": "$79,000.00",
+                "movers_tooltip": "2026-08-31 +$49,000.00 increase",
+                "table_rows": [["2026-08-30", "$1,000.00"], ["2026-08-31", "$50,000.00"]],
+            },
+        },
+    )
+    edit_result = subprocess.run(
+        [
+            sys.executable,
+            str(workspace / "examples/demo/media/tool.py"),
+            "edit",
+            "--spec",
+            str(workspace / "examples/demo/media/capture-spec.json"),
+            "--mode",
+            "full",
+            "--timeline",
+            str(timeline_path),
+            "--srt-output",
+            str(work / "captions.srt"),
+            "--encoder-arguments-output",
+            str(work / "encoder-arguments.list"),
+        ],
+        cwd=workspace,
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert edit_result.returncode == 0, edit_result.stderr
     _write_json(
         work / "browser-observations.json",
         {
@@ -712,7 +850,7 @@ def _write_real_media_fixture(workspace: Path, fixture_root: Path) -> Path:
     _write_json(
         work / "encoder-result.json",
         {
-            "duration_seconds": 75,
+            "duration_seconds": rendered_duration,
             "video_codec": "h264",
             "width": 1600,
             "height": 900,
@@ -722,6 +860,13 @@ def _write_real_media_fixture(workspace: Path, fixture_root: Path) -> Path:
             "caption_filter": "subtitles",
             "caption_source": "captions.srt",
             "webm_removed": True,
+            "story_first_frame": 24,
+            "story_last_frame": 2273,
+            "raw_frame_rate": 30,
+            "mode": "full",
+            "speed": 1.4375,
+            "edited_duration_seconds": rendered_duration,
+            "timeline_sha256": hashlib.sha256(timeline_path.read_bytes()).hexdigest(),
         },
     )
     source_identifiers = [
@@ -2670,6 +2815,7 @@ def test_demo_prints_exact_default_ui_api_and_grafana_urls(tmp_path: Path) -> No
     [
         ("media", "--build"),
         ("media", "publish", "again"),
+        ("media", "draft", "again"),
         ("media", "status", "--showcase"),
         ("media", "unknown"),
     ],
@@ -2877,10 +3023,6 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
         "/app/config/config.yaml",
         "--output",
         "/app/media/work/synthetic-catalog.json",
-        "--srt-output",
-        "/app/media/work/captions.srt",
-        "--encoder-arguments-output",
-        MEDIA_ENCODER_ARGUMENTS_PATH,
         "--state-dir",
         "/app/media/state",
     )
@@ -2898,9 +3040,29 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
             "/app/media/work/synthetic-catalog.json",
             "--output",
             MEDIA_ROOT_PATH,
+            "--mode",
+            "full",
         )
         in commands
     )
+    edit_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "edit",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--mode",
+        "full",
+        "--timeline",
+        "/app/media/work/edit-timeline.json",
+        "--srt-output",
+        "/app/media/work/captions.srt",
+        "--encoder-arguments-output",
+        MEDIA_ENCODER_ARGUMENTS_PATH,
+    )
+    assert edit_command in commands
     assert (
         _media_compose(
             "run",
@@ -2912,6 +3074,24 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
         )
         in commands
     )
+    validate_encode_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "validate-encode",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--mode",
+        "full",
+        "--timeline",
+        "/app/media/work/edit-timeline.json",
+        "--encoder-result",
+        "/app/media/work/encoder-result.json",
+        "--video",
+        "/app/media/assets/chitragupta-demo-walkthrough.mp4",
+    )
+    assert validate_encode_command in commands
     stop_command = _media_compose("stop", "chitragupta", "chitragupta-ui")
     manifest_command = _media_compose(
         "run",
@@ -2936,7 +3116,8 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
     assert down_command in commands
     stop_index = commands.index(stop_command)
     manifest_index = commands.index(manifest_command)
-    assert catalog_indexes[0] < stop_index < catalog_indexes[1] < manifest_index < commands.index(down_command)
+    assert catalog_indexes[0] < commands.index(edit_command) < commands.index(validate_encode_command) < stop_index
+    assert stop_index < catalog_indexes[1] < manifest_index < commands.index(down_command)
     assert (
         commands.index(_media_compose("build", "chitragupta", "chitragupta-ui", "media-capture"))
         < commands.index(_media_compose("run", "--rm", "demo-generator"))
@@ -2959,6 +3140,114 @@ def test_demo_media_builds_current_checkout_generates_isolated_showcase_state_an
     )
     assert (workspace / ".demo/media/assets/chitragupta-demo-walkthrough.mp4").is_file()
     assert ".demo/media" in _output(result)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_draft_uses_the_real_launcher_lifecycle_without_manifest_poster_or_publication(
+    tmp_path: Path,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    draft_arguments = (
+        "work/chitragupta-demo-walkthrough.webm",
+        "work/captions.srt",
+        "assets/chitragupta-demo-dashboard.png",
+        "review/chitragupta-demo-investigation-draft.mp4",
+        "assets/chitragupta-demo-dashboard-poster.webp",
+        "#00ff00",
+        "8",
+        "12",
+        "1.15",
+        "1600",
+        "800",
+        "100",
+        "960",
+        "540",
+        "32",
+        "15",
+        "20",
+    )
+    environment, command_log = _fake_environment(tmp_path, media_outputs=True, encoder_arguments=draft_arguments)
+
+    result = _run(workspace, environment, "media", "draft")
+
+    assert result.returncode == 0, _output(result)
+    commands = _commands(command_log)
+    catalog_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "catalog",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--config",
+        "/app/config/config.yaml",
+        "--output",
+        "/app/media/work/synthetic-catalog.json",
+        "--state-dir",
+        "/app/media/state",
+    )
+    capture_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-capture",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--catalog",
+        "/app/media/work/synthetic-catalog.json",
+        "--output",
+        MEDIA_ROOT_PATH,
+        "--mode",
+        "draft",
+    )
+    edit_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "edit",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--mode",
+        "draft",
+        "--timeline",
+        "/app/media/work/edit-timeline.json",
+        "--srt-output",
+        "/app/media/work/captions.srt",
+        "--encoder-arguments-output",
+        MEDIA_ENCODER_ARGUMENTS_PATH,
+    )
+    validate_encode_command = _media_compose(
+        "run",
+        "--rm",
+        "--no-deps",
+        "media-tool",
+        "validate-encode",
+        "--spec",
+        MEDIA_SPEC_PATH,
+        "--mode",
+        "draft",
+        "--timeline",
+        "/app/media/work/edit-timeline.json",
+        "--encoder-result",
+        "/app/media/work/encoder-result.json",
+        "--video",
+        "/app/media/review/chitragupta-demo-investigation-draft.mp4",
+    )
+    assert catalog_command in commands
+    assert capture_command in commands
+    assert edit_command in commands
+    assert _media_compose("run", "--rm", "--no-deps", "media-encoder", MEDIA_ROOT_PATH, *draft_arguments) in commands
+    assert validate_encode_command in commands
+    assert _media_compose("stop", "chitragupta", "chitragupta-ui") in commands
+    assert _media_compose("down") in commands
+    assert not any("media-tool manifest" in command for command in commands)
+    assert not any("publication-arguments" in command for command in commands)
+    assert not any("docs/assets/demo" in command for command in commands)
+    assert (workspace / DRAFT_REVIEW_PATH).read_text(encoding="utf-8") == "generated-draft"
+    assert DRAFT_REVIEW_PATH in _output(result)
+    assert "watch the entire file" in _output(result).lower()
     assert _gh_commands(environment) == []
 
 
@@ -3052,7 +3341,18 @@ def test_demo_media_diagnostics_target_only_the_retained_media_project(tmp_path:
     assert _gh_commands(environment) == []
 
 
-@pytest.mark.parametrize("failure", ["up", "media-capture", "media-encoder", "media-final-catalog", "media-manifest"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "up",
+        "media-capture",
+        "media-edit",
+        "media-encoder",
+        "media-validate-encode",
+        "media-final-catalog",
+        "media-manifest",
+    ],
+)
 def test_demo_media_retains_post_start_failures_for_diagnosis_without_interactive_teardown(
     tmp_path: Path,
     failure: str,
@@ -3071,6 +3371,57 @@ def test_demo_media_retains_post_start_failures_for_diagnosis_without_interactiv
     assert _media_compose("down") not in commands
     assert not any(command == (*ALL_FILES, "down") for command in commands)
     assert _gh_commands(environment) == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "diagnostic"),
+    [
+        pytest.param("media-capture", "Demo media draft browser capture failed.", id="browser-capture"),
+        pytest.param("media-encoder", "Demo media draft encoding failed.", id="encoding"),
+    ],
+)
+def test_demo_media_draft_uses_distinct_browser_and_encoder_failure_diagnostics(
+    tmp_path: Path,
+    failure: str,
+    diagnostic: str,
+) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, failure=failure)
+
+    result = _run(workspace, environment, "media", "draft")
+
+    assert result.returncode != 0
+    assert diagnostic in _output(result)
+    assert "Demo media capture failed. Media containers were left in place for diagnosis." in _output(result)
+    assert _media_compose("down") not in _commands(command_log)
+    assert _gh_commands(environment) == []
+
+
+def test_demo_media_draft_reports_the_distinct_encoding_diagnostic_for_a_malformed_vector(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(
+        tmp_path,
+        encoder_arguments=MEDIA_ENCODER_ARGUMENTS[:-1],
+    )
+
+    result = _run(workspace, environment, "media", "draft")
+
+    assert result.returncode != 0
+    assert "Demo media draft encoding failed." in _output(result)
+    assert not any("run" in command and "media-encoder" in command for command in _commands(command_log))
+
+
+def test_demo_media_draft_reports_the_distinct_encoding_diagnostic_for_a_missing_vector(tmp_path: Path) -> None:
+    workspace = _copy_public_demo(tmp_path)
+    environment, command_log = _fake_environment(tmp_path, missing_encoder_arguments=True)
+
+    result = _run(workspace, environment, "media", "draft")
+
+    assert result.returncode != 0
+    output = _output(result)
+    assert "Demo media argument vector is missing:" in output
+    assert "Demo media draft encoding failed." in output
+    assert not any("run" in command and "media-encoder" in command for command in _commands(command_log))
 
 
 @pytest.mark.parametrize("failure", ["build", "pull", "media-spec", "generator", "media-catalog"])

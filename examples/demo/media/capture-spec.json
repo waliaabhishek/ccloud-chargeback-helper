@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "anchor_date": "2026-08-31",
   "profile": "showcase",
   "viewport": {
@@ -12,10 +12,13 @@
     "name": "chitragupta-demo-dashboard-poster.webp"
   },
   "video": {
-    "target_seconds": 75,
-    "minimum_seconds": 60,
-    "maximum_seconds": 90,
-    "name": "chitragupta-demo-walkthrough.mp4"
+    "name": "chitragupta-demo-walkthrough.mp4",
+    "content_height": 800,
+    "caption_band_height": 100,
+    "playback_width": 960,
+    "playback_height": 540,
+    "content_zoom_percent": 150,
+    "caption_font_size": 32
   },
   "primary_tenant": {
     "name": "clean-confluent",
@@ -44,31 +47,117 @@
       "route": "/focus-preview"
     }
   ],
-  "captions": [
-    {
-      "start": 0,
-      "end": 13,
-      "text": "Synthetic tenant cost reconciles across usage and shared spend."
+  "storyboards": {
+    "full": {
+      "output_path": "assets/chitragupta-demo-walkthrough.mp4",
+      "maximum_seconds": 90,
+      "scenes": [
+        {
+          "id": "dashboard-summary",
+          "route": "/dashboard",
+          "caption": "Synthetic Showcase, Aug 2–31: $600,362 total; shared cost is larger than usage cost.",
+          "read_seconds": 3,
+          "max_action_seconds": 3
+        },
+        {
+          "id": "dashboard-cost-trend",
+          "route": "/dashboard",
+          "caption": "The 30-day trend gives us a concrete cost change to investigate.",
+          "read_seconds": 3,
+          "max_action_seconds": 3
+        },
+        {
+          "id": "explorer-commerce",
+          "route": "/explorer",
+          "caption": "At the Aug 31 snapshot, focus the Commerce environment.",
+          "read_seconds": 3,
+          "max_action_seconds": 8
+        },
+        {
+          "id": "explorer-customer-kafka",
+          "route": "/explorer",
+          "caption": "In the same snapshot, follow Commerce to Customer Kafka.",
+          "read_seconds": 3,
+          "max_action_seconds": 7
+        },
+        {
+          "id": "topic-topics",
+          "route": "/topic-attributions",
+          "caption": "Back in the 30-day cost range, showcase-live-orders is the largest topic.",
+          "read_seconds": 3,
+          "max_action_seconds": 6
+        },
+        {
+          "id": "topic-filters",
+          "route": "/topic-attributions",
+          "caption": "Scope the 30-day view to Customer Kafka and showcase-live-orders.",
+          "read_seconds": 3,
+          "max_action_seconds": 7
+        },
+        {
+          "id": "topic-composition",
+          "route": "/topic-attributions",
+          "caption": "This topic costs $79,000 across the 30-day range, all from REST produce cost.",
+          "read_seconds": 3,
+          "max_action_seconds": 2
+        },
+        {
+          "id": "topic-movers",
+          "route": "/topic-attributions",
+          "caption": "The top-movers view shows a $49,000 cost increase on Aug 31.",
+          "read_seconds": 4,
+          "max_action_seconds": 3
+        },
+        {
+          "id": "topic-table",
+          "route": "/topic-attributions",
+          "caption": "Narrow to Aug 30–31: the table shows $50,000 on Aug 31 and $1,000 on Aug 30.",
+          "read_seconds": 4,
+          "max_action_seconds": 8
+        },
+        {
+          "id": "pipeline-status",
+          "route": "/pipeline",
+          "caption": "Review the completed pipeline run and daily processing status.",
+          "read_seconds": 3,
+          "max_action_seconds": 5
+        },
+        {
+          "id": "focus-export",
+          "route": "/focus-preview",
+          "caption": "Review the August FOCUS preview and download options.",
+          "read_seconds": 3,
+          "max_action_seconds": 7
+        }
+      ]
     },
-    {
-      "start": 13,
-      "end": 30,
-      "text": "Tenant cost is the analytical root."
-    },
-    {
-      "start": 30,
-      "end": 44,
-      "text": "Topic-level attribution exposes cost concentration and candidates for review."
-    },
-    {
-      "start": 44,
-      "end": 56,
-      "text": "Persisted processing state remains inspectable in API-only mode."
-    },
-    {
-      "start": 56,
-      "end": 75,
-      "text": "Generate a FOCUS 1.4 mapping preview from synthetic persisted evidence."
+    "draft": {
+      "output_path": "review/chitragupta-demo-investigation-draft.mp4",
+      "minimum_seconds": 15,
+      "maximum_seconds": 20,
+      "scenes": [
+        {
+          "id": "topic-filters",
+          "route": "/topic-attributions",
+          "caption": "Scope the 30-day synthetic view to Customer Kafka and showcase-live-orders.",
+          "read_seconds": 3,
+          "max_action_seconds": 6
+        },
+        {
+          "id": "topic-composition",
+          "route": "/topic-attributions",
+          "caption": "This topic costs $79,000 across the 30-day range, all from REST produce cost.",
+          "read_seconds": 3,
+          "max_action_seconds": 1.9
+        },
+        {
+          "id": "topic-movers",
+          "route": "/topic-attributions",
+          "caption": "On Aug 31, cost rises by $49,000 from the previous day.",
+          "read_seconds": 3,
+          "max_action_seconds": 2.9
+        }
+      ]
     }
-  ]
+  }
 }

@@ -11,6 +11,7 @@ Usage:
   ./demo logs
   ./demo down
   ./demo media
+  ./demo media draft
   ./demo media publish
   ./demo media status
   ./demo media logs
@@ -862,9 +863,18 @@ media_check_retained_stack() {
 }
 
 media_capture() {
-    local source_commit source_worktree_clean output status spec_result git_status spec_profile spec_anchor
+    local source_commit source_worktree_clean output status spec_result git_status spec_profile spec_anchor mode
+    local capture_failure_message encoding_failure_message
     local poster_source
     local -a encoder_arguments
+    mode=${DEMO_MEDIA_MODE:-full}
+    if [[ "${mode}" == draft ]]; then
+        capture_failure_message="Demo media draft browser capture failed."
+        encoding_failure_message="Demo media draft encoding failed."
+    else
+        capture_failure_message="Demo media browser capture failed."
+        encoding_failure_message="Demo media encoding failed."
+    fi
     media_set_environment
     media_check_interactive_stack
     media_check_retained_stack
@@ -931,8 +941,6 @@ media_capture() {
         --spec /opt/chitragupta-demo-media/capture-spec.json \
         --config /app/config/config.yaml \
         --output /app/media/work/synthetic-catalog.json \
-        --srt-output /app/media/work/captions.srt \
-        --encoder-arguments-output /app/media/work/encoder-arguments.list \
         --state-dir /app/media/state 2>&1); then
         printf '%s\n' "${output}"
     else
@@ -950,15 +958,28 @@ media_capture() {
     if output=$(media_compose run --rm --no-deps media-capture \
         --spec /opt/chitragupta-demo-media/capture-spec.json \
         --catalog /app/media/work/synthetic-catalog.json \
-        --output /app/media 2>&1); then
+        --output /app/media \
+        --mode "${mode}" 2>&1); then
         printf '%s\n' "${output}"
     else
         status=$?
         printf '%s\n' "${output}" >&2
-        media_poststart_failure "${status}" "Demo media browser capture failed."
+        media_poststart_failure "${status}" "${capture_failure_message}"
     fi
-    if ! read_media_argument_vector "${DEMO_MEDIA_DIR}/work/encoder-arguments.list" 11; then
-        media_poststart_failure 1 "Demo media encoding failed."
+    if output=$(media_compose run --rm --no-deps media-tool edit \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --mode "${mode}" \
+        --timeline /app/media/work/edit-timeline.json \
+        --srt-output /app/media/work/captions.srt \
+        --encoder-arguments-output /app/media/work/encoder-arguments.list 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media ${mode} timeline editing failed."
+    fi
+    if ! read_media_argument_vector "${DEMO_MEDIA_DIR}/work/encoder-arguments.list" 17; then
+        media_poststart_failure 1 "${encoding_failure_message}"
     fi
     encoder_arguments=("${MEDIA_ARGUMENT_VECTOR[@]}")
     if output=$(media_compose run --rm --no-deps media-encoder \
@@ -967,7 +988,19 @@ media_capture() {
     else
         status=$?
         printf '%s\n' "${output}" >&2
-        media_poststart_failure "${status}" "Demo media encoding failed."
+        media_poststart_failure "${status}" "${encoding_failure_message}"
+    fi
+    if output=$(media_compose run --rm --no-deps media-tool validate-encode \
+        --spec /opt/chitragupta-demo-media/capture-spec.json \
+        --mode "${mode}" \
+        --timeline /app/media/work/edit-timeline.json \
+        --encoder-result /app/media/work/encoder-result.json \
+        --video "/app/media/${encoder_arguments[3]}" 2>&1); then
+        printf '%s\n' "${output}"
+    else
+        status=$?
+        printf '%s\n' "${output}" >&2
+        media_poststart_failure "${status}" "Demo media ${mode} encode validation failed."
     fi
     if output=$(media_compose stop chitragupta chitragupta-ui 2>&1); then
         printf '%s\n' "${output}"
@@ -976,12 +1009,22 @@ media_capture() {
         printf '%s\n' "${output}" >&2
         media_poststart_failure "${status}" "Demo media API/UI shutdown failed."
     fi
+    if [[ "${mode}" == draft ]]; then
+        if output=$(media_compose down 2>&1); then
+            printf '%s\n' "${output}"
+        else
+            status=$?
+            printf '%s\n' "${output}" >&2
+            media_poststart_failure "${status}" "Demo media teardown failed."
+        fi
+        echo "Demo media draft capture complete: ${DEMO_MEDIA_PATH}/${encoder_arguments[3]}"
+        echo "Watch the entire file at 960x540 and record maintainer feedback before running './demo media'."
+        return 0
+    fi
     if output=$(media_compose run --rm --no-deps media-tool catalog \
         --spec /opt/chitragupta-demo-media/capture-spec.json \
         --config /app/config/config.yaml \
         --output /app/media/work/synthetic-catalog.json \
-        --srt-output /app/media/work/captions.srt \
-        --encoder-arguments-output /app/media/work/encoder-arguments.list \
         --state-dir /app/media/state 2>&1); then
         printf '%s\n' "${output}"
     else
@@ -1186,6 +1229,7 @@ media_publish() {
 }
 
 DEMO_ACTION=start
+DEMO_MEDIA_MODE=full
 DEMO_PROFILE=
 DEMO_GRAFANA_ENABLED=0
 DEMO_LAN_ENABLED=0
@@ -1211,6 +1255,7 @@ elif [[ "$1" == media ]]; then
         DEMO_ACTION=media_capture
     elif (($# == 2)); then
         case "$2" in
+            draft) DEMO_ACTION=media_capture; DEMO_MEDIA_MODE=draft ;;
             publish) DEMO_ACTION=media_publish ;;
             status) DEMO_ACTION=media_status ;;
             logs) DEMO_ACTION=media_logs ;;
@@ -1303,7 +1348,7 @@ else
         *) echo "Unsupported Demo profile '$DEMO_PROFILE'" >&2; exit 1 ;;
     esac
 fi
-export DEMO_PROFILE DEMO_STATE_DIR
+export DEMO_PROFILE DEMO_STATE_DIR DEMO_MEDIA_MODE
 
 BASE_COMPOSE_FILE=examples/demo/docker-compose.yml
 GRAFANA_COMPOSE_FILE=examples/demo/docker-compose.grafana.yml

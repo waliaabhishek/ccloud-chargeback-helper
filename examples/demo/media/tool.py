@@ -16,7 +16,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from urllib.parse import urlsplit
 
 from core.config.loader import load_config
@@ -38,6 +38,8 @@ from plugins.self_managed_kafka.demo.scenario import build_clean_self_managed_ka
 if TYPE_CHECKING:
     from plugins.confluent_cloud.demo.scenario import ConfluentDemoScenario
 
+CaptureMode = Literal["full", "draft"]
+
 SPEC_KEYS = frozenset(
     {
         "schema_version",
@@ -48,15 +50,33 @@ SPEC_KEYS = frozenset(
         "video",
         "primary_tenant",
         "screenshots",
-        "captions",
+        "storyboards",
     }
 )
 VIEWPORT_KEYS = frozenset({"width", "height"})
 POSTER_KEYS = frozenset({"width", "height", "name"})
-VIDEO_KEYS = frozenset({"target_seconds", "minimum_seconds", "maximum_seconds", "name"})
+VIDEO_KEYS = frozenset(
+    {
+        "name",
+        "content_height",
+        "caption_band_height",
+        "playback_width",
+        "playback_height",
+        "content_zoom_percent",
+        "caption_font_size",
+    }
+)
 TENANT_KEYS = frozenset({"name", "id", "ecosystem"})
 SCREENSHOT_KEYS = frozenset({"name", "route"})
-CAPTION_KEYS = frozenset({"start", "end", "text"})
+STORYBOARDS_KEYS = frozenset({"full", "draft"})
+FULL_STORYBOARD_KEYS = frozenset({"output_path", "maximum_seconds", "scenes"})
+DRAFT_STORYBOARD_KEYS = frozenset({"output_path", "minimum_seconds", "maximum_seconds", "scenes"})
+SCENE_KEYS = frozenset({"id", "route", "caption", "read_seconds", "max_action_seconds"})
+TIMELINE_KEYS = frozenset({"mode", "speed", "markers", "scenes"})
+TIMELINE_MARKER_KEYS = frozenset({"color", "plane_average_tolerance", "within_plane_spread", "runs"})
+TIMELINE_MARKER_RUN_KEYS = frozenset({"duration_seconds", "frames"})
+TIMELINE_SCENE_KEYS = frozenset({"id", "start_seconds", "action_complete_seconds", "end_seconds", "scroll_samples"})
+SCROLL_SAMPLE_KEYS = frozenset({"elapsed_seconds", "offset"})
 STATE_METADATA_KEYS = frozenset({"schema_version", "generator_version", "profile", "anchor_date"})
 DATABASE_EVIDENCE_KEYS = frozenset({"schema_version", "validated", "state_metadata", "files"})
 DATABASE_FILE_KEYS = frozenset({"path", "sha256", "bytes"})
@@ -71,13 +91,6 @@ APPROVED_PNG_ASSETS = (
 APPROVED_POSTER_ASSET = "chitragupta-demo-dashboard-poster.webp"
 APPROVED_VIDEO_ASSET = "chitragupta-demo-walkthrough.mp4"
 APPROVED_ASSETS = (*APPROVED_PNG_ASSETS, APPROVED_POSTER_ASSET, APPROVED_VIDEO_ASSET)
-APPROVED_CAPTIONS = (
-    (0, 13, "Synthetic tenant cost reconciles across usage and shared spend."),
-    (13, 30, "Tenant cost is the analytical root."),
-    (30, 44, "Topic-level attribution exposes cost concentration and candidates for review."),
-    (44, 56, "Persisted processing state remains inspectable in API-only mode."),
-    (56, 75, "Generate a FOCUS 1.4 mapping preview from synthetic persisted evidence."),
-)
 APPROVED_PRIMARY_TENANT = {
     "name": "clean-confluent",
     "id": "northstar-confluent",
@@ -132,10 +145,107 @@ ENCODER_RESULT_KEYS = frozenset(
         "caption_filter",
         "caption_source",
         "webm_removed",
+        "story_first_frame",
+        "story_last_frame",
+        "raw_frame_rate",
+        "mode",
+        "speed",
+        "edited_duration_seconds",
+        "timeline_sha256",
     }
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+RAW_CAPTURE_SPEED = 1.15
+FULL_RENDER_SPEED = RAW_CAPTURE_SPEED * 1.25
+DRAFT_RENDER_SPEED = RAW_CAPTURE_SPEED
+MARKER_COLOR = "#00ff00"
+MARKER_AVERAGE_TOLERANCE = 8
+MARKER_WITHIN_PLANE_SPREAD = 12
+MARKER_MINIMUM_SECONDS = 0.3
+MARKER_MAXIMUM_SECONDS = 0.5
+MARKER_MINIMUM_FRAMES = 6
+VIDEO_CONTENT_HEIGHT = 800
+VIDEO_CAPTION_BAND_HEIGHT = 100
+VIDEO_PLAYBACK_WIDTH = 960
+VIDEO_PLAYBACK_HEIGHT = 540
+VIDEO_CONTENT_ZOOM_PERCENT = 150
+VIDEO_CAPTION_FONT_SIZE = 32
+FRAME_TOLERANCE_SECONDS = 2 / 30
+
+APPROVED_FULL_STORYBOARD = (
+    (
+        "dashboard-summary",
+        "/dashboard",
+        "Synthetic Showcase, Aug 2–31: $600,362 total; shared cost is larger than usage cost.",
+        3,
+        3,
+    ),
+    ("dashboard-cost-trend", "/dashboard", "The 30-day trend gives us a concrete cost change to investigate.", 3, 3),
+    ("explorer-commerce", "/explorer", "At the Aug 31 snapshot, focus the Commerce environment.", 3, 8),
+    ("explorer-customer-kafka", "/explorer", "In the same snapshot, follow Commerce to Customer Kafka.", 3, 7),
+    (
+        "topic-topics",
+        "/topic-attributions",
+        "Back in the 30-day cost range, showcase-live-orders is the largest topic.",
+        3,
+        6,
+    ),
+    ("topic-filters", "/topic-attributions", "Scope the 30-day view to Customer Kafka and showcase-live-orders.", 3, 7),
+    (
+        "topic-composition",
+        "/topic-attributions",
+        "This topic costs $79,000 across the 30-day range, all from REST produce cost.",
+        3,
+        2,
+    ),
+    ("topic-movers", "/topic-attributions", "The top-movers view shows a $49,000 cost increase on Aug 31.", 4, 3),
+    (
+        "topic-table",
+        "/topic-attributions",
+        "Narrow to Aug 30–31: the table shows $50,000 on Aug 31 and $1,000 on Aug 30.",
+        4,
+        8,
+    ),
+    (
+        "pipeline-status",
+        "/pipeline",
+        "Review the completed pipeline run and daily processing status.",
+        3,
+        5,
+    ),
+    (
+        "focus-export",
+        "/focus-preview",
+        "Review the August FOCUS preview and download options.",
+        3,
+        7,
+    ),
+)
+APPROVED_DRAFT_STORYBOARD = (
+    (
+        "topic-filters",
+        "/topic-attributions",
+        "Scope the 30-day synthetic view to Customer Kafka and showcase-live-orders.",
+        3,
+        6,
+    ),
+    (
+        "topic-composition",
+        "/topic-attributions",
+        "This topic costs $79,000 across the 30-day range, all from REST produce cost.",
+        3,
+        1.9,
+    ),
+    ("topic-movers", "/topic-attributions", "On Aug 31, cost rises by $49,000 from the previous day.", 3, 2.9),
+)
+APPROVED_STORYBOARDS: dict[CaptureMode, tuple[tuple[str, str, str, int, int | float], ...]] = {
+    "full": APPROVED_FULL_STORYBOARD,
+    "draft": APPROVED_DRAFT_STORYBOARD,
+}
+SCROLL_REQUIRED_SCENES = frozenset(
+    {"dashboard-cost-trend", "topic-composition", "topic-movers", "topic-table", "pipeline-status", "focus-export"}
+)
 
 
 class MediaError(ValueError):
@@ -199,8 +309,8 @@ def _boolean(value: object, label: str) -> bool:
 def _validate_spec_payload(raw: object) -> dict[str, Any]:
     spec = _mapping(raw, "capture specification")
     _keys(spec, SPEC_KEYS, "capture specification")
-    if _integer(spec["schema_version"], "schema_version") != 1:
-        _fail("capture specification schema_version must be 1")
+    if _integer(spec["schema_version"], "schema_version") != 2:
+        _fail("capture specification schema_version must be 2")
     if _string(spec["anchor_date"], "anchor_date") != "2026-08-31":
         _fail("capture specification anchor_date must be 2026-08-31")
     try:
@@ -230,12 +340,24 @@ def _validate_spec_payload(raw: object) -> dict[str, Any]:
 
     video = _mapping(spec["video"], "video")
     _keys(video, VIDEO_KEYS, "video")
-    if _string(video["name"], "video.name") != APPROVED_VIDEO_ASSET:
-        _fail("capture specification video name is not canonical")
-    for field in ("target_seconds", "minimum_seconds", "maximum_seconds"):
-        _integer(video[field], f"video.{field}")
-    if (video["target_seconds"], video["minimum_seconds"], video["maximum_seconds"]) != (75, 60, 90):
-        _fail("capture specification video duration bounds are not canonical")
+    if (
+        _string(video["name"], "video.name"),
+        _integer(video["content_height"], "video.content_height"),
+        _integer(video["caption_band_height"], "video.caption_band_height"),
+        _integer(video["playback_width"], "video.playback_width"),
+        _integer(video["playback_height"], "video.playback_height"),
+        _integer(video["content_zoom_percent"], "video.content_zoom_percent"),
+        _integer(video["caption_font_size"], "video.caption_font_size"),
+    ) != (
+        APPROVED_VIDEO_ASSET,
+        VIDEO_CONTENT_HEIGHT,
+        VIDEO_CAPTION_BAND_HEIGHT,
+        VIDEO_PLAYBACK_WIDTH,
+        VIDEO_PLAYBACK_HEIGHT,
+        VIDEO_CONTENT_ZOOM_PERCENT,
+        VIDEO_CAPTION_FONT_SIZE,
+    ):
+        _fail("capture specification video geometry is not canonical")
 
     tenant = _mapping(spec["primary_tenant"], "primary_tenant")
     _keys(tenant, TENANT_KEYS, "primary_tenant")
@@ -254,19 +376,40 @@ def _validate_spec_payload(raw: object) -> dict[str, Any]:
         ) != (expected_name, expected_route):
             _fail(f"screenshots[{index}] is not canonical")
 
-    captions = spec["captions"]
-    if not isinstance(captions, list) or len(captions) != len(APPROVED_CAPTIONS):
-        _fail("capture specification must contain exactly five contiguous captions")
-    for index, (expected_start, expected_end, expected_text) in enumerate(APPROVED_CAPTIONS):
-        caption = _mapping(captions[index], f"captions[{index}]")
-        _keys(caption, CAPTION_KEYS, f"captions[{index}]")
-        values = (
-            _integer(caption["start"], f"captions[{index}].start"),
-            _integer(caption["end"], f"captions[{index}].end"),
-            _string(caption["text"], f"captions[{index}].text"),
+    storyboards = _mapping(spec["storyboards"], "storyboards")
+    _keys(storyboards, STORYBOARDS_KEYS, "storyboards")
+    for mode, expected_scenes in APPROVED_STORYBOARDS.items():
+        storyboard = _mapping(storyboards[mode], f"storyboards.{mode}")
+        expected_keys = FULL_STORYBOARD_KEYS if mode == "full" else DRAFT_STORYBOARD_KEYS
+        _keys(storyboard, expected_keys, f"storyboards.{mode}")
+        expected_output = (
+            f"assets/{APPROVED_VIDEO_ASSET}" if mode == "full" else "review/chitragupta-demo-investigation-draft.mp4"
         )
-        if values != (expected_start, expected_end, expected_text):
-            _fail(f"captions[{index}] is not canonical or has a gap")
+        expected_bounds = (None, 90) if mode == "full" else (15, 20)
+        if _string(storyboard["output_path"], f"storyboards.{mode}.output_path") != expected_output:
+            _fail(f"storyboards.{mode}.output_path is not canonical")
+        if (
+            mode == "draft"
+            and _integer(storyboard["minimum_seconds"], f"storyboards.{mode}.minimum_seconds") != expected_bounds[0]
+        ):
+            _fail("storyboards.draft minimum_seconds is not canonical")
+        if _integer(storyboard["maximum_seconds"], f"storyboards.{mode}.maximum_seconds") != expected_bounds[1]:
+            _fail(f"storyboards.{mode}.maximum_seconds is not canonical")
+        scenes = storyboard["scenes"]
+        if not isinstance(scenes, list) or len(scenes) != len(expected_scenes):
+            _fail(f"storyboards.{mode} must contain the approved scene order")
+        for index, expected in enumerate(expected_scenes):
+            scene = _mapping(scenes[index], f"storyboards.{mode}.scenes[{index}]")
+            _keys(scene, SCENE_KEYS, f"storyboards.{mode}.scenes[{index}]")
+            values = (
+                _string(scene["id"], f"storyboards.{mode}.scenes[{index}].id"),
+                _string(scene["route"], f"storyboards.{mode}.scenes[{index}].route"),
+                _string(scene["caption"], f"storyboards.{mode}.scenes[{index}].caption"),
+                _number(scene["read_seconds"], f"storyboards.{mode}.scenes[{index}].read_seconds"),
+                _number(scene["max_action_seconds"], f"storyboards.{mode}.scenes[{index}].max_action_seconds"),
+            )
+            if values != expected:
+                _fail(f"storyboards.{mode}.scenes[{index}] is not canonical")
 
     return spec
 
@@ -301,16 +444,31 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
-def _srt_time(seconds: int) -> str:
-    hours, remainder = divmod(seconds, 3600)
-    minutes, whole_seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{whole_seconds:02d},000"
+def _srt_time(seconds: float) -> str:
+    milliseconds = round(seconds * 1000)
+    hours, remainder = divmod(milliseconds, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    whole_seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{whole_seconds:02d},{milliseconds:03d}"
 
 
-def _captions_srt(spec: Mapping[str, Any]) -> str:
+def _render_speed(mode: CaptureMode) -> float:
+    return FULL_RENDER_SPEED if mode == "full" else DRAFT_RENDER_SPEED
+
+
+def _captions_srt(mode: CaptureMode, timeline: Mapping[str, Any]) -> str:
+    scenes = timeline["scenes"]
+    assert isinstance(scenes, list)
+    rows = APPROVED_STORYBOARDS[mode]
+    render_speed = _render_speed(mode)
     entries = [
-        f"{index}\n{_srt_time(caption['start'])} --> {_srt_time(caption['end'])}\n{caption['text']}"
-        for index, caption in enumerate(spec["captions"], start=1)
+        (
+            f"{index}\n"
+            f"{_srt_time(float(scene['start_seconds']) / render_speed)} --> "
+            f"{_srt_time(float(scene['end_seconds']) / render_speed)}\n"
+            f"{row[2]}"
+        )
+        for index, (scene, row) in enumerate(zip(scenes, rows, strict=True), start=1)
     ]
     return "\n\n".join(entries) + "\n"
 
@@ -325,25 +483,33 @@ def _runtime_asset_names(spec: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-def _encoder_arguments(spec: Mapping[str, Any]) -> tuple[str, ...]:
+def _encoder_arguments(spec: Mapping[str, Any], mode: CaptureMode) -> tuple[str, ...]:
     """Build the fixed, newline-safe encoder argument protocol."""
     video_name = cast("str", spec["video"]["name"])
     if not video_name.endswith(".mp4"):
         _fail("capture specification video name must end with .mp4")
     viewport = cast("Mapping[str, Any]", spec["viewport"])
     poster = cast("Mapping[str, Any]", spec["poster"])
+    video = cast("Mapping[str, Any]", spec["video"])
+    storyboard = cast("Mapping[str, Any]", spec["storyboards"][mode])
     return (
         f"work/{video_name[:-4]}.webm",
         "work/captions.srt",
         f"assets/{cast('str', spec['screenshots'][0]['name'])}",
-        f"assets/{video_name}",
+        cast("str", storyboard["output_path"]),
         f"assets/{cast('str', poster['name'])}",
+        MARKER_COLOR,
+        str(MARKER_AVERAGE_TOLERANCE),
+        str(MARKER_WITHIN_PLANE_SPREAD),
+        str(_render_speed(mode)),
         str(viewport["width"]),
-        str(viewport["height"]),
+        str(video["content_height"]),
+        str(VIDEO_CAPTION_BAND_HEIGHT),
         str(poster["width"]),
         str(poster["height"]),
-        str(spec["video"]["minimum_seconds"]),
-        str(spec["video"]["maximum_seconds"]),
+        str(video["caption_font_size"]),
+        str(storyboard.get("minimum_seconds", 0)),
+        str(storyboard["maximum_seconds"]),
     )
 
 
@@ -485,8 +651,6 @@ def build_catalog(
     spec_path: Path,
     config_path: Path,
     output_path: Path,
-    srt_output_path: Path,
-    encoder_arguments_output: Path,
     state_dir: Path | None = None,
 ) -> None:
     """Project the current pure demo scenarios into a capture allowlist."""
@@ -526,9 +690,205 @@ def build_catalog(
     if state_dir is not None:
         catalog["database_evidence"] = _database_evidence(config_path=config_path, state_dir=state_dir, spec=spec)
     _write_json(output_path, catalog)
-    srt_output_path.parent.mkdir(parents=True, exist_ok=True)
-    srt_output_path.write_text(_captions_srt(spec), encoding="utf-8")
-    _write_argument_vector(encoder_arguments_output, _encoder_arguments(spec))
+
+
+def _mode(value: object, label: str = "mode") -> CaptureMode:
+    if value not in ("full", "draft"):
+        _fail(f"{label} must be full or draft")
+    return cast("CaptureMode", value)
+
+
+def _storyboard(spec: Mapping[str, Any], mode: CaptureMode) -> Mapping[str, Any]:
+    storyboards = cast("Mapping[str, Any]", spec["storyboards"])
+    return cast("Mapping[str, Any]", storyboards[mode])
+
+
+def _validate_scroll_samples(value: object, scene_id: str) -> list[dict[str, float]]:
+    if not isinstance(value, list) or len(value) < 3:
+        _fail(f"timeline scene {scene_id} does not contain enough smooth-scroll samples")
+    samples: list[dict[str, float]] = []
+    previous_elapsed = -math.inf
+    for index, raw_sample in enumerate(value):
+        sample = _mapping(raw_sample, f"timeline scene {scene_id}.scroll_samples[{index}]")
+        _keys(sample, SCROLL_SAMPLE_KEYS, f"timeline scene {scene_id}.scroll_samples[{index}]")
+        elapsed = float(_number(sample["elapsed_seconds"], f"timeline scene {scene_id}.scroll elapsed_seconds"))
+        offset = float(_number(sample["offset"], f"timeline scene {scene_id}.scroll offset"))
+        if elapsed < previous_elapsed:
+            _fail(f"timeline scene {scene_id} scroll sample times are not monotonic")
+        samples.append({"elapsed_seconds": elapsed, "offset": offset})
+        previous_elapsed = elapsed
+    if abs(samples[0]["elapsed_seconds"]) > FRAME_TOLERANCE_SECONDS:
+        _fail(f"timeline scene {scene_id} smooth-scroll samples must start at zero")
+    if samples[-1]["elapsed_seconds"] < 0.9 * RAW_CAPTURE_SPEED - FRAME_TOLERANCE_SECONDS:
+        _fail(f"timeline scene {scene_id} smooth-scroll duration is too short")
+    deltas = [right["offset"] - left["offset"] for left, right in zip(samples, samples[1:], strict=False)]
+    if not all(delta >= 0 for delta in deltas) and not all(delta <= 0 for delta in deltas):
+        _fail(f"timeline scene {scene_id} scroll samples are not monotonic")
+    if abs(samples[-1]["offset"] - samples[0]["offset"]) < 120:
+        _fail(f"timeline scene {scene_id} smooth-scroll travel is too short")
+    return samples
+
+
+def _validate_timeline_payload(
+    spec: Mapping[str, Any],
+    mode: CaptureMode,
+    raw: object,
+) -> tuple[dict[str, Any], float]:
+    timeline = _mapping(raw, "edit timeline")
+    expected_timeline_keys = TIMELINE_KEYS | {"framing"}
+    if mode == "full":
+        expected_timeline_keys |= {"evidence"}
+    _keys(timeline, expected_timeline_keys, "edit timeline")
+    if _mode(timeline["mode"], "timeline mode") != mode:
+        _fail("edit timeline mode does not match the requested mode")
+    speed = float(_number(timeline["speed"], "timeline speed"))
+    if speed != RAW_CAPTURE_SPEED:
+        _fail("edit timeline speed must be exactly 1.15")
+
+    markers = _mapping(timeline["markers"], "edit timeline markers")
+    _keys(markers, TIMELINE_MARKER_KEYS, "edit timeline markers")
+    if _string(markers["color"], "timeline marker color") != MARKER_COLOR:
+        _fail("edit timeline marker color is not canonical")
+    if _integer(markers["plane_average_tolerance"], "timeline marker average tolerance") != MARKER_AVERAGE_TOLERANCE:
+        _fail("edit timeline marker average tolerance is not canonical")
+    if _integer(markers["within_plane_spread"], "timeline marker plane spread") != MARKER_WITHIN_PLANE_SPREAD:
+        _fail("edit timeline marker plane spread is not canonical")
+    runs = markers["runs"]
+    if not isinstance(runs, list) or len(runs) != 2:
+        _fail("edit timeline must declare exactly two marker runs")
+    for index, raw_run in enumerate(runs):
+        run = _mapping(raw_run, f"edit timeline markers.runs[{index}]")
+        _keys(run, TIMELINE_MARKER_RUN_KEYS, f"edit timeline markers.runs[{index}]")
+        duration = float(_number(run["duration_seconds"], f"marker run {index} duration_seconds"))
+        frames = _integer(run["frames"], f"marker run {index} frames")
+        if not MARKER_MINIMUM_SECONDS <= duration <= MARKER_MAXIMUM_SECONDS:
+            _fail(f"marker run {index} duration is outside 0.3-0.5 seconds")
+        if frames < MARKER_MINIMUM_FRAMES:
+            _fail(f"marker run {index} is shorter than six frames")
+
+    expected_scene_rows = APPROVED_STORYBOARDS[mode]
+    scenes = timeline["scenes"]
+    if not isinstance(scenes, list) or len(scenes) != len(expected_scene_rows):
+        _fail(f"edit timeline does not contain the approved {mode} scene order")
+    previous_end = 0.0
+    normalized_scenes: list[dict[str, Any]] = []
+    for index, (raw_scene, expected) in enumerate(zip(scenes, expected_scene_rows, strict=True)):
+        scene = _mapping(raw_scene, f"edit timeline scenes[{index}]")
+        _keys(scene, TIMELINE_SCENE_KEYS, f"edit timeline scenes[{index}]")
+        scene_id = _string(scene["id"], f"edit timeline scenes[{index}].id")
+        if scene_id != expected[0]:
+            _fail(f"edit timeline scene order is not approved at index {index}")
+        start = float(_number(scene["start_seconds"], f"timeline scene {scene_id} start_seconds"))
+        action_complete = float(
+            _number(scene["action_complete_seconds"], f"timeline scene {scene_id} action_complete_seconds")
+        )
+        end = float(_number(scene["end_seconds"], f"timeline scene {scene_id} end_seconds"))
+        if start < 0 or action_complete <= start or end < action_complete:
+            _fail(f"timeline scene {scene_id} has non-monotonic boundaries")
+        if index == 0 and abs(start) > FRAME_TOLERANCE_SECONDS:
+            _fail(f"timeline scene {scene_id} does not start at zero")
+        if index > 0 and abs(start - previous_end) > FRAME_TOLERANCE_SECONDS:
+            _fail(f"timeline scene {scene_id} is not contiguous with the previous scene")
+        action_seconds = (action_complete - start) / RAW_CAPTURE_SPEED
+        hold_seconds = (end - action_complete) / RAW_CAPTURE_SPEED
+        if action_seconds > float(expected[4]) + FRAME_TOLERANCE_SECONDS:
+            _fail(f"timeline scene {scene_id} exceeds its action overrun cap")
+        if hold_seconds < 2 - FRAME_TOLERANCE_SECONDS or hold_seconds > 4 + FRAME_TOLERANCE_SECONDS:
+            _fail(f"timeline scene {scene_id} read hold is outside 2-4 seconds")
+        if abs(hold_seconds - float(expected[3])) > FRAME_TOLERANCE_SECONDS:
+            _fail(f"timeline scene {scene_id} read hold does not match the storyboard")
+        scroll_samples = (
+            _validate_scroll_samples(scene["scroll_samples"], scene_id) if scene_id in SCROLL_REQUIRED_SCENES else []
+        )
+        if scene_id not in SCROLL_REQUIRED_SCENES and scene["scroll_samples"] != []:
+            _fail(f"timeline scene {scene_id} has unexpected scroll evidence")
+        normalized_scenes.append(
+            {
+                "id": scene_id,
+                "start_seconds": start,
+                "action_complete_seconds": action_complete,
+                "end_seconds": end,
+                "scroll_samples": scroll_samples,
+            }
+        )
+        previous_end = end
+
+    output_duration = previous_end / _render_speed(mode)
+    storyboard = _storyboard(spec, mode)
+    maximum_seconds = float(storyboard["maximum_seconds"])
+    if output_duration > maximum_seconds + FRAME_TOLERANCE_SECONDS:
+        _fail(f"{mode} timeline exceeds its {maximum_seconds:g}-second maximum")
+    if mode == "draft":
+        minimum_seconds = float(storyboard["minimum_seconds"])
+        if output_duration < minimum_seconds - FRAME_TOLERANCE_SECONDS:
+            _fail(f"draft timeline is shorter than its {minimum_seconds:g}-second minimum")
+
+    framing = _mapping(timeline["framing"], "edit timeline framing")
+    expected_framing = {
+        "zoom_percent": VIDEO_CONTENT_ZOOM_PERCENT,
+        "minimum_playback_text_pixels": 11,
+        "minimum_playback_target_pixels": 24,
+    }
+    _keys(framing, frozenset(expected_framing), "edit timeline framing")
+    for key, expected_value in expected_framing.items():
+        if _number(framing[key], f"edit timeline framing.{key}") < expected_value:
+            _fail(f"edit timeline framing.{key} is below the approved minimum")
+    if mode == "full":
+        evidence = _mapping(timeline["evidence"], "edit timeline evidence")
+        expected_evidence_keys = frozenset({"topic_tooltip", "movers_tooltip", "table_rows"})
+        _keys(evidence, expected_evidence_keys, "edit timeline evidence")
+        if _string(evidence["topic_tooltip"], "topic tooltip") != "$79,000.00":
+            _fail("edit timeline topic tooltip does not support the approved finding")
+        if _string(evidence["movers_tooltip"], "movers tooltip") != "2026-08-31 +$49,000.00 increase":
+            _fail("edit timeline movers tooltip does not support the approved finding")
+        rows = evidence["table_rows"]
+        expected_evidence_rows = {("2026-08-30", "$1,000.00"), ("2026-08-31", "$50,000.00")}
+        if not isinstance(rows, list) or len(rows) != len(expected_evidence_rows):
+            _fail("edit timeline table evidence does not support the approved date comparison")
+        normalized_rows: list[tuple[str, str]] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, list) or len(row) != 2:
+                _fail(f"edit timeline table evidence row {index} must contain exactly two strings")
+            normalized_rows.append(
+                (
+                    _string(row[0], f"edit timeline table evidence row {index} date"),
+                    _string(row[1], f"edit timeline table evidence row {index} amount"),
+                )
+            )
+        if set(normalized_rows) != expected_evidence_rows:
+            _fail("edit timeline table evidence does not support the approved date comparison")
+    return {**timeline, "scenes": normalized_scenes}, output_duration
+
+
+def _timeline_from_file(path: Path, spec: Mapping[str, Any], mode: CaptureMode) -> tuple[dict[str, Any], float]:
+    return _validate_timeline_payload(spec, mode, _read_json(path, "edit timeline"))
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def edit_media(
+    spec_path: Path,
+    mode: CaptureMode,
+    timeline_path: Path,
+    srt_output_path: Path,
+    encoder_arguments_output: Path,
+) -> None:
+    """Validate a captured timeline and prepare its speed-adjusted encoder inputs."""
+    spec = load_spec(spec_path)
+    timeline, _output_duration = _timeline_from_file(timeline_path, spec, mode)
+    srt = _captions_srt(mode, timeline)
+    arguments = _encoder_arguments(spec, mode)
+    _write_text_atomic(srt_output_path, srt)
+    _write_text_atomic(encoder_arguments_output, "".join(f"{value}\n" for value in arguments))
 
 
 def _sha256(path: Path) -> str:
@@ -600,14 +960,25 @@ def _validate_poster(path: Path, dashboard: Path, width: int, height: int) -> di
     return _asset_entry(path, width=width, height=height, media_type="image/webp")
 
 
-def _validate_encoder_result(media_root: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
-    raw = _mapping(_read_json(media_root / "work" / "encoder-result.json", "encoder result"), "encoder result")
+def _validate_encoder_result(
+    media_root: Path,
+    spec: Mapping[str, Any],
+    result_path: Path | None = None,
+    expected_mode: CaptureMode | None = None,
+) -> dict[str, Any]:
+    encoder_result_path = result_path or media_root / "work" / "encoder-result.json"
+    raw = _mapping(_read_json(encoder_result_path, "encoder result"), "encoder result")
     _keys(raw, ENCODER_RESULT_KEYS, "encoder result")
+    result_mode = _mode(raw["mode"], "encoder mode")
+    if expected_mode is not None and result_mode != expected_mode:
+        _fail(f"encoder result must be a {expected_mode}-mode capture")
+    render_speed = _render_speed(result_mode)
     duration = _number(raw["duration_seconds"], "encoder duration_seconds")
-    minimum_seconds = spec["video"]["minimum_seconds"]
-    maximum_seconds = spec["video"]["maximum_seconds"]
-    if not minimum_seconds <= duration <= maximum_seconds:
-        _fail(f"encoded video duration is outside the approved {minimum_seconds}-{maximum_seconds} second range")
+    storyboard = _storyboard(spec, result_mode)
+    minimum_seconds = float(storyboard.get("minimum_seconds", 0))
+    maximum_seconds = float(storyboard["maximum_seconds"])
+    if not minimum_seconds <= duration <= maximum_seconds + FRAME_TOLERANCE_SECONDS:
+        _fail(f"encoded video duration is outside the approved {minimum_seconds:g}-{maximum_seconds:g} second range")
     if _string(raw["video_codec"], "encoder video_codec") != "h264":
         _fail("encoded video codec must be h264")
     viewport = cast("Mapping[str, Any]", spec["viewport"])
@@ -628,6 +999,44 @@ def _validate_encoder_result(media_root: Path, spec: Mapping[str, Any]) -> dict[
         _fail("encoded video was not produced from captions.srt")
     if not _boolean(raw["webm_removed"], "encoder webm_removed"):
         _fail("raw WebM was not removed after successful encoding")
+    if _integer(raw["story_first_frame"], "encoder story_first_frame") < 0:
+        _fail("encoder story_first_frame must be non-negative")
+    if _integer(raw["story_last_frame"], "encoder story_last_frame") <= _integer(
+        raw["story_first_frame"], "encoder story_first_frame"
+    ):
+        _fail("encoder story_last_frame must follow story_first_frame")
+    raw_frame_rate = _number(raw["raw_frame_rate"], "encoder raw_frame_rate")
+    if raw_frame_rate <= 0:
+        _fail("encoder raw frame rate must be positive")
+    if _number(raw["speed"], "encoder speed") != render_speed:
+        _fail(f"encoder speed must be exactly {render_speed:g} for {result_mode} mode")
+    edited_duration = float(_number(raw["edited_duration_seconds"], "encoder edited_duration_seconds"))
+    if abs(edited_duration - duration) > FRAME_TOLERANCE_SECONDS:
+        _fail("encoder edited duration does not match the probed duration")
+    timeline_hash = _string(raw["timeline_sha256"], "encoder timeline_sha256")
+    if SHA256_RE.fullmatch(timeline_hash) is None:
+        _fail("encoder timeline_sha256 is invalid")
+    timeline_path = media_root / "work" / "edit-timeline.json"
+    if timeline_path.is_file():
+        timeline = _read_json(timeline_path, "edit timeline")
+        if _sha256(timeline_path) != timeline_hash:
+            _fail("encoder timeline hash does not match edit-timeline.json")
+        timeline_mapping = _mapping(timeline, "edit timeline")
+        timeline_mode = _mode(timeline_mapping.get("mode"), "timeline mode")
+        if timeline_mode != result_mode:
+            _fail("encoder mode does not match the edit timeline")
+        if float(_number(timeline_mapping.get("speed"), "timeline speed")) != RAW_CAPTURE_SPEED:
+            _fail("timeline speed must be exactly 1.15")
+        markers = _mapping(timeline_mapping.get("markers"), "edit timeline markers")
+        runs = markers.get("runs")
+        if not isinstance(runs, list) or len(runs) != 2:
+            _fail("encoder marker evidence must contain exactly two runs")
+        for index, raw_run in enumerate(runs):
+            run = _mapping(raw_run, f"edit timeline markers.runs[{index}]")
+            duration = float(_number(run.get("duration_seconds"), f"marker run {index} duration_seconds"))
+            frames = _integer(run.get("frames"), f"marker run {index} frames")
+            if not math.isclose(duration, frames / raw_frame_rate, rel_tol=0.0, abs_tol=1e-3):
+                _fail(f"encoder marker run {index} duration does not match its frame count at the raw frame rate")
     video_name = cast("str", spec["video"]["name"])
     if (media_root / "work" / f"{video_name[:-4]}.webm").exists():
         _fail("raw WebM was not removed after successful encoding")
@@ -680,14 +1089,74 @@ def _validate_state(media_root: Path, spec: Mapping[str, Any]) -> dict[str, Any]
     return _state_metadata(media_root / "state", spec)
 
 
-def _validate_captions(media_root: Path, spec: Mapping[str, Any]) -> None:
+def _validate_captions(
+    media_root: Path,
+    spec: Mapping[str, Any],
+    expected_mode: CaptureMode | None = None,
+) -> None:
     captions_path = media_root / "work" / "captions.srt"
     try:
         captions = captions_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         _fail(f"caption file is not readable: {exc}")
-    if captions != _captions_srt(spec):
+    timeline_path = media_root / "work" / "edit-timeline.json"
+    raw_timeline = _read_json(timeline_path, "edit timeline")
+    timeline_mapping = _mapping(raw_timeline, "edit timeline")
+    mode = _mode(timeline_mapping.get("mode"), "timeline mode")
+    if expected_mode is not None and mode != expected_mode:
+        _fail(f"edit timeline must be a {expected_mode}-mode capture")
+    timeline, _output_duration = _validate_timeline_payload(spec, mode, raw_timeline)
+    if captions != _captions_srt(mode, timeline):
         _fail("caption file does not exactly match the capture specification")
+
+
+def validate_encode(
+    spec_path: Path,
+    mode: CaptureMode,
+    timeline_path: Path,
+    encoder_result_path: Path,
+    video_path: Path,
+) -> None:
+    """Validate encoder-owned media probes against the captured timeline."""
+    spec = load_spec(spec_path)
+    timeline, expected_duration = _timeline_from_file(timeline_path, spec, mode)
+    try:
+        normalized_result_path = encoder_result_path.resolve(strict=False)
+        normalized_timeline_path = timeline_path.resolve(strict=False)
+        normalized_video_path = video_path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        _fail(f"media validation path is invalid: {exc}")
+    if normalized_result_path.name != "encoder-result.json" or normalized_result_path.parent.name != "work":
+        _fail("encoder result path must be a work/encoder-result.json file")
+    media_root = normalized_result_path.parent.parent
+    try:
+        normalized_timeline_path.relative_to(media_root)
+        normalized_video_path.relative_to(media_root)
+    except ValueError:
+        _fail("timeline and encoded video paths must be inside the encoder result media root")
+    if normalized_timeline_path != media_root / "work" / "edit-timeline.json":
+        _fail("timeline path must be work/edit-timeline.json in the encoder result media root")
+    expected_video_path = media_root / cast("str", _storyboard(spec, mode)["output_path"])
+    if normalized_video_path != expected_video_path:
+        _fail(f"encoded video path must match the {mode} storyboard output path")
+    if not normalized_video_path.is_file() or normalized_video_path.is_symlink():
+        _fail(f"encoded video is missing or is not a regular file: {video_path}")
+    encoder = _validate_encoder_result(media_root, spec, normalized_result_path)
+    if _mode(encoder["mode"], "encoder mode") != mode:
+        _fail("encoder mode does not match the requested mode")
+    if _string(encoder["timeline_sha256"], "encoder timeline_sha256") != _sha256(normalized_timeline_path):
+        _fail("encoder timeline hash does not match the requested timeline")
+    actual_duration = float(_number(encoder["edited_duration_seconds"], "encoder edited_duration_seconds"))
+    if abs(actual_duration - expected_duration) > FRAME_TOLERANCE_SECONDS:
+        _fail("encoded duration does not match the speed-adjusted edit timeline")
+    if (
+        abs(float(_number(encoder["duration_seconds"], "encoder duration_seconds")) - expected_duration)
+        > FRAME_TOLERANCE_SECONDS
+    ):
+        _fail("probed encoded duration does not match the speed-adjusted edit timeline")
+    if timeline["mode"] != mode:
+        _fail("encoder validation timeline mode does not match the requested mode")
+    print(json.dumps({"mode": mode, "video": str(video_path), "valid": True}))
 
 
 def _validate_database_evidence(media_root: Path, spec: Mapping[str, Any]) -> tuple[bool, bool]:
@@ -875,8 +1344,8 @@ def _validate_manifest_payload(
     if set(raw_assets) != set(APPROVED_ASSETS):
         _fail("media manifest assets do not match the exact approved asset set")
     _validate_browser_observations(media_root)
-    encoder = _validate_encoder_result(media_root, spec)
-    _validate_captions(media_root, spec)
+    encoder = _validate_encoder_result(media_root, spec, expected_mode="full")
+    _validate_captions(media_root, spec, expected_mode="full")
     fresh_showcase_state, database_matches_catalog = _validate_database_evidence(media_root, spec)
     if validation["fresh_showcase_state"] is not fresh_showcase_state:
         _fail("media manifest fresh_showcase_state evidence does not match persisted state")
@@ -909,8 +1378,8 @@ def create_manifest(
     if COMMIT_RE.fullmatch(source_commit) is None:
         _fail("source commit must be a 40-character lowercase SHA")
     observations = _validate_browser_observations(media_root)
-    encoder = _validate_encoder_result(media_root, spec)
-    _validate_captions(media_root, spec)
+    encoder = _validate_encoder_result(media_root, spec, expected_mode="full")
+    _validate_captions(media_root, spec, expected_mode="full")
     fresh_showcase_state, database_matches_catalog = _validate_database_evidence(media_root, spec)
     assets = _asset_entries(media_root, spec, encoder)
     manifest = {
@@ -958,9 +1427,21 @@ def _parser() -> argparse.ArgumentParser:
     catalog_parser.add_argument("--spec", type=Path, required=True)
     catalog_parser.add_argument("--config", type=Path, required=True)
     catalog_parser.add_argument("--output", type=Path, required=True)
-    catalog_parser.add_argument("--srt-output", type=Path, required=True)
-    catalog_parser.add_argument("--encoder-arguments-output", type=Path, required=True)
     catalog_parser.add_argument("--state-dir", type=Path)
+
+    edit_parser = subparsers.add_parser("edit")
+    edit_parser.add_argument("--spec", type=Path, required=True)
+    edit_parser.add_argument("--mode", choices=("full", "draft"), required=True)
+    edit_parser.add_argument("--timeline", type=Path, required=True)
+    edit_parser.add_argument("--srt-output", type=Path, required=True)
+    edit_parser.add_argument("--encoder-arguments-output", type=Path, required=True)
+
+    validate_encode_parser = subparsers.add_parser("validate-encode")
+    validate_encode_parser.add_argument("--spec", type=Path, required=True)
+    validate_encode_parser.add_argument("--mode", choices=("full", "draft"), required=True)
+    validate_encode_parser.add_argument("--timeline", type=Path, required=True)
+    validate_encode_parser.add_argument("--encoder-result", type=Path, required=True)
+    validate_encode_parser.add_argument("--video", type=Path, required=True)
 
     manifest_parser = subparsers.add_parser("manifest")
     manifest_parser.add_argument("--spec", type=Path, required=True)
@@ -987,9 +1468,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.spec,
                 args.config,
                 args.output,
+                args.state_dir,
+            )
+        elif args.command == "edit":
+            edit_media(
+                args.spec,
+                cast("CaptureMode", args.mode),
+                args.timeline,
                 args.srt_output,
                 args.encoder_arguments_output,
-                args.state_dir,
+            )
+        elif args.command == "validate-encode":
+            validate_encode(
+                args.spec,
+                cast("CaptureMode", args.mode),
+                args.timeline,
+                args.encoder_result,
+                args.video,
             )
         elif args.command == "manifest":
             create_manifest(args.spec, args.media_root, args.source_commit, args.source_worktree_clean == "true")

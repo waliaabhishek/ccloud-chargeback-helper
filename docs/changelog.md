@@ -6,6 +6,9 @@
   web-interface values without loading each tenant's full catalog.
 - Document the synthetic Demo media bundle, stable release assets, lifecycle
   commands, and maintainer refresh workflow.
+- Expand the synthetic Demo walkthrough to eleven scenes across Dashboard, Cost
+  Explorer, Topic Attribution, Pipeline Status, and FOCUS Mapping Preview, with
+  scrolling, pointer cues, a caption band, bounded output, and no duration padding.
 - Add a portable root `./demo` launcher with Clean and Showcase profiles,
   optional Grafana, localhost/LAN controls, release-image pulls or source
   builds, lifecycle operations, and port-ownership diagnostics.

@@ -147,6 +147,15 @@ capture asset tracked in this repository. Screenshots, the walkthrough video,
 the generated database evidence, and the capture manifest are kept out of git;
 the approved screenshots, video, and manifest are available from the stable
 [`demo-media` GitHub Release](https://github.com/waliaabhishek/chitragupta/releases/tag/demo-media).
+The stable release contains seven assets: five screenshots, the full walkthrough,
+and the capture manifest.
+
+The full walkthrough follows one cost investigation through eleven meaningful
+scenes: Dashboard → Cost Explorer → Topic Attribution → Pipeline Status → FOCUS
+Mapping Preview. The video uses a dedicated caption band, deliberate scrolling,
+pointer/click cues, and readable pauses. Full rendering uses 1.4375× and draft
+rendering uses 1.15×; full output is content-driven, has no duration padding,
+and is capped at 90 seconds, while draft output is 15–20 seconds.
 
 Stable release assets:
 
@@ -162,6 +171,16 @@ Stable release assets:
 
 ### Capture and operate the media stack
 
+For a short review before the full capture, run:
+
+```bash
+./demo media draft
+```
+
+The command writes `.demo/media/review/chitragupta-demo-investigation-draft.mp4`.
+Watch the entire file at 960×540 and record maintainer feedback before running
+`./demo media`. The draft creates no `manifest.json` and cannot be published.
+
 From the repository root, capture the current checkout with:
 
 ```bash
@@ -169,11 +188,11 @@ From the repository root, capture the current checkout with:
 ```
 
 This creates an isolated media workspace under `.demo/media`, generates fresh
-Showcase state, captures the five still scenes and walkthrough, validates the
-catalog and manifest. A dirty authoring capture copies the validated poster to
-`docs/assets/demo/chitragupta-demo-dashboard-poster.webp` for visual review and
-commit. A clean-source publication recapture keeps that reviewed tracked poster
-unchanged and generates the validated Release poster under
+Showcase state, captures the five still scenes and eleven-scene walkthrough, and
+validates the catalog and manifest. A dirty authoring capture copies the validated
+poster to `docs/assets/demo/chitragupta-demo-dashboard-poster.webp` for visual
+review and commit. A clean-source publication recapture keeps that reviewed
+tracked poster unchanged and generates the validated Release poster under
 `.demo/media/assets/chitragupta-demo-dashboard-poster.webp`. A successful run
 stops the API and UI before removing the media Compose containers and network;
 the generated evidence remains under `.demo/media` for inspection.
@@ -209,13 +228,15 @@ the `demo-media` release.
 Maintainers own the refresh when a UI, data, or capture change materially
 changes the Demo experience:
 
-1. Run `./demo media` and inspect every generated screenshot and the full video.
-2. Review the visuals and the manifest values; correct the change if the
+1. Run `./demo media draft`, watch the entire draft at 960×540, and record
+   feedback.
+2. Run `./demo media` and inspect every generated screenshot and the full video.
+3. Review the visuals and the manifest values; correct the change if the
    capture no longer represents the intended experience.
-3. Commit the implementation, documentation, and updated poster after review.
-4. From that clean commit, run `./demo media` again to create the publishable
+4. Commit the implementation, documentation, and updated poster after review.
+5. From that clean commit, run `./demo media` again to create the publishable
    capture and verify the result once more.
-5. Run `./demo media publish` explicitly, then open the `demo-media` release and
+6. Run `./demo media publish` explicitly, then open the `demo-media` release and
    verify each published asset and its stable URL.
 
 ## Raw Compose escape hatch
