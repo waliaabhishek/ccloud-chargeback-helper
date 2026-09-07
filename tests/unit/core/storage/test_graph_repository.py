@@ -128,6 +128,58 @@ def _fact(
 
 
 class TestGraphRepositoryRootView:
+    def test_self_managed_root_contains_clusters_and_reconciled_costs(
+        self, session: Session, repo: SQLModelGraphRepository
+    ) -> None:
+        ecosystem = "self_managed_kafka"
+        for resource in [
+            _resource("cluster-a", "cluster"),
+            _resource("cluster-b", "cluster"),
+            _resource("cluster-a/orders", "topic", parent_id="cluster-a"),
+        ]:
+            resource.ecosystem = ecosystem
+            session.add(resource)
+        for dimension_id, cluster_id, amount in [(1, "cluster-a", "30.50"), (2, "cluster-b", "20.25")]:
+            dimension = _dim(dimension_id, resource_id=cluster_id, env_id="")
+            dimension.ecosystem = ecosystem
+            session.add(dimension)
+            session.add(_fact(dimension_id, amount))
+        session.add(_fact(1, "999", ts=PERIOD_END))
+        session.commit()
+
+        result = repo.find_neighborhood(ecosystem, TENANT_ID, None, 1, AT, PERIOD_START, PERIOD_END)
+
+        assert {n.id: n.cost for n in result.nodes} == {
+            TENANT_ID: Decimal("50.75"),
+            "cluster-a": Decimal("30.50"),
+            "cluster-b": Decimal("20.25"),
+        }
+        assert {(e.source, e.target, e.relationship_type.value) for e in result.edges} == {
+            (TENANT_ID, "cluster-a", "parent"),
+            (TENANT_ID, "cluster-b", "parent"),
+        }
+        focused = repo.find_neighborhood(ecosystem, TENANT_ID, "cluster-a", 1, AT, PERIOD_START, PERIOD_END)
+        assert {n.id for n in focused.nodes} == {"cluster-a", "cluster-a/orders"}
+        assert next(n.cost for n in focused.nodes if n.id == "cluster-a") == Decimal("30.50")
+
+    def test_root_clusters_respect_tenant_ecosystem_and_lifecycle(
+        self, session: Session, repo: SQLModelGraphRepository
+    ) -> None:
+        active = _resource("active", "cluster")
+        foreign_tenant = _resource("foreign-tenant", "cluster")
+        foreign_tenant.tenant_id = "other-tenant"
+        foreign_ecosystem = _resource("foreign-ecosystem", "cluster")
+        foreign_ecosystem.ecosystem = "other-ecosystem"
+        deleted = _resource("deleted", "cluster", deleted_at=PERIOD_START)
+        future = _resource("future", "cluster", created_at=PERIOD_END)
+        session.add_all([active, foreign_tenant, foreign_ecosystem, deleted, future])
+        session.commit()
+
+        result = repo.find_neighborhood(ECOSYSTEM, TENANT_ID, None, 1, AT, PERIOD_START, PERIOD_END)
+
+        assert {n.id for n in result.nodes} == {TENANT_ID, "active"}
+        assert {(e.source, e.target) for e in result.edges} == {(TENANT_ID, "active")}
+
     def test_root_view_returns_environment_and_tenant_nodes(
         self, session: Session, repo: SQLModelGraphRepository
     ) -> None:
@@ -174,10 +226,10 @@ class TestGraphRepositoryRootView:
         env_node = next(n for n in result.nodes if n.id == "env-abc")
         assert env_node.cost == Decimal("75.50")
 
-    def test_root_view_excludes_non_environment_resources(
+    def test_root_view_excludes_clusters_nested_under_environments(
         self, session: Session, repo: SQLModelGraphRepository
     ) -> None:
-        """Root view only exposes environment nodes, not clusters or topics."""
+        """Nested clusters remain behind their environment in the root view."""
         session.add(_resource("env-abc", "environment"))
         session.add(_resource("lkc-abc", "kafka_cluster", parent_id="env-abc"))
         session.commit()

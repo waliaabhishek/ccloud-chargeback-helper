@@ -1286,7 +1286,7 @@ Return a neighborhood of nodes and directed edges centred on a focus entity.
 
 **Views:**
 
-- **Root view** (`focus` omitted): returns a synthetic tenant node plus one environment node per active environment. Edges are `parent` type, directed tenant → environment.
+- **Root view** (`focus` omitted): returns a synthetic tenant node plus active environments and clusters without a parent. Confluent Cloud clusters remain under their environments; self-managed Kafka clusters appear directly under the tenant. Edges are `parent` type, directed tenant → resource. The tenant cost is the sum of these resource costs.
 - **Environment focus** (`focus=env-abc`): returns the environment node plus all direct child resources up to `depth` hops (clusters, connectors, flink pools, schema registries). Edges are `parent` type, directed parent → child.
 - **Cluster focus** (`focus=lkc-abc`): returns the cluster node, its child topic nodes, and any identity (service account / pool) nodes charged to the cluster via chargeback. Edges are `parent` (cluster → topic) and `charge` (cluster → identity).
 

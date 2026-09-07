@@ -58,11 +58,12 @@ describe("ConfluentLinkRenderer", () => {
     expect(screen.getByText("lkc-notfound")).toBeTruthy();
   });
 
-  it("renders '—' when value is null", () => {
-    render(<ConfluentLinkRenderer value={null} />);
+  it.each([null, undefined])("renders '—' without registering when value is %s", (value) => {
+    render(<ConfluentLinkRenderer value={value} />);
 
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByText("—")).toBeTruthy();
+    expect(mockRegisterIdentifier).not.toHaveBeenCalled();
   });
 
   it("feature flag off renders plain text even when resolveUrl would return URL", () => {

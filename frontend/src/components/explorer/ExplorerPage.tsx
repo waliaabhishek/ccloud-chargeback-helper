@@ -39,6 +39,7 @@ function collapseNearZeroNodes(
   const nearZeroIds = new Set<string>();
   for (const n of nodes) {
     if (n.id === focusId) continue;
+    if (n.resource_type === "tenant") continue;
     if (isGroupNode(n.resource_type)) continue;
     if (n.status === "phantom") continue;
     if (n.cost < NEAR_ZERO_THRESHOLD) nearZeroIds.add(n.id);

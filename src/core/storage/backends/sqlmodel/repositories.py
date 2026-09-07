@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from cachetools import TTLCache
-from sqlalchemy import case, cast, delete, func, literal, or_, update
+from sqlalchemy import and_, case, cast, delete, func, literal, or_, update
 from sqlalchemy.types import String
 from sqlmodel import Session, col, select
 
@@ -2564,17 +2564,32 @@ class SQLModelGraphRepository:
         period_start: datetime,
         period_end: datetime,
     ) -> GraphNeighborhood:
-        """Return all environments as nodes with a synthetic tenant→env edge per environment."""
+        """Return environments and parentless clusters beneath the synthetic tenant root."""
         where = _temporal_active_at_filter(ResourceTable, ecosystem, tenant_id, at)
-        where.append(col(ResourceTable.resource_type) == "environment")
-        env_rows = self._session.exec(select(ResourceTable).where(*where)).all()
+        where.append(
+            or_(
+                col(ResourceTable.resource_type) == "environment",
+                and_(
+                    col(ResourceTable.resource_type).in_({"kafka_cluster", "dedicated_cluster", "cluster"}),
+                    col(ResourceTable.parent_id).is_(None),
+                ),
+            )
+        )
+        root_rows = self._session.exec(select(ResourceTable).where(*where)).all()
 
-        env_ids = [r.resource_id for r in env_rows]
-        # Environments are billed via env_id on chargeback_dimensions, not resource_id
+        root_ids = [r.resource_id for r in root_rows]
+        env_ids = [r.resource_id for r in root_rows if r.resource_type == "environment"]
+        cluster_ids = [r.resource_id for r in root_rows if r.resource_type != "environment"]
+        # Environment costs group by env_id; parentless cluster costs group by resource_id.
         cost_map = self._aggregate_costs(
             ecosystem, tenant_id, env_ids, period_start, period_end, group_by_column="env_id"
         )
-        tags_map = self._tags.find_tags_for_entities(tenant_id, "resource", env_ids)
+        cost_map.update(
+            self._aggregate_costs(
+                ecosystem, tenant_id, cluster_ids, period_start, period_end, group_by_column="resource_id"
+            )
+        )
+        tags_map = self._tags.find_tags_for_entities(tenant_id, "resource", root_ids)
 
         nodes = [
             GraphNodeData(
@@ -2590,7 +2605,7 @@ class SQLModelGraphRepository:
                 region=r.region,
                 status=r.status,
             )
-            for r in env_rows
+            for r in root_rows
         ]
         # Synthetic tenant node (no DB row — tenant is config-only)
         tenant_node = GraphNodeData(
@@ -2606,9 +2621,9 @@ class SQLModelGraphRepository:
             region=None,
             status="active",
         )
-        # All parent edges: parent (tenant) → child (env)
+        # All parent edges point from the tenant to its top-level resources.
         edges = [
-            GraphEdgeData(source=tenant_id, target=r.resource_id, relationship_type=EdgeType.parent) for r in env_rows
+            GraphEdgeData(source=tenant_id, target=r.resource_id, relationship_type=EdgeType.parent) for r in root_rows
         ]
         return GraphNeighborhood(nodes=[tenant_node, *nodes], edges=edges)
 

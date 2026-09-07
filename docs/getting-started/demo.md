@@ -44,6 +44,10 @@ Both profiles include Confluent Cloud and self-managed Kafka tenants. Use the
 tenant selector at the top right to switch between them. Profile data is kept
 separately, so switching profiles preserves changes you made in each one.
 
+The **Links** switch is available only for Confluent Cloud tenants. It is off
+and disabled for self-managed Kafka. Returning to Confluent Cloud restores
+your previous Links setting.
+
 ## Try a cost investigation
 
 Start with Showcase and select **clean-confluent** in the tenant selector.

@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useResourceLinks } from "../../providers/ResourceLinkContext";
 
 interface ConfluentLinkRendererProps {
-  value: string | null;
+  value: string | null | undefined;
   url?: string | null;
 }
 
@@ -18,7 +18,7 @@ export function ConfluentLinkRenderer({
     if (
       !enabled ||
       url != null ||
-      value === null ||
+      value == null ||
       value.trim() === "" ||
       resolveUrl(value) !== null
     ) {

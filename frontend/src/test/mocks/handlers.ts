@@ -19,7 +19,7 @@ export const tenantFixtures: TenantListResponse = {
     {
       tenant_name: "acme",
       tenant_id: "t-001",
-      ecosystem: "ccloud",
+      ecosystem: "confluent_cloud",
       dates_pending: 2,
       dates_calculated: 10,
       last_calculated_date: "2024-01-10",

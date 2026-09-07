@@ -2,9 +2,10 @@ import type React from "react";
 import { StrictMode, useEffect, useLayoutEffect } from "react";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../test/mocks/server";
+import { tenantFixtures } from "../test/mocks/handlers";
 import { ConfluentLinkRenderer } from "../components/common/ConfluentLinkRenderer";
 import { ResourceLinkProvider, useResourceLinks } from "./ResourceLinkContext";
 import { TenantProvider, useTenant } from "./TenantContext";
@@ -100,6 +101,81 @@ async function waitForCalls(calls: BatchRequest[], count: number): Promise<void>
 
 afterEach(() => {
   localStorage.clear();
+});
+
+beforeEach(() => {
+  server.use(http.get("/api/v1/tenants", () => HttpResponse.json({
+    tenants: tenantFixtures.tenants.map((tenant) => ({ ...tenant, ecosystem: "confluent_cloud" })),
+  })));
+});
+
+describe("ResourceLinkProvider tenant eligibility", () => {
+  it.each(["self_managed_kafka", "generic_metrics_only"])("blocks saved and requested links for %s", async (ecosystem) => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    act(() => result.current.tenant.setCurrentTenant({
+      ...result.current.tenant.currentTenant!, ecosystem,
+    }));
+
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    act(() => {
+      result.current.links.setEnabled(true);
+      result.current.links.registerIdentifier("env-blocked");
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(result.current.links.enabled).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("disables links during an SMK switch and restores the Confluent preference on return", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    let finishRequest!: (value: Response) => void;
+    const calls = installBatchHandler(() => new Promise<Response>((resolve) => { finishRequest = resolve; }));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    const confluent = result.current.tenant.currentTenant!;
+    act(() => result.current.links.registerIdentifier("env-pending"));
+    await waitForCalls(calls, 1);
+    act(() => result.current.tenant.setCurrentTenant({ ...confluent, ecosystem: "self_managed_kafka" }));
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    expect(result.current.links.isLoading).toBe(false);
+    act(() => result.current.links.setEnabled(false));
+    expect(localStorage.getItem("chargeback_deep_links_enabled")).toBe("true");
+    await act(async () => finishRequest(HttpResponse.json(response({
+      "env-pending": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+    }))));
+    expect(result.current.links.resolveUrl("env-pending")).toBeNull();
+
+    act(() => result.current.tenant.setCurrentTenant(confluent));
+    expect(result.current.links.available).toBe(true);
+    expect(result.current.links.enabled).toBe(true);
+    expect(result.current.links.resolveUrl("env-pending")).toBeNull();
+    act(() => result.current.links.setEnabled(false));
+    expect(result.current.links.enabled).toBe(false);
+  });
+
+  it("does not allow toggling without a selected tenant", async () => {
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    act(() => result.current.tenant.setCurrentTenant(null));
+    act(() => result.current.links.setEnabled(true));
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    expect(localStorage.getItem("chargeback_deep_links_enabled")).toBeNull();
+  });
 });
 
 describe("ResourceLinkProvider batch registration", () => {
@@ -892,10 +968,12 @@ describe("ResourceLinkProvider and ConfluentLinkRenderer integration", () => {
     );
     await waitFor(() => expect(controller?.tenant.currentTenant).not.toBeNull());
     const tenant = controller!.tenant.currentTenant!;
-    act(() => controller!.tenant.setCurrentTenant(null));
+    act(() => {
+      controller!.links.setEnabled(true);
+      controller!.tenant.setCurrentTenant(null);
+    });
     await waitFor(() => expect(controller?.tenant.currentTenant).toBeNull());
-    act(() => controller!.links.setEnabled(true));
-    await waitFor(() => expect(controller?.links.enabled).toBe(true));
+    expect(controller?.links.enabled).toBe(false);
     act(() => controller!.tenant.setCurrentTenant(tenant));
     await waitForCalls(calls, 1);
     expect(calls[0]).toEqual({ tenant: "acme", identifiers: ["env-null-selected"] });
@@ -948,7 +1026,7 @@ describe("ResourceLinkProvider and ConfluentLinkRenderer integration", () => {
       </Wrapper>,
     );
 
-    expect(screen.getByRole("link", { name: "topic-direct" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "topic-direct" })).toHaveAttribute(
       "href",
       "https://confluent.cloud/environments/env-direct/clusters/lkc-direct/topics/topic-direct",
     );
@@ -978,7 +1056,7 @@ describe("ResourceLinkProvider and ConfluentLinkRenderer integration", () => {
         <ControllerProbe onReady={(next) => { controller = next; }} value="env-toggle" />
       </Wrapper>,
     );
-    await waitFor(() => expect(controller).toBeDefined());
+    await waitFor(() => expect(controller?.links.available).toBe(true));
     expect(screen.queryByRole("link")).toBeNull();
     expect(calls).toHaveLength(0);
 

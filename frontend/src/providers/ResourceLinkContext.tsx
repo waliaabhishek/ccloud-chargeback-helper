@@ -57,6 +57,7 @@ type LinkResolutionRuntime = {
 interface ResourceLinkContextValue {
   resolveUrl: (resourceId: string) => string | null;
   registerIdentifier: (identifier: string) => () => void;
+  available: boolean;
   enabled: boolean;
   setEnabled: (enabled: boolean) => void;
   isLoading: boolean;
@@ -166,7 +167,7 @@ export function ResourceLinkProvider({
   children,
 }: ResourceLinkProviderProps): React.JSX.Element {
   const { currentTenant } = useTenant();
-  const [enabled, setEnabledState] = useState<boolean>(getInitialEnabled);
+  const [enabledPreference, setEnabledState] = useState<boolean>(getInitialEnabled);
   const [revision, setRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const cacheByTenantRef = useRef<Map<string, Map<string, string | null>>>(
@@ -175,6 +176,8 @@ export function ResourceLinkProvider({
   const runtimeRef = useRef<LinkResolutionRuntime | null>(null);
   const generationRef = useRef(0);
   const tenantName = currentTenant?.tenant_name ?? null;
+  const available = currentTenant?.ecosystem === "confluent_cloud";
+  const enabled = available && enabledPreference;
   const currentScopeKey = JSON.stringify([enabled, tenantName]);
 
   const publishLoading = useCallback(
@@ -421,9 +424,10 @@ export function ResourceLinkProvider({
   );
 
   const setEnabled = useCallback((value: boolean): void => {
+    if (!available) return;
     localStorage.setItem(STORAGE_KEY, String(value));
     setEnabledState(value);
-  }, []);
+  }, [available]);
 
   useLayoutEffect(() => {
     ensureRuntime(currentScopeKey, tenantName);
@@ -452,12 +456,13 @@ export function ResourceLinkProvider({
       return {
         resolveUrl,
         registerIdentifier,
+        available,
         enabled,
         setEnabled,
         isLoading,
       };
     },
-    [resolveUrl, registerIdentifier, enabled, setEnabled, isLoading, revision],
+    [resolveUrl, registerIdentifier, available, enabled, setEnabled, isLoading, revision],
   );
 
   return (
