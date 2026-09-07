@@ -1,4 +1,5 @@
 import type React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
@@ -34,6 +35,23 @@ vi.mock("antd", () => ({
     Title: ({ children }: { children: ReactNode }) => <h3>{children}</h3>,
     Text: ({ children }: { children: ReactNode }) => <span>{children}</span>,
   },
+  Segmented: ({
+    options,
+    value,
+    onChange,
+  }: {
+    options: Array<{ label: string; value: string }>;
+    value: string;
+    onChange?: (value: string) => void;
+  }) => (
+    <div data-testid="segmented" data-value={value}>
+      {options.map((option) => (
+        <button key={option.value} onClick={() => onChange?.(option.value)}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  ),
   Radio: {
     Group: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     Button: ({ children }: { children: ReactNode }) => (
@@ -142,7 +160,14 @@ const mockData: AggregationResponse = {
 };
 
 function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
-  return <MemoryRouter>{children}</MemoryRouter>;
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
 }
 
 describe("SummaryStatCards", () => {

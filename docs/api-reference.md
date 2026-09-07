@@ -233,6 +233,176 @@ Aggregated view of failed or problematic allocations. Paginated. Same filters as
 
 ---
 
+### Compare two cost periods
+
+The comparison endpoints return a ranked view of one source across two explicit
+inclusive date ranges. They do not combine chargeback and Topic Attribution
+amounts.
+
+```text
+GET /api/v1/tenants/{tenant_name}/chargebacks/comparison
+GET /api/v1/tenants/{tenant_name}/topic-attributions/comparison
+```
+
+The `chargebacks` route reports **Chargeback — allocated tenant costs**. It can
+group by `principal` (`identity_id`), `resource` (`resource_id`), or
+`environment` (`environment_id`). Its filters are `identity_id`,
+`product_type`, `resource_id`, `cost_type` (`usage` or `shared`), `tag_key`,
+and `tag_value`.
+
+The `topic-attributions` route reports **Topic Attribution — attributed Kafka
+costs, not the full tenant bill**. It can group by `topic` (a stable,
+cluster-scoped topic key with cluster and topic display fields) or `cluster`
+(`cluster_resource_id`). Its filters are `cluster_resource_id`, `topic_name`,
+`product_type`, `attribution_method`, `tag_key`, and `tag_value`.
+
+Topic Attribution's `cluster_resource_id` and `topic_name` filters retain the
+existing list behavior and match containing values. Other source filter values
+are passed as exact values. Tag keys must start with an alphanumeric character,
+then contain only alphanumerics, `_`, or `-`, with a maximum length of 63.
+
+#### Query parameters
+
+| Parameter | Type | Required | Default / constraints |
+|---|---|---:|---|
+| `baseline_start` | date | yes | Inclusive baseline date. |
+| `baseline_end` | date | yes | Inclusive baseline date. |
+| `comparison_start` | date | yes | Inclusive comparison date. |
+| `comparison_end` | date | yes | Inclusive comparison date. |
+| `timezone` | string | no | IANA timezone for date boundaries; `UTC` when omitted. |
+| `group_by` | string | no | `principal`, `resource`, or `environment` for chargeback; `topic` or `cluster` for Topic Attribution. Defaults to `principal` or `topic`. |
+| `movement` | string | no | `all`, `increase`, or `decrease`; defaults to `all`. Zero changes appear only with `all`. |
+| `sort_by` | string | no | `absolute_change`, `entity`, `baseline_amount`, `comparison_amount`, `change`, or `percentage_change`; defaults to `absolute_change`. |
+| `sort_direction` | string | no | `asc` or `desc`; defaults to `desc`. |
+| `limit` | integer | no | Defaults to `100`; must be between `1` and `500`. |
+| source filters | string | no | See the source lists above. `tag_value` requires `tag_key`. |
+
+The Compare control offers row limits of 25, 50, 100, 250, and 500; API
+clients may request any value from 1 through 500.
+
+The default order is absolute change descending, with the stable group key as
+the final ascending tie-breaker. Alternate sort fields use the same stable
+tie-breaker.
+
+The API always receives the four dates explicitly. The Compare controls provide
+these presets for hourly and daily tenants:
+
+- **Previous day:** the day before yesterday as the baseline versus yesterday as
+  the comparison.
+- **Previous week:** the prior Monday–Sunday week as the baseline versus the
+  latest completed Monday–Sunday week as the comparison.
+- **Calendar month:** the preceding complete calendar month as the baseline
+  versus the latest completed calendar month as the comparison.
+- **Custom:** two non-empty inclusive date ranges.
+
+Named presets use the current calendar date in the selected IANA timezone. A
+timezone change recomputes a named preset and resolves custom dates at local
+midnight. The response shows the requested dates and the effective UTC bounds;
+daylight-saving changes can make two date ranges have different elapsed
+durations.
+
+For monthly tenants, Compare uses `UTC`, offers Calendar month and Custom, and
+disables Previous day and Previous week. A custom monthly range must start on
+the first day of a UTC month and end on the last day of a UTC month. The API
+rejects a non-UTC timezone and partial UTC calendar months.
+
+#### Response
+
+Every monetary amount below is a JSON decimal string, including zero, negative
+values, and long fractional values. A non-null `percentage_change` is also a
+JSON decimal string; `percentage_change` may be `null` when the baseline is
+zero.
+
+| Field | Description |
+|---|---|
+| `source` | `chargeback` or `topic_attribution`. |
+| `granularity` | Tenant data granularity: `hourly`, `daily`, or `monthly`. |
+| `group_by` | The source-specific grouping used for the rows. |
+| `timezone` | The effective comparison timezone; monthly responses use `UTC`. |
+| `coverage_evaluated_at` | ISO 8601 UTC instant at which coverage was evaluated. |
+| `baseline`, `comparison` | Period objects described below. |
+| `unequal_durations` | `true` when the two resolved UTC durations differ. It does not reject or normalize the periods. |
+| `summary` | Full filtered-scope totals and movement values, independent of `movement` and `limit`. |
+| `reconciliation` | Counts and financial contributions for returned, movement-excluded, and top-N-omitted groups. |
+| `rows` | At most `limit` groups in the requested server-side order. |
+
+Each period contains `start_date`, `end_date`, `start_at`, `end_at`,
+`duration_seconds`, and `coverage`. `start_date` and `end_date` are the
+requested inclusive dates. `start_at` is the resolved UTC inclusive bound and
+`end_at` is the resolved UTC exclusive bound; both are ISO 8601 UTC datetimes.
+
+`coverage` contains:
+
+| Field | Description |
+|---|---|
+| `status` | `complete`, `incomplete`, or `unknown`. |
+| `expected_dates` | Source dates expected for the period's granularity. |
+| `unknown_dates` | Dates whose source availability cannot be confirmed. |
+| `incomplete_dates` | Dates without complete source processing evidence. |
+| `retention_qualified_dates` | Dates where current evidence cannot distinguish unavailable retained data from a valid zero. This does not assert that data was deleted. |
+| `availability_cutoff_at` | The captured source retention cutoff, or `null` when a valid Topic Attribution policy cannot be proven from tenant settings. |
+
+`unknown` takes precedence when both unknown and incomplete dates exist. A
+successful chargeback calculation can confirm a zero total even when no rows
+match the filters. Topic Attribution requires unfiltered source-date evidence
+for the selected slots, so a filtered zero or an empty source slot remains
+qualified when that evidence is absent. The UI labels values from either
+non-complete period as observed totals and shows the affected dates.
+
+`summary` contains `baseline_amount`, `comparison_amount`, `increases`,
+`decreases`, `net_change`, and `percentage_change`. `increases` is the sum of
+positive row changes; `decreases` is the signed sum of negative row changes;
+`net_change` is the comparison total minus the baseline total. When the
+baseline total is exactly zero, `percentage_change` is `null`; the same rule
+applies to a row whose baseline amount is zero.
+
+Each row contains `key`, `kind`, `dimensions`, `baseline_amount`,
+`comparison_amount`, `change`, `percentage_change`, `baseline_row_count`,
+`comparison_row_count`, and `observed_presence`. Presence is based on row
+presence, so a zero-valued row is retained. A row absent from a complete period
+can be described as cost only in the other period; an absent period with
+incomplete or unknown coverage is described as no cost observed.
+
+`reconciliation` contains `full_group_count`, `selected_group_count`,
+`returned_group_count`, `movement_excluded_group_count`, and
+`row_limit_omitted_group_count`, plus baseline, comparison, and net amounts for
+each of the returned, movement-excluded, and row-limit-omitted groups. The
+amounts satisfy these identities independently for baseline, comparison, and
+net values:
+
+```text
+full = returned + movement_excluded + row_limit_omitted
+selected = returned + row_limit_omitted
+```
+
+A group count remains meaningful even when the corresponding omitted amounts
+cancel to zero. Unassigned and sentinel groups are included in these counts,
+but do not expose an investigation action.
+
+#### Errors
+
+| Condition | Status and response |
+|---|---|
+| Invalid date syntax, enum, source grouping, or `limit` bounds | `422`; FastAPI places the offending field at `detail[0].loc = ["query", "<field>"]`. |
+| Baseline or comparison start after its end | `400`, respectively `baseline_start must be <= baseline_end` or `comparison_start must be <= comparison_end`. |
+| `tag_value` without `tag_key` | `400`, `tag_value requires tag_key`. |
+| Invalid tag key format | `400`, `Invalid tag key format: '<key>'`. |
+| Unknown IANA timezone | `400`, `Unknown timezone: '<timezone>'`. |
+| Monthly request with a non-UTC timezone | `400`, `timezone must be UTC for monthly comparison data`. |
+| Monthly baseline is not a complete UTC calendar-month range | `400`, `baseline period must contain complete UTC calendar months for monthly comparison data`. |
+| Monthly comparison is not a complete UTC calendar-month range | `400`, `comparison period must contain complete UTC calendar months for monthly comparison data`. |
+| Tenant is not configured | `404`, `Tenant '<name>' not found`. |
+| Provider wiring is unavailable | `503`, `Storage backend provider is unavailable`. |
+| Leased backend cannot provide a consistent comparison read | `503`, `Storage backend does not support consistent comparison reads`. |
+| Provider initialization or another unhandled comparison failure | `500`, `{"detail":"Internal server error","error_id":"<uuid>"}`. |
+| Request exceeds the configured API timeout | `504`, `Request exceeded <seconds>s timeout`. |
+
+Malformed query input is rejected before settings or storage work. For valid
+queries, date-order checks run before the tag dependency, timezone validation,
+and monthly alignment checks. Provider initialization failures keep the normal
+sanitized 500 response; qualified 200 results are possible only after storage
+has been acquired successfully.
+
 ## Aggregation
 
 ### `GET /api/v1/tenants/{tenant_name}/chargebacks/aggregate`
@@ -988,7 +1158,8 @@ metrics history remains available.
 Topic attribution rows are produced by the optional `topic_overlay` pipeline
 stage (Confluent Cloud only). Each row represents the cost portion attributed to
 one topic for one billing line item. Requires `topic_attribution.enabled: true`
-in plugin settings.
+in plugin settings. For a two-period ranked comparison, use the
+[`topic-attributions` comparison endpoint](#compare-two-cost-periods).
 
 ### `GET /api/v1/tenants/{tenant_name}/topic-attributions`
 

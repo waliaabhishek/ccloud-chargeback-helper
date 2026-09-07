@@ -3,10 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from core.api.schemas import TenantReadiness, TenantStatusDetailResponse, TenantStatusSummary
-from core.api.topic_attribution_status import TopicAttributionStatus, resolve_topic_attribution_status
+from core.api.topic_attribution_status import (
+    TopicAttributionStatus,
+    resolve_topic_attribution_retention_days,
+    resolve_topic_attribution_status,
+)
 from core.config.models import AppSettings, PluginSettingsBase, StorageConfig, TenantConfig
 from core.metrics.config import MetricsConnectionConfig
 from plugins.confluent_cloud.config import CCloudCredentials, CCloudPluginConfig, TopicAttributionConfig
@@ -122,6 +127,52 @@ class TestResolveTopicAttributionStatus:
         settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": True}})
         result = resolve_topic_attribution_status(settings, ecosystem="other")
         assert result.status == "enabled"
+
+
+class TestResolveTopicAttributionRetentionDays:
+    def test_returns_explicit_days_from_enabled_raw_settings(self) -> None:
+        settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": True, "retention_days": 120}})
+
+        assert resolve_topic_attribution_retention_days(settings, "other") == 120
+
+    def test_returns_explicit_days_when_disabled(self) -> None:
+        settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": False, "retention_days": 45}})
+
+        assert resolve_topic_attribution_retention_days(settings, "other") == 45
+
+    def test_returns_explicit_days_from_typed_topic_attribution_settings(self) -> None:
+        config = _make_ccloud_plugin_config(enabled=True)
+        config.topic_attribution.retention_days = 180
+
+        assert resolve_topic_attribution_retention_days(config, "confluent_cloud") == 180
+
+    @pytest.mark.parametrize(
+        "topic_attribution",
+        [
+            None,
+            {},
+            {"enabled": True},
+            {"enabled": True, "retention_days": True},
+            {"enabled": True, "retention_days": 0},
+            {"enabled": True, "retention_days": 366},
+            {"enabled": True, "retention_days": "90"},
+            [],
+        ],
+    )
+    def test_returns_none_when_route_owned_settings_cannot_prove_a_valid_policy(
+        self, topic_attribution: object
+    ) -> None:
+        settings = PluginSettingsBase.model_validate(
+            {} if topic_attribution is None else {"topic_attribution": topic_attribution}
+        )
+
+        assert resolve_topic_attribution_retention_days(settings, "other") is None
+
+    def test_returns_none_when_existing_status_reports_configuration_error(self) -> None:
+        settings = _make_raw_plugin_settings_with_ta_enabled()
+        assert resolve_topic_attribution_status(settings, "confluent_cloud").status == "config_error"
+
+        assert resolve_topic_attribution_retention_days(settings, "confluent_cloud") is None
 
 
 # ---------------------------------------------------------------------------

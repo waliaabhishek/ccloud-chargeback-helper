@@ -209,12 +209,12 @@ function resetGraphDataMock() {
 // Render helpers
 // ---------------------------------------------------------------------------
 
-function renderExplorerPage() {
+function renderExplorerPage(initialEntry = "/") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <ExplorerPage />
       </QueryClientProvider>
@@ -305,6 +305,22 @@ describe("ExplorerPage", () => {
     expect(
       document.querySelector("[data-testid='graph-container']"),
     ).not.toBeNull();
+  });
+
+  it("passes a diff link timezone through ExplorerPage to the graph diff hook", () => {
+    renderExplorerPage(
+      "/explorer?diff=true&from_start=2026-02-01&from_end=2026-02-28&to_start=2026-03-01&to_end=2026-03-31&timezone=America%2FChicago",
+    );
+
+    expect(useGraphDiff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timezone: "America/Chicago",
+        fromStart: "2026-02-01",
+        fromEnd: "2026-02-28",
+        toStart: "2026-03-01",
+        toEnd: "2026-03-31",
+      }),
+    );
   });
 
   it("shows 'Select a tenant' placeholder when no tenant selected", () => {

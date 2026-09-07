@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -34,7 +35,7 @@ def resolve_topic_attribution_status(
     # Determine whether TA is enabled — handle dict and typed-model cases.
     if ta is None:
         return TopicAttributionStatus(status="disabled")
-    enabled = ta.get("enabled", False) if isinstance(ta, dict) else getattr(ta, "enabled", False)
+    enabled = ta.get("enabled", False) if isinstance(ta, Mapping) else getattr(ta, "enabled", False)
 
     if not enabled:
         return TopicAttributionStatus(status="disabled")
@@ -57,3 +58,26 @@ def resolve_topic_attribution_status(
 
     # Non-ccloud ecosystem with TA enabled — no additional validation.
     return TopicAttributionStatus(status="enabled")
+
+
+def resolve_topic_attribution_retention_days(
+    plugin_settings: PluginSettingsBase,
+    ecosystem: str,
+) -> int | None:
+    """Resolve an explicit, route-owned Topic Attribution retention policy.
+
+    The comparison endpoint must not inspect an initialized provider plugin or
+    apply the plugin model's default.  Only an explicit integer in the raw or
+    structural tenant settings is evidence of a retention boundary.
+    """
+    if resolve_topic_attribution_status(plugin_settings, ecosystem).status == "config_error":
+        return None
+
+    topic_settings = getattr(plugin_settings, "topic_attribution", None)
+    if isinstance(topic_settings, Mapping):
+        value = topic_settings.get("retention_days")
+    else:
+        value = getattr(topic_settings, "retention_days", None)
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 365:
+        return None
+    return value

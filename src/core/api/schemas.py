@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from core.models.cost_comparison import ComparisonGroup  # noqa: TC001
 from core.models.counts import TypeStatusCounts  # noqa: TC001
 from core.preview.capability import (  # noqa: TC001  # Pydantic resolves these response annotations
     PreviewConformanceStatus,
@@ -44,6 +45,7 @@ class TenantStatusSummary(BaseModel):
     last_calculated_date: date | None
     topic_attribution_status: Literal["disabled", "enabled", "config_error"]
     topic_attribution_error: str | None = None
+    chargeback_granularity: Literal["hourly", "daily", "monthly"] = "daily"
 
 
 class TenantListResponse(BaseModel):
@@ -265,6 +267,78 @@ class TenantStatusDetailResponse(BaseModel):
     states: list[PipelineStateResponse]
     topic_attribution_status: Literal["disabled", "enabled", "config_error"]
     topic_attribution_error: str | None = None
+    chargeback_granularity: Literal["hourly", "daily", "monthly"] = "daily"
+
+
+class ComparisonCoverage(BaseModel):
+    status: Literal["complete", "incomplete", "unknown"]
+    expected_dates: list[date]
+    unknown_dates: list[date]
+    incomplete_dates: list[date]
+    retention_qualified_dates: list[date]
+    availability_cutoff_at: datetime | None
+
+
+class ComparisonPeriod(BaseModel):
+    start_date: date
+    end_date: date
+    start_at: datetime
+    end_at: datetime
+    duration_seconds: int
+    coverage: ComparisonCoverage
+
+
+class ComparisonSummary(BaseModel):
+    baseline_amount: Decimal
+    comparison_amount: Decimal
+    increases: Decimal
+    decreases: Decimal
+    net_change: Decimal
+    percentage_change: Decimal | None
+
+
+class ComparisonRow(BaseModel):
+    key: str
+    kind: Literal["entity", "unassigned", "sentinel"]
+    dimensions: dict[str, str | None]
+    baseline_amount: Decimal
+    comparison_amount: Decimal
+    change: Decimal
+    percentage_change: Decimal | None
+    baseline_row_count: int
+    comparison_row_count: int
+    observed_presence: Literal["both", "baseline_only", "comparison_only"]
+
+
+class ComparisonReconciliation(BaseModel):
+    full_group_count: int
+    selected_group_count: int
+    returned_group_count: int
+    movement_excluded_group_count: int
+    row_limit_omitted_group_count: int
+    returned_baseline_amount: Decimal
+    returned_comparison_amount: Decimal
+    returned_net_change: Decimal
+    movement_excluded_baseline_amount: Decimal
+    movement_excluded_comparison_amount: Decimal
+    movement_excluded_net_change: Decimal
+    row_limit_omitted_baseline_amount: Decimal
+    row_limit_omitted_comparison_amount: Decimal
+    row_limit_omitted_net_change: Decimal
+
+
+class CostComparisonResponse(BaseModel):
+    source: Literal["chargeback", "topic_attribution"]
+    granularity: Literal["hourly", "daily", "monthly"]
+    group_by: ComparisonGroup
+    timezone: str
+    coverage_evaluated_at: datetime
+    baseline: ComparisonPeriod
+    comparison: ComparisonPeriod
+    unequal_durations: bool
+    summary: ComparisonSummary
+    reconciliation: ComparisonReconciliation
+    rows: list[ComparisonRow]
 
 
 # --- Resource ---

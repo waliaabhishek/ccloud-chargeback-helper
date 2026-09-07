@@ -26,6 +26,9 @@ export interface TenantStatusSummary {
   dates_pending: number;
   dates_calculated: number;
   last_calculated_date: string | null;
+  // Older tenant responses omit this field; the comparison UI treats unknown
+  // values as daily until the server contract is available.
+  chargeback_granularity?: ComparisonGranularity;
   topic_attribution_status: "disabled" | "enabled" | "config_error";
   topic_attribution_error: string | null;
 }
@@ -48,6 +51,8 @@ export interface TenantStatusDetailResponse {
   tenant_id: string;
   ecosystem: string;
   states: PipelineStateResponse[];
+  // Older detail responses omit this field; comparison defaults to daily.
+  chargeback_granularity?: ComparisonGranularity;
   topic_attribution_status: "disabled" | "enabled" | "config_error";
   topic_attribution_error: string | null;
 }
@@ -202,6 +207,112 @@ export interface AggregationResponse {
   usage_amount: string;
   shared_amount: string;
   total_rows: number;
+}
+
+// --- Cost comparison ---
+
+/** Financial values are serialized by the API as decimal JSON strings. */
+export type DecimalString = string;
+
+export type ComparisonSource = "chargeback" | "topic_attribution";
+export type ComparisonGranularity = "hourly" | "daily" | "monthly";
+export type ComparisonMovement = "all" | "increase" | "decrease";
+export type ComparisonPreset =
+  | "previous_day"
+  | "previous_week"
+  | "calendar_month"
+  | "custom";
+export type ComparisonSortBy =
+  | "absolute_change"
+  | "entity"
+  | "baseline_amount"
+  | "comparison_amount"
+  | "change"
+  | "percentage_change";
+export type ComparisonSortDirection = "asc" | "desc";
+export type ChargebackComparisonGroup =
+  | "principal"
+  | "resource"
+  | "environment";
+export type TopicAttributionComparisonGroup = "topic" | "cluster";
+export type ComparisonGroup =
+  | ChargebackComparisonGroup
+  | TopicAttributionComparisonGroup;
+
+export interface ComparisonDateRange {
+  start_date: string;
+  end_date: string;
+}
+
+export interface ComparisonCoverage {
+  status: "complete" | "incomplete" | "unknown";
+  expected_dates: string[];
+  unknown_dates: string[];
+  incomplete_dates: string[];
+  retention_qualified_dates: string[];
+  availability_cutoff_at: string | null;
+}
+
+export interface ComparisonPeriod {
+  start_date: string;
+  end_date: string;
+  start_at: string;
+  end_at: string;
+  duration_seconds: number;
+  coverage: ComparisonCoverage;
+}
+
+export interface ComparisonSummary {
+  baseline_amount: DecimalString;
+  comparison_amount: DecimalString;
+  increases: DecimalString;
+  decreases: DecimalString;
+  net_change: DecimalString;
+  percentage_change: DecimalString | null;
+}
+
+export interface ComparisonRow {
+  key: string;
+  kind: "entity" | "unassigned" | "sentinel";
+  dimensions: Record<string, string | null>;
+  baseline_amount: DecimalString;
+  comparison_amount: DecimalString;
+  change: DecimalString;
+  percentage_change: DecimalString | null;
+  baseline_row_count: number;
+  comparison_row_count: number;
+  observed_presence: "both" | "baseline_only" | "comparison_only";
+}
+
+export interface ComparisonReconciliation {
+  full_group_count: number;
+  selected_group_count: number;
+  returned_group_count: number;
+  movement_excluded_group_count: number;
+  row_limit_omitted_group_count: number;
+  returned_baseline_amount: DecimalString;
+  returned_comparison_amount: DecimalString;
+  returned_net_change: DecimalString;
+  movement_excluded_baseline_amount: DecimalString;
+  movement_excluded_comparison_amount: DecimalString;
+  movement_excluded_net_change: DecimalString;
+  row_limit_omitted_baseline_amount: DecimalString;
+  row_limit_omitted_comparison_amount: DecimalString;
+  row_limit_omitted_net_change: DecimalString;
+}
+
+export interface CostComparisonResponse {
+  source: ComparisonSource;
+  granularity: ComparisonGranularity;
+  group_by: ComparisonGroup;
+  timezone: string;
+  coverage_evaluated_at: string;
+  baseline: ComparisonPeriod;
+  comparison: ComparisonPeriod;
+  unequal_durations: boolean;
+  summary: ComparisonSummary;
+  reconciliation: ComparisonReconciliation;
+  rows: ComparisonRow[];
 }
 
 // --- Topic Attribution ---

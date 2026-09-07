@@ -217,6 +217,62 @@ describe("TopicAttributionGrid", () => {
     });
   });
 
+  it("retains a substring collision returned by the existing Topic Attribution destination", async () => {
+    let capturedDatasource:
+      | {
+          getRows: (p: {
+            startRow: number;
+            successCallback: (rows: unknown[], total: number) => void;
+            failCallback: () => void;
+          }) => void;
+        }
+      | undefined;
+    renderOverride = ({ datasource }: AgGridProps) => {
+      capturedDatasource = datasource as typeof capturedDatasource;
+      return <div data-testid="ag-grid" />;
+    };
+    server.use(
+      http.get("/api/v1/tenants/acme/topic-attributions", ({ request }) => {
+        expect(new URL(request.url).searchParams.get("topic_name")).toBe(
+          "orders",
+        );
+        return HttpResponse.json({
+          items: [
+            { topic_name: "orders", cluster_resource_id: "lkc-primary" },
+            { topic_name: "orders-replay", cluster_resource_id: "lkc-primary" },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 100,
+          pages: 1,
+        });
+      }),
+    );
+    render(
+      <TopicAttributionGrid
+        tenantName="acme"
+        filters={{ topic_name: "orders", cluster_resource_id: "lkc-primary" }}
+      />,
+    );
+
+    const successCallback = vi.fn();
+    capturedDatasource!.getRows({
+      startRow: 0,
+      successCallback,
+      failCallback: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(successCallback).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({ topic_name: "orders" }),
+          expect.objectContaining({ topic_name: "orders-replay" }),
+        ],
+        2,
+      );
+    });
+  });
+
   it("datasource calls failCallback on API error", async () => {
     let capturedDatasource:
       | {

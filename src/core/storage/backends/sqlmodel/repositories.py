@@ -2033,7 +2033,7 @@ class TopicAttributionRepository:
             env_id=row.env_id,
             cluster_resource_id=row.cluster_resource_id,
             topic_name=row.topic_name,
-            resource_id=f"{row.cluster_resource_id}:topic:{row.topic_name}",
+            resource_id=row.resource_id,
             product_category=row.product_category,
             product_type=row.product_type,
             attribution_method=row.attribution_method,
@@ -2253,6 +2253,30 @@ class TopicAttributionRepository:
         )
         for partition in self._session.execute(stmt).partitions(batch_size):
             yield from (_ta_to_domain(dim, fact) for dim, fact in partition)
+
+    def get_distinct_timestamps_in_range(
+        self,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> set[datetime]:
+        """Return unfiltered source timestamps for this tenant and range."""
+        stmt = (
+            select(TopicAttributionFactTable.timestamp)
+            .join(
+                TopicAttributionDimensionTable,
+                col(TopicAttributionFactTable.dimension_id) == col(TopicAttributionDimensionTable.dimension_id),
+            )
+            .where(
+                col(TopicAttributionDimensionTable.ecosystem) == ecosystem,
+                col(TopicAttributionDimensionTable.tenant_id) == tenant_id,
+                col(TopicAttributionFactTable.timestamp) >= start,
+                col(TopicAttributionFactTable.timestamp) < end,
+            )
+            .distinct()
+        )
+        return set(self._session.exec(stmt).all())
 
     def aggregate(
         self,

@@ -49,25 +49,45 @@ separately, so switching profiles preserves changes you made in each one.
 Start with Showcase and select **clean-confluent** in the tenant selector.
 The tenant name stays the same in both profiles.
 
-1. Open **Dashboard**. Select the last 30 days containing demo data and compare
-   total, usage, and shared costs. Scroll to the cost trend and look for a change.
-2. Open **Cost Explorer**. Select the latest date in the demo data, then navigate
-   through **Commerce** to **Customer Kafka** to explore the resources in that
-   environment.
-3. Open **Topic Attribution** and select **Analytics**. Use the same 30-day range
-   as the dashboard. Inspect **Top Topics by Cost**, then filter to **Customer
-   Kafka** and the topic **showcase-live-orders**.
-4. Scroll to cost composition and top movers to investigate the topic's cost
-   increase. Switch to **Table** and narrow the date range to the final two days
-   to compare the daily amounts.
-5. Open **Pipeline** to check processing status. For reporting, open **FOCUS
+1. Open **Dashboard** and use **Overview** to confirm the tenant and ordinary
+   filters. Select **Compare**, then choose **Previous day**, **Previous week**,
+   **Calendar month**, or **Custom**. Review the baseline and comparison totals,
+   the largest changes, and the selected timezone. **Movement** filters the
+   table; **Rows** limits the returned top-N groups. The summary remains the
+   full filtered scope, while Reconciliation shows groups excluded by movement
+   and groups outside top N, including their baseline, comparison, and net
+   amounts.
+2. Select a chargeback row's **Compare entity in Cost Explorer** action to
+   continue with both periods and the comparison timezone. Explorer does not
+   carry product, cost-type, or tag filters, and it shows the entity in its
+   broader tenant context.
+3. Open **Topic Attribution** and select **Compare** when the source is enabled.
+   For Showcase data, set **Cluster** to `lkc-customer` and **Topic Name** to
+   `showcase-live-orders`. Its totals are attributed Kafka costs, not the full
+   tenant bill. Choose Topic or Cluster, apply the existing topic filters, and
+   use the same movement, sorting, and row-limit controls. **Open filtered Topic
+   Attribution list** returns to Table with the selected period and filters; the
+   existing list uses substring matching, so another containing match may
+   appear.
+4. Read the coverage qualification before interpreting a zero. Unknown or
+   incomplete dates make the amounts observed totals and prevent a confirmed
+   zero claim. A zero baseline makes percentage change unavailable. If demo data
+   is outside the selected range, choose Custom with dates containing the data.
+5. For monthly tenants, Compare uses UTC, disables Previous day and Previous
+   week, and requires each Custom period to start on the first day and end on the
+   last day of a complete UTC calendar month. Daily and hourly comparisons accept
+   an IANA timezone; daylight-saving transitions can make the two elapsed
+   durations differ even when the date ranges look alike.
+6. Open **Pipeline** to check processing status. For reporting, open **FOCUS
    Mapping Preview** to inspect the available monthly previews and download
    options.
 
-Cost Explorer shows a snapshot for a selected date; Dashboard and Topic
-Attribution summarize a date range. Keep that difference in mind when comparing
-views. The screenshots use a fixed example period, so your dates and totals may
-differ.
+Cost Explorer's ordinary view shows a snapshot for its selected date. The
+**Compare entity in Cost Explorer** handoff carries both comparison periods and
+the selected timezone, while Cost Explorer shows the entity in its broader
+tenant context. Dashboard and Topic Attribution Compare summarize the two date
+ranges. The screenshots use a fixed example period, so your dates and totals
+may differ.
 
 FOCUS Mapping Preview is available for the Confluent Cloud tenant. It is a
 preview with [known conformance limitations](../focus-mapping-preview.md), not a

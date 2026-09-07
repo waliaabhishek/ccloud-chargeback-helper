@@ -310,6 +310,7 @@ export function ExplorerPage(): React.JSX.Element {
     toStart: params.diff ? (toRange?.[0] ?? null) : null,
     toEnd: params.diff ? (toRange?.[1] ?? null) : null,
     focus: effectiveFocus,
+    timezone: params.diff ? params.timezone : null,
   });
 
   // Timeline data for scrubber tooltip — only when node is selected

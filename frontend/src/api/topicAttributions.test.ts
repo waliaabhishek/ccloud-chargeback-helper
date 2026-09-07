@@ -72,6 +72,8 @@ describe("fetchTopicAttributions", () => {
       product_type: "KAFKA_STORAGE",
       attribution_method: "bytes_ratio",
       timezone: "America/Chicago",
+      tag_key: "cost_center",
+      tag_value: "engineering",
     });
 
     expect(capturedUrl).toContain("page=1");
@@ -83,6 +85,8 @@ describe("fetchTopicAttributions", () => {
     expect(capturedUrl).toContain("product_type=KAFKA_STORAGE");
     expect(capturedUrl).toContain("attribution_method=bytes_ratio");
     expect(capturedUrl).toContain("timezone=America%2FChicago");
+    expect(capturedUrl).toContain("tag_key=cost_center");
+    expect(capturedUrl).toContain("tag_value=engineering");
   });
 
   it("throws on HTTP error", async () => {

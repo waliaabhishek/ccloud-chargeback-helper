@@ -49,6 +49,7 @@ async def list_tenants(
                 last_calculated_date=last_date,
                 topic_attribution_status=ta_status.status,
                 topic_attribution_error=ta_status.error,
+                chargeback_granularity=tenant_config.plugin_settings.chargeback_granularity,
             )
         )
     logger.info("Listed tenants count=%d", len(summaries))
@@ -93,6 +94,7 @@ async def get_tenant_status(
         ecosystem=tenant_config.ecosystem,
         topic_attribution_status=ta_status.status,
         topic_attribution_error=ta_status.error,
+        chargeback_granularity=tenant_config.plugin_settings.chargeback_granularity,
         states=[
             PipelineStateResponse(
                 tracking_date=s.tracking_date,
