@@ -133,7 +133,7 @@ Detailed per-date pipeline state for a tenant.
 
 ### `POST /api/v1/tenants/{tenant_name}/resource-links/resolve`
 
-Resolve the mounted resource and identity identifiers used by the web interface.
+Look up resource and identity metadata for identifiers within a tenant.
 The request body is:
 
 ```json
@@ -162,21 +162,6 @@ two minimal maps:
 Unknown and deleted identifiers are omitted. Resource entries contain only
 `resource_type`, `parent_id`, and `kafka_cluster_id`; identity entries contain
 only `identity_type`. A matching identifier may appear in both maps.
-
-The web interface requests only visible unresolved identifiers, in batches of
-up to 100, and keeps settled positive and negative results in a per-tenant page
-session cache. Link resolution is off by default and makes no lookup requests
-while disabled. Supported resource links are environments, Kafka clusters,
-Schema Registry, service accounts, Flink compute pools, and ksqlDB clusters;
-supported identity links are service accounts, users, identity providers, and
-API keys. For lookup-based identifiers, supported links are created only after
-an active match is returned; there is no prefix-based fallback. Connectors,
-identity pools, unknown identifiers, and incomplete parent context remain plain
-text. Row-context topic-attribution URLs bypass this lookup and retain the
-existing link-setting behavior. A failed batch suppresses only its identifiers
-for the current selected tenant and link-setting generation; other pending
-identifiers continue. Failed identifiers can retry after changing the selected
-tenant or toggling link resolution.
 
 | Status | Meaning |
 |---|---|

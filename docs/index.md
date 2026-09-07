@@ -1,28 +1,42 @@
-# Chitragupta
+# Understand your infrastructure costs
 
-Multi-ecosystem infrastructure cost chargeback engine. Allocates costs to teams and
-service accounts across Confluent Cloud, self-managed Kafka, and any Prometheus-instrumented system.
+Chitragupta allocates infrastructure costs to the teams and service accounts
+using it. Explore spend across Confluent Cloud, self-managed Kafka, and
+Prometheus-instrumented systems, then inspect the resources and usage behind it.
 
-## What it does
+## Watch the walkthrough
 
-- Pulls billing data (vendor API or YAML cost model) per billing period
-- Discovers resources and identities via Prometheus or admin APIs
-- Allocates costs to identities using configurable strategies (even split, usage ratio)
-- Emits results to CSV or custom sinks
-- Exposes a REST API for querying chargeback data and triggering pipeline runs
+Follow a cost increase from the dashboard to a Kafka topic, compare daily
+amounts, and inspect processing status and reporting options. Press play to
+watch the investigation using synthetic data.
 
-## Supported ecosystems
+<video controls playsinline preload="none" width="960" style="width: 100%; height: auto;" poster="assets/demo/chitragupta-demo-dashboard-poster.webp" aria-label="Chitragupta demo walkthrough">
+  <source src="assets/demo/chitragupta-demo-walkthrough.mp4" type="video/mp4">
+  Your browser does not support embedded video.
+  <a href="assets/demo/chitragupta-demo-walkthrough.mp4">Download the walkthrough (MP4)</a>.
+</video>
 
-| Ecosystem | Plugin key | Billing source |
-|---|---|---|
-| Confluent Cloud | `confluent_cloud` | CCloud Billing API |
-| Self-managed Kafka | `self_managed_kafka` | YAML cost model + Prometheus |
-| Generic metrics | `generic_metrics_only` | YAML cost model + Prometheus |
+## Try it or connect your own data
 
-## Quick links
+- **[Try the demo](getting-started/demo.md):** explore synthetic data or give a
+  presentation without provider credentials.
+- **[Set up your environment](getting-started/quickstart.md):** connect your
+  accounts and start allocating real costs.
 
-- [Quickstart](getting-started/quickstart.md)
-- [Configuration reference — CCloud](configuration/ccloud-reference.md)
-- [Configuration reference — Self-managed Kafka](configuration/self-managed-reference.md)
-- [Configuration reference — Generic metrics](configuration/generic-metrics-reference.md)
-- [Troubleshooting](operations/troubleshooting.md)
+## What you can investigate
+
+- **Overall spend:** compare usage and shared costs, and follow changes over time.
+- **Resources behind the bill:** navigate environments and resources in Cost Explorer.
+- **Kafka topic costs:** compare topics and inspect their cost composition.
+- **Allocated costs:** filter and group results by tags, then export them for reporting.
+
+## Configuration and operations
+
+| You want to… | Start here |
+|---|---|
+| Connect Confluent Cloud | [Confluent Cloud configuration](configuration/ccloud-reference.md) |
+| Configure self-managed Kafka | [Self-managed Kafka configuration](configuration/self-managed-reference.md) |
+| Use other Prometheus metrics | [Generic metrics configuration](configuration/generic-metrics-reference.md) |
+| Deploy and operate Chitragupta | [Operations](operations/index.md) |
+| Query results from another tool | [API reference](api-reference.md) |
+| Resolve a problem | [Troubleshooting](operations/troubleshooting.md) |
