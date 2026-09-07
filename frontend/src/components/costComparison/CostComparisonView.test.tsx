@@ -133,8 +133,8 @@ const CONTROL_PROPS: Omit<
 
 function summaryValue(label: string): string | null {
   const value = screen
-    .getByText(label, { selector: "dt" })
-    .parentElement?.querySelector("dd");
+    .getByText(label, { selector: ".ant-statistic-title" })
+    .parentElement?.querySelector(".ant-statistic-content");
   return value?.textContent ?? null;
 }
 
@@ -151,7 +151,7 @@ describe("CostComparisonView", () => {
     );
   }
 
-  it("renders source-specific periods, financial summary, coverage qualifications, and zero-sum omissions", () => {
+  it("renders periods, summary cards, a concise missing-data warning, and zero-sum omissions", () => {
     render(
       <CostComparisonView
         {...CONTROL_PROPS}
@@ -171,10 +171,10 @@ describe("CostComparisonView", () => {
     expect(screen.getByText("$0.30")).toBeInTheDocument();
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText(/unequal durations/i)).toBeInTheDocument();
-    expect(screen.getByText(/unknown coverage/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/retention qualification applies to.*2026-03-08/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("Coverage qualification")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Baseline: retention policy could not be determined; processing is incomplete.",
+    );
     expect(
       screen.getByText(/2 groups excluded by movement filter/i),
     ).toBeInTheDocument();
@@ -187,9 +187,9 @@ describe("CostComparisonView", () => {
     expect(summaryValue("Decreases observed")).toBe("$12.10");
     expect(summaryValue("Net change observed")).toBe("+$0.30");
     expect(summaryValue("Percentage change observed")).toBe("Unavailable");
-    expect(
-      screen.getByText(/financial values are observed totals/i),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Totals reflect available data.",
+    );
     const reconciliation = screen.getByRole("region", {
       name: "Reconciliation",
     });
@@ -203,6 +203,86 @@ describe("CostComparisonView", () => {
     expect(screen.getByRole("radio", { name: /All$/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Increases" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Decreases" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["33.33999", "33.33%"],
+    ["-33.33999", "-33.33%"],
+    ["12.3000", "12.3%"],
+    ["100", "100%"],
+    ["-0.009", "0%"],
+    ["9007199254740993.129", "9007199254740993.12%"],
+  ])("limits summary and row percentage precision for %s", (value, expected) => {
+    render(
+      <CostComparisonView
+        {...CONTROL_PROPS}
+        response={{
+          ...RESPONSE,
+          summary: { ...RESPONSE.summary, percentage_change: value },
+          rows: [{ ...RESPONSE.rows[0], percentage_change: value }],
+        }}
+        sourceLabel="Topic Attribution"
+        isLoading={false}
+        error={null}
+        onInvestigate={vi.fn()}
+      />,
+    );
+    expect(summaryValue("Percentage change observed")).toBe(expected);
+    expect(screen.getByRole("cell", { name: expected })).toBeInTheDocument();
+  });
+
+  it("shows no coverage warning when both periods are complete", () => {
+    render(
+      <CostComparisonView
+        {...CONTROL_PROPS}
+        response={{
+          ...RESPONSE,
+          baseline: {
+            ...RESPONSE.baseline,
+            coverage: { ...RESPONSE.comparison.coverage },
+          },
+        }}
+        sourceLabel="Topic Attribution"
+        isLoading={false}
+        error={null}
+        onInvestigate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Coverage qualification")).not.toBeInTheDocument();
+    expect(summaryValue("Baseline total")).toBe("$0.00");
+    expect(screen.getByRole("region", { name: "Comparison summary" })
+      .querySelectorAll(".ant-card")).toHaveLength(6);
+  });
+
+  it.each([
+    ["incomplete", ["2026-03-08"], [], "Baseline: processing is incomplete."],
+    ["unknown", [], ["2026-03-08"], "Baseline: source data availability could not be confirmed."],
+  ] as const)("explains %s coverage without implying a missing retention setting", (status, incomplete, unknown, message) => {
+    render(
+      <CostComparisonView
+        {...CONTROL_PROPS}
+        response={{
+          ...RESPONSE,
+          baseline: {
+            ...RESPONSE.baseline,
+            coverage: {
+              ...RESPONSE.baseline.coverage,
+              status,
+              availability_cutoff_at: "2026-01-01T00:00:00Z",
+              incomplete_dates: [...incomplete],
+              unknown_dates: [...unknown],
+            },
+          },
+        }}
+        sourceLabel="Topic Attribution"
+        isLoading={false}
+        error={null}
+        onInvestigate={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("alert")).not.toHaveTextContent("retention policy could not be determined");
   });
 
   it("keeps duplicate topic names distinct by cluster and disables invalid row navigation", async () => {
@@ -345,6 +425,10 @@ describe("CostComparisonView", () => {
 
     expect(screen.getByText("No cost observed in baseline period")).toBeInTheDocument();
     expect(screen.getByText("No cost observed in comparison period")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Baseline: retention policy could not be determined; processing is incomplete.",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Comparison: retention policy could not be determined.");
   });
 
   it("keeps previous day and week visible but disabled for monthly data", async () => {

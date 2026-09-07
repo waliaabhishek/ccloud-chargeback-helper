@@ -1,5 +1,5 @@
 import type React from "react";
-import { Alert, Card, Empty, Space, Table, Typography } from "antd";
+import { Alert, Card, Col, Empty, Row, Space, Statistic, Table, Typography } from "antd";
 import type {
   ComparisonDateRange,
   ComparisonGranularity,
@@ -50,11 +50,15 @@ function periodLabel(period: ComparisonDateRange): string {
 }
 
 function formatPercent(value: string | null): string {
-  return value === null ? "Unavailable" : `${value}%`;
+  if (value === null) return "Unavailable";
+  const [whole, fraction = ""] = value.split(".");
+  const decimals = fraction.slice(0, 2).replace(/0+$/, "");
+  const amount = decimals ? `${whole}.${decimals}` : whole;
+  return `${amount === "-0" ? "0" : amount}%`;
 }
 
 function formatRowPercent(value: string | null): string {
-  return value === null ? "Unavailable (baseline is zero)" : `${value}%`;
+  return value === null ? "Unavailable (baseline is zero)" : formatPercent(value);
 }
 
 function absoluteDecimal(value: string): string {
@@ -73,34 +77,18 @@ function formatSignedCurrency(value: string): string {
     : `+${formatDecimalCurrency(value)}`;
 }
 
-function coverageMessage(
-  label: string,
-  period: CostComparisonResponse["baseline"],
-): React.JSX.Element {
+function coverageReason(period: CostComparisonResponse["baseline"]): string {
   const { coverage } = period;
-  const dates = [...coverage.unknown_dates, ...coverage.incomplete_dates];
-  return (
-    <div>
-      <strong>
-        {label}: {coverage.status} coverage
-      </strong>
-      {dates.length > 0 && (
-        <span> ({dates.join(", ")})</span>
-      )}
-      {coverage.retention_qualified_dates.length > 0 && (
-        <span>
-          {" "}
-          Retention qualification applies to {coverage.retention_qualified_dates.join(
-            ", ",
-          )}
-          .
-        </span>
-      )}
-      {coverage.availability_cutoff_at !== null && (
-        <span> Availability cutoff: {coverage.availability_cutoff_at}.</span>
-      )}
-    </div>
-  );
+  const reasons: string[] = [];
+  if (coverage.availability_cutoff_at === null) {
+    reasons.push("retention policy could not be determined");
+  } else if (coverage.unknown_dates.length > 0) {
+    reasons.push("source data availability could not be confirmed");
+  }
+  if (coverage.incomplete_dates.length > 0) {
+    reasons.push("processing is incomplete");
+  }
+  return reasons.join("; ");
 }
 
 function rowDimensions(row: ComparisonRow): string[] {
@@ -140,35 +128,26 @@ function ComparisonSummary({
 }): React.JSX.Element {
   const label = (value: string): string =>
     observed ? `${value} observed` : value;
+  const metrics = [
+    ["Baseline total", formatDecimalCurrency(response.summary.baseline_amount)],
+    ["Comparison total", formatDecimalCurrency(response.summary.comparison_amount)],
+    ["Increases", formatDecimalCurrency(response.summary.increases)],
+    ["Decreases", formatDecrease(response.summary.decreases)],
+    ["Net change", formatSignedCurrency(response.summary.net_change)],
+    ["Percentage change", formatPercent(response.summary.percentage_change)],
+  ];
   return (
     <section aria-label="Comparison summary">
-      <h4>Comparison summary</h4>
-      <dl>
-        <div>
-          <dt>{label("Baseline total")}</dt>
-          <dd>{formatDecimalCurrency(response.summary.baseline_amount)}</dd>
-        </div>
-        <div>
-          <dt>{label("Comparison total")}</dt>
-          <dd>{formatDecimalCurrency(response.summary.comparison_amount)}</dd>
-        </div>
-        <div>
-          <dt>{label("Increases")}</dt>
-          <dd>{formatDecimalCurrency(response.summary.increases)}</dd>
-        </div>
-        <div>
-          <dt>{label("Decreases")}</dt>
-          <dd>{formatDecrease(response.summary.decreases)}</dd>
-        </div>
-        <div>
-          <dt>{label("Net change")}</dt>
-          <dd>{formatSignedCurrency(response.summary.net_change)}</dd>
-        </div>
-        <div>
-          <dt>{label("Percentage change")}</dt>
-          <dd>{formatPercent(response.summary.percentage_change)}</dd>
-        </div>
-      </dl>
+      <Title level={5} style={{ marginTop: 0 }}>Comparison summary</Title>
+      <Row gutter={[12, 12]}>
+        {metrics.map(([title, value]) => (
+          <Col xs={24} sm={12} md={8} xl={4} key={title}>
+            <Card size="small" style={{ height: "100%" }}>
+              <Statistic title={label(title)} value={value} formatter={() => value} />
+            </Card>
+          </Col>
+        ))}
+      </Row>
     </section>
   );
 }
@@ -391,21 +370,24 @@ export function CostComparisonView<Group extends ComparisonGroup>({
               <p>Selected periods have unequal durations.</p>
             )}
           </Card>
-          <Card size="small" title="Coverage qualification">
-            <Space direction="vertical" size="small" style={{ width: "100%" }}>
-              {coverageMessage("Baseline", response.baseline)}
-              {coverageMessage("Comparison", response.comparison)}
-            </Space>
-          </Card>
           {observedTotals && (
-            <Text type="warning">
-              Financial values are observed totals because coverage is not
-              complete.
-            </Text>
+            <Alert
+              type="warning"
+              showIcon
+              message="Totals reflect available data."
+              description={
+                <>
+                  {response.baseline.coverage.status !== "complete" && (
+                    <span>Baseline: {coverageReason(response.baseline)}. </span>
+                  )}
+                  {response.comparison.coverage.status !== "complete" && (
+                    <span>Comparison: {coverageReason(response.comparison)}.</span>
+                  )}
+                </>
+              }
+            />
           )}
-          <Card size="small" title="Comparison summary">
-            <ComparisonSummary response={response} observed={observedTotals} />
-          </Card>
+          <ComparisonSummary response={response} observed={observedTotals} />
           <Reconciliation response={response} observed={observedTotals} />
           {response.rows.length === 0 ? (
             <Empty description="No groups matched the selected filters." />

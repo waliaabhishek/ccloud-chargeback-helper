@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import ValidationError
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -42,8 +44,6 @@ def resolve_topic_attribution_status(
 
     # TA is enabled — validate the full config if this is a confluent_cloud tenant.
     if ecosystem == "confluent_cloud":
-        from pydantic import ValidationError
-
         from plugins.confluent_cloud.config import CCloudPluginConfig
 
         try:
@@ -64,13 +64,21 @@ def resolve_topic_attribution_retention_days(
     plugin_settings: PluginSettingsBase,
     ecosystem: str,
 ) -> int | None:
-    """Resolve an explicit, route-owned Topic Attribution retention policy.
+    """Resolve the effective Topic Attribution policy without initializing a plugin.
 
-    The comparison endpoint must not inspect an initialized provider plugin or
-    apply the plugin model's default.  Only an explicit integer in the raw or
-    structural tenant settings is evidence of a retention boundary.
+    Built-in configuration models own their defaults and validation, as they do
+    for runtime cleanup. Other ecosystems must expose an explicit policy.
     """
-    if resolve_topic_attribution_status(plugin_settings, ecosystem).status == "config_error":
+    try:
+        if ecosystem == "confluent_cloud":
+            from plugins.confluent_cloud.config import CCloudPluginConfig
+
+            return CCloudPluginConfig.model_validate(plugin_settings.model_dump()).topic_attribution.retention_days
+        if ecosystem == "self_managed_kafka":
+            from plugins.self_managed_kafka.config import SelfManagedKafkaConfig
+
+            return SelfManagedKafkaConfig.model_validate(plugin_settings.model_dump()).topic_attribution.retention_days
+    except ValidationError:
         return None
 
     topic_settings = getattr(plugin_settings, "topic_attribution", None)

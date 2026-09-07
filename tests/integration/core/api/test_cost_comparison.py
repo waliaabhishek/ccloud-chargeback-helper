@@ -1533,6 +1533,113 @@ class TestComparisonRetentionAndRuntimeFailures:
 
 
 class TestComparisonProductionWiring:
+    @pytest.mark.parametrize("ecosystem", ["confluent_cloud", "self_managed_kafka"])
+    @pytest.mark.parametrize(
+        ("retention", "evidence", "baseline_status", "comparison_status"),
+        [
+            (None, "complete", "complete", "complete"),
+            (180, "complete", "complete", "complete"),
+            (None, "filtered_zero", "complete", "complete"),
+            (None, "missing_slot", "unknown", "complete"),
+            (None, "unfinished", "incomplete", "complete"),
+            (None, "missing_state", "unknown", "complete"),
+            (10, "complete", "unknown", "unknown"),
+        ],
+    )
+    def test_builtin_effective_retention_preserves_source_coverage(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        ecosystem: str,
+        retention: int | None,
+        evidence: str,
+        baseline_status: str,
+        comparison_status: str,
+    ) -> None:
+        from core.api.routes import cost_comparison
+
+        evaluated_at = datetime(2026, 9, 7, 12, tzinfo=UTC)
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz: object | None = None) -> datetime:
+                assert tz is UTC
+                return evaluated_at
+
+        monkeypatch.setattr(cost_comparison, "datetime", FixedDateTime)
+        topic_settings: dict[str, object] = {"enabled": True}
+        if retention is not None:
+            topic_settings["retention_days"] = retention
+        plugin_values: dict[str, object] = {
+            "metrics": {"url": "http://prometheus.invalid"},
+            "topic_attribution": topic_settings,
+        }
+        if ecosystem == "confluent_cloud":
+            plugin_values["ccloud_api"] = {"key": "test-key", "secret": "test-secret"}  # pragma: allowlist secret
+        else:
+            plugin_values.update(
+                {
+                    "cluster_id": "cluster",
+                    "metrics_identifier": "cluster",
+                    "broker_count": 3,
+                    "cost_model": {
+                        "compute_hourly_rate": "1",
+                        "storage_per_gib_hourly": "0.01",
+                        "network_ingress_per_gib": "0.01",
+                        "network_egress_per_gib": "0.01",
+                    },
+                }
+            )
+        config = TenantConfig(
+            ecosystem=ecosystem,
+            tenant_id="retention-tenant",
+            storage=StorageConfig(connection_string=f"sqlite:///{tmp_path / 'comparison.db'}"),
+            plugin_settings=PluginSettingsBase.model_validate(plugin_values),
+        )
+        app = create_app(AppSettings(tenants={"retention": config}), mode="api")
+        with TestClient(app) as client:
+            with (
+                app.state.backend_provider.acquire_backend("retention", config) as backend,
+                backend.create_unit_of_work() as uow,
+            ):
+                for day_number in range(18, 22):
+                    day = date(2026, 8, day_number)
+                    if not (evidence == "missing_slot" and day_number == 18):
+                        uow.topic_attributions.upsert_batch(
+                            [_topic(day, "cluster", "orders", "1", ecosystem=ecosystem, tenant_id=config.tenant_id)]
+                        )
+                    if not (evidence == "missing_state" and day_number == 18):
+                        state = _state(day, topic_attribution=True)
+                        state.ecosystem = ecosystem
+                        state.tenant_id = config.tenant_id
+                        state.topic_attribution_calculated = not (evidence == "unfinished" and day_number == 18)
+                        uow.pipeline_state.upsert(state)
+                uow.commit()
+            params = _comparison_params(
+                baseline_start="2026-08-17",
+                baseline_end="2026-08-18",
+                comparison_start="2026-08-19",
+                comparison_end="2026-08-20",
+                timezone="America/Los_Angeles",
+            )
+            if evidence == "filtered_zero":
+                params["cluster_resource_id"] = "no-matching-cluster"
+            response = client.get("/api/v1/tenants/retention/topic-attributions/comparison", params=params)
+
+        assert response.status_code == 200
+        body = response.json()
+        cutoff = (evaluated_at - timedelta(days=retention or 90)).isoformat().replace("+00:00", "Z")
+        for period, status in (("baseline", baseline_status), ("comparison", comparison_status)):
+            assert body[period]["coverage"]["status"] == status
+            assert body[period]["coverage"]["availability_cutoff_at"] == cutoff
+        if evidence == "filtered_zero":
+            assert body["rows"] == []
+            assert body["summary"]["baseline_amount"] == "0"
+            assert body["summary"]["comparison_amount"] == "0"
+        else:
+            assert body["summary"]["baseline_amount"] == ("1" if evidence == "missing_slot" else "2")
+            assert body["summary"]["comparison_amount"] == "2"
+
     def test_real_provider_serves_two_tenants_with_each_retention_policy_shape(self, tmp_path: Path) -> None:
         from core.storage.backends.sqlmodel.unit_of_work import SQLModelBackend
 

@@ -73,9 +73,12 @@ The tenant name stays the same in both profiles.
    Attribution list** returns to Table with the selected period and filters; the
    existing list uses substring matching, so another containing match may
    appear.
-4. Read the coverage qualification before interpreting a zero. Unknown or
-   incomplete dates make the amounts observed totals and prevent a confirmed
-   zero claim. A zero baseline makes percentage change unavailable. If demo data
+4. Read the comparison summary cards for totals and changes. Percentages show
+   at most two decimal places. If data completeness cannot be confirmed, a short
+   warning identifies the affected periods and whether processing is incomplete
+   or source availability cannot be confirmed; amounts are observed totals, and
+   missing data must not be interpreted as zero spending. A zero baseline makes
+   percentage change unavailable. If demo data
    is outside the selected range, choose Custom with dates containing the data.
 5. For monthly tenants, Compare uses UTC, disables Previous day and Previous
    week, and requires each Custom period to start on the first day and end on the

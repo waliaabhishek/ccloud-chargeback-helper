@@ -340,14 +340,21 @@ requested inclusive dates. `start_at` is the resolved UTC inclusive bound and
 | `unknown_dates` | Dates whose source availability cannot be confirmed. |
 | `incomplete_dates` | Dates without complete source processing evidence. |
 | `retention_qualified_dates` | Dates where current evidence cannot distinguish unavailable retained data from a valid zero. This does not assert that data was deleted. |
-| `availability_cutoff_at` | The captured source retention cutoff, or `null` when a valid Topic Attribution policy cannot be proven from tenant settings. |
+| `availability_cutoff_at` | The captured source retention cutoff, or `null` when a valid Topic Attribution policy cannot be established. Confluent Cloud and self-managed Kafka use their validated plugin policy, including defaults and explicit overrides. |
 
 `unknown` takes precedence when both unknown and incomplete dates exist. A
 successful chargeback calculation can confirm a zero total even when no rows
 match the filters. Topic Attribution requires unfiltered source-date evidence
 for the selected slots, so a filtered zero or an empty source slot remains
 qualified when that evidence is absent. The UI labels values from either
-non-complete period as observed totals and shows the affected dates.
+non-complete period as observed totals and shows a short warning identifying
+the affected periods. Detailed coverage dates remain available in the API.
+For the built-in Kafka plugins, omitting `topic_attribution.retention_days`
+uses the plugin's default; it does not by itself make coverage unknown.
+Coverage is checked independently of topic and cluster filters: a filter with
+no matching costs can report complete when the underlying source dates are
+complete. Missing source records, unfinished processing, and periods outside
+the retention window remain qualified.
 
 `summary` contains `baseline_amount`, `comparison_amount`, `increases`,
 `decreases`, `net_change`, and `percentage_change`. `increases` is the sum of
