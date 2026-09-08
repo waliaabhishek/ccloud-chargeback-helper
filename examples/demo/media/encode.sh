@@ -281,7 +281,9 @@ story_last_frame=$((second_marker_start - 1))
 [ "$story_first_frame" -le "$story_last_frame" ] || fail "marker runs leave no story frames to encode"
 
 temporary_video=$temporary_dir/encoded.mp4
-video_filter="select='between(n,$story_first_frame,$story_last_frame)',setpts=(PTS-STARTPTS)/$speed,pad=$video_width:$content_height+$caption_band_height:0:0:black,subtitles=$captions:force_style='PlayResX=1600,PlayResY=900,FontName=DejaVu Sans,FontSize=$caption_font_size,Outline=2,Shadow=1,MarginV=32,Alignment=2',format=yuv420p"
+# Bound the end of stream before resampling, then convert frame rate explicitly
+# so FFmpeg's output synchronization cannot extend the cut with duplicate frames.
+video_filter="trim=start_frame=$story_first_frame:end_frame=$second_marker_start,setpts=(PTS-STARTPTS)/$speed,fps=30,pad=$video_width:$content_height+$caption_band_height:0:0:black,subtitles=$captions:force_style='PlayResX=1600,PlayResY=900,FontName=DejaVu Sans,FontSize=$caption_font_size,Outline=2,Shadow=1,MarginV=32,Alignment=2',format=yuv420p"
 ffmpeg -hide_banner -loglevel error -y -i "$raw_video" -map 0:v:0 \
     -vf "$video_filter" -r 30 -c:v libx264 -profile:v high -pix_fmt yuv420p \
     -movflags +faststart -an "$temporary_video" \

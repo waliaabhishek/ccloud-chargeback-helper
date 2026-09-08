@@ -1969,7 +1969,8 @@ def test_encoder_uses_actual_ffmpeg_marker_boundaries_speed_and_caption_band_for
     ]
 
 
-def test_encoder_accepts_a_valid_full_mode_cut_and_media_validation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("frame_rate", [25, 30])
+def test_encoder_accepts_a_valid_full_mode_cut_and_media_validation(tmp_path: Path, frame_rate: int) -> None:
     media_root = tmp_path / "media"
     work_dir = media_root / "work"
     assets_dir = media_root / "assets"
@@ -1979,7 +1980,7 @@ def test_encoder_accepts_a_valid_full_mode_cut_and_media_validation(tmp_path: Pa
     _write_json(spec_path, _capture_spec())
     timeline = _timeline("full", action_ratio=0.05)
     raw_story_seconds = _timeline_duration(timeline)
-    _write_marker_video(media_root / RAW_VIDEO_PATH, frame_rate=25, story_seconds=raw_story_seconds)
+    _write_marker_video(media_root / RAW_VIDEO_PATH, frame_rate=frame_rate, story_seconds=raw_story_seconds)
     timeline_path = media_root / EDIT_TIMELINE_PATH
     _write_json(timeline_path, timeline)
     (media_root / CAPTIONS_PATH).write_text(_timeline_srt("full", timeline), encoding="utf-8")
