@@ -4,7 +4,20 @@ import type { JSX, Ref } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/mocks/server";
+import { ConfluentLinkRenderer } from "../common/ConfluentLinkRenderer";
 import { TopicAttributionGrid } from "./TopicAttributionGrid";
+
+const mockRegisterIdentifier = vi.fn<(identifier: string) => () => void>(() => vi.fn());
+
+vi.mock("../../providers/ResourceLinkContext", () => ({
+  useResourceLinks: () => ({
+    enabled: true,
+    setEnabled: vi.fn(),
+    resolveUrl: vi.fn(() => null),
+    registerIdentifier: mockRegisterIdentifier,
+    isLoading: false,
+  }),
+}));
 
 type AgGridProps = {
   columnDefs?: ColDef[];
@@ -98,6 +111,54 @@ describe("TopicAttributionGrid", () => {
     expect(capturedColDefs!.map((c) => c.field)).toContain("is_excluded");
   });
 
+  it("uses direct client-only cluster and topic URLs without link-context registration", () => {
+    let capturedColDefs: ColDef[] | undefined;
+    renderOverride = ({ columnDefs }: AgGridProps) => {
+      capturedColDefs = columnDefs;
+      return <div data-testid="ag-grid" />;
+    };
+
+    render(<TopicAttributionGrid tenantName="acme" filters={{}} />);
+
+    const clusterColumn = capturedColDefs?.find(
+      (column) => column.field === "cluster_resource_id",
+    );
+    const topicColumn = capturedColDefs?.find((column) => column.field === "topic_name");
+    expect(clusterColumn?.cellRenderer).toBe(ConfluentLinkRenderer);
+    expect(topicColumn?.cellRenderer).toBe(ConfluentLinkRenderer);
+
+    const row = {
+      env_id: "env-direct",
+      cluster_resource_id: "lkc-direct",
+      topic_name: "topic-direct",
+    };
+    const clusterParams = clusterColumn?.cellRendererParams as (
+      params: { data: typeof row },
+    ) => { url: string | null };
+    const topicParams = topicColumn?.cellRendererParams as (
+      params: { data: typeof row },
+    ) => { url: string | null };
+    const ClusterRenderer = clusterColumn?.cellRenderer as typeof ConfluentLinkRenderer;
+    const TopicRenderer = topicColumn?.cellRenderer as typeof ConfluentLinkRenderer;
+
+    render(
+      <>
+        <ClusterRenderer value="lkc-direct" url={clusterParams({ data: row }).url} />
+        <TopicRenderer value="topic-direct" url={topicParams({ data: row }).url} />
+      </>,
+    );
+
+    expect(screen.getByRole("link", { name: "lkc-direct" })).toHaveAttribute(
+      "href",
+      "https://confluent.cloud/environments/env-direct/clusters/lkc-direct",
+    );
+    expect(screen.getByRole("link", { name: "topic-direct" })).toHaveAttribute(
+      "href",
+      "https://confluent.cloud/environments/env-direct/clusters/lkc-direct/topics/topic-direct",
+    );
+    expect(mockRegisterIdentifier).not.toHaveBeenCalled();
+  });
+
   it("datasource fetches data from API and calls successCallback", async () => {
     let capturedDatasource:
       | {
@@ -152,6 +213,62 @@ describe("TopicAttributionGrid", () => {
           expect.objectContaining({ topic_name: "my-topic" }),
         ]),
         1,
+      );
+    });
+  });
+
+  it("retains a substring collision returned by the existing Topic Attribution destination", async () => {
+    let capturedDatasource:
+      | {
+          getRows: (p: {
+            startRow: number;
+            successCallback: (rows: unknown[], total: number) => void;
+            failCallback: () => void;
+          }) => void;
+        }
+      | undefined;
+    renderOverride = ({ datasource }: AgGridProps) => {
+      capturedDatasource = datasource as typeof capturedDatasource;
+      return <div data-testid="ag-grid" />;
+    };
+    server.use(
+      http.get("/api/v1/tenants/acme/topic-attributions", ({ request }) => {
+        expect(new URL(request.url).searchParams.get("topic_name")).toBe(
+          "orders",
+        );
+        return HttpResponse.json({
+          items: [
+            { topic_name: "orders", cluster_resource_id: "lkc-primary" },
+            { topic_name: "orders-replay", cluster_resource_id: "lkc-primary" },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 100,
+          pages: 1,
+        });
+      }),
+    );
+    render(
+      <TopicAttributionGrid
+        tenantName="acme"
+        filters={{ topic_name: "orders", cluster_resource_id: "lkc-primary" }}
+      />,
+    );
+
+    const successCallback = vi.fn();
+    capturedDatasource!.getRows({
+      startRow: 0,
+      successCallback,
+      failCallback: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(successCallback).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({ topic_name: "orders" }),
+          expect.objectContaining({ topic_name: "orders-replay" }),
+        ],
+        2,
       );
     });
   });

@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AllocationIssuesTable } from "../AllocationIssuesTable";
+import { ConfluentLinkRenderer } from "../../common/ConfluentLinkRenderer";
 import type { ChargebackFilters } from "../../../types/filters";
 
 // ---------------------------------------------------------------------------
@@ -11,6 +12,7 @@ type ColDef = {
   field?: string;
   headerName?: string;
   valueFormatter?: (p: { value: unknown }) => string;
+  cellRenderer?: unknown;
 };
 
 const gridCapture = {
@@ -112,7 +114,7 @@ describe("AllocationIssuesTable (AG Grid)", () => {
     expect(grid.getAttribute("data-cacheblocksize")).toBe("100");
   });
 
-  it("resource_id column uses ConfluentLinkRenderer cell renderer", () => {
+  it("resource and identity columns use the shared ConfluentLinkRenderer", () => {
     render(
       <AllocationIssuesTable tenantName="test-tenant" filters={MOCK_FILTERS} />,
     );
@@ -120,11 +122,14 @@ describe("AllocationIssuesTable (AG Grid)", () => {
     const resourceCol = gridCapture.columnDefs?.find(
       (c) => c.field === "resource_id",
     );
+    const identityCol = gridCapture.columnDefs?.find(
+      (c) => c.field === "identity_id",
+    );
     expect(resourceCol).toBeDefined();
+    expect(identityCol).toBeDefined();
     expect(resourceCol?.valueFormatter).toBeUndefined();
-    expect(
-      (resourceCol as Record<string, unknown>)?.cellRenderer,
-    ).toBeDefined();
+    expect(resourceCol?.cellRenderer).toBe(ConfluentLinkRenderer);
+    expect(identityCol?.cellRenderer).toBe(ConfluentLinkRenderer);
   });
 
   it("datasource getRows calls the correct API URL with filters", () => {

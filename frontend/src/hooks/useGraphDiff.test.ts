@@ -236,6 +236,35 @@ describe("useGraphDiff", () => {
     expect(capturedUrl).toContain("focus=lkc-abc");
   });
 
+  it("forwards timezone and isolates a graph-diff request by timezone", async () => {
+    let capturedUrl = "";
+    let callCount = 0;
+    server.use(
+      http.get("/api/v1/tenants/acme/graph/diff", ({ request }) => {
+        capturedUrl = request.url;
+        callCount++;
+        return HttpResponse.json(DIFF_RESPONSE);
+      }),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ timezone }: { timezone: string | null }) =>
+        useGraphDiff({ ...BASE_PARAMS, timezone }),
+      {
+        wrapper: createWrapper(),
+        initialProps: { timezone: "America/Chicago" },
+      },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(capturedUrl).toContain("timezone=America%2FChicago");
+    const callsForChicago = callCount;
+
+    rerender({ timezone: "America/New_York" });
+    await waitFor(() => expect(callCount).toBeGreaterThan(callsForChicago));
+    expect(capturedUrl).toContain("timezone=America%2FNew_York");
+  });
+
   it("uses default depth=1 when depth not specified", async () => {
     let capturedUrl = "";
     server.use(

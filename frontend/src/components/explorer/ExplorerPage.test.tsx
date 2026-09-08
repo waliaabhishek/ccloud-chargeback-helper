@@ -141,6 +141,7 @@ vi.mock("./SearchBar", () => ({
 vi.mock("./GraphContainer", () => ({
   GraphContainer: ({
     nodes,
+    edges,
     fadedNodeIds = new Set<string>(),
   }: {
     nodes: Array<{
@@ -150,9 +151,10 @@ vi.mock("./GraphContainer", () => ({
       tagColor?: string;
       diff?: { diff_status: string; cost_delta: number };
     }>;
+    edges: Array<{ source: string; target: string }>;
     fadedNodeIds?: Set<string>;
   }) => (
-    <div data-testid="graph-container">
+    <div data-testid="graph-container" data-edges={JSON.stringify(edges)}>
       {nodes.map((n) => (
         <div
           key={n.id}
@@ -209,12 +211,12 @@ function resetGraphDataMock() {
 // Render helpers
 // ---------------------------------------------------------------------------
 
-function renderExplorerPage() {
+function renderExplorerPage(initialEntry = "/") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <ExplorerPage />
       </QueryClientProvider>
@@ -305,6 +307,22 @@ describe("ExplorerPage", () => {
     expect(
       document.querySelector("[data-testid='graph-container']"),
     ).not.toBeNull();
+  });
+
+  it("passes a diff link timezone through ExplorerPage to the graph diff hook", () => {
+    renderExplorerPage(
+      "/explorer?diff=true&from_start=2026-02-01&from_end=2026-02-28&to_start=2026-03-01&to_end=2026-03-31&timezone=America%2FChicago",
+    );
+
+    expect(useGraphDiff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timezone: "America/Chicago",
+        fromStart: "2026-02-01",
+        fromEnd: "2026-02-28",
+        toStart: "2026-03-01",
+        toEnd: "2026-03-31",
+      }),
+    );
   });
 
   it("shows 'Select a tenant' placeholder when no tenant selected", () => {
@@ -1982,6 +2000,47 @@ describe("ExplorerPage — collapseNearZeroNodes", () => {
       goToRoot: vi.fn(),
       goToBreadcrumb: vi.fn(),
     });
+  });
+
+  it.each(["0", "0.001"])("preserves the tenant root with cost %s and no edges", (cost) => {
+    vi.mocked(useGraphData).mockReturnValue({
+      data: {
+        nodes: [makeApiNode({ id: "acme", resource_type: "tenant", cost })] as never,
+        edges: [],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderExplorerPage();
+
+    expect(document.querySelector("[data-node-id='acme']")).not.toBeNull();
+    expect(document.querySelector("[data-node-resource-type='zero_cost_summary']")).toBeNull();
+    expect(screen.getByTestId("graph-container")).toHaveAttribute("data-edges", "[]");
+  });
+
+  it("keeps the zero-cost tenant as the endpoint when collapsing its near-zero child", () => {
+    vi.mocked(useGraphData).mockReturnValue({
+      data: {
+        nodes: [
+          makeApiNode({ id: "acme", resource_type: "tenant", cost: "0.001" }),
+          makeApiNode({ id: "cluster-a", resource_type: "kafka_cluster", cost: "0.001" }),
+        ] as never,
+        edges: [{ source: "acme", target: "cluster-a", relationship_type: "parent", cost: null }],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderExplorerPage();
+
+    expect(document.querySelector("[data-node-id='acme']")).not.toBeNull();
+    expect(document.querySelector("[data-node-id='cluster-a']")).toBeNull();
+    expect(JSON.parse(screen.getByTestId("graph-container").getAttribute("data-edges")!)).toEqual([
+      { source: "acme:zero_cost_ui", target: "acme", relationship_type: "charge", cost: null },
+    ]);
   });
 
   it("collapses near-zero-cost nodes into a zero_cost_summary node", () => {

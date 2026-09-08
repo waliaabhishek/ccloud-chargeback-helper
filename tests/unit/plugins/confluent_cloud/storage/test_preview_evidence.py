@@ -1,17 +1,32 @@
 from __future__ import annotations
 
 import inspect
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
+import pytest
+from sqlalchemy import delete
 from sqlmodel import Session, create_engine
 
 from core.models.chargeback import ChargebackRow, CostType
 from core.storage.backends.sqlmodel.module import CoreStorageModule
 from plugins.confluent_cloud.models.billing import CCloudBillingLineItem, CCloudCostSourceRecord
 from plugins.confluent_cloud.storage.module import CCloudStorageModule
+from plugins.confluent_cloud.storage.preview_tables import (
+    CCloudOrganizationAuthorityAttemptTable,
+    CCloudSourceCaptureReadinessHistoryTable,
+    CCloudSourceCaptureReadinessTable,
+    CCloudSourceEvidenceAttemptTable,
+)
 from plugins.confluent_cloud.storage.repositories import CCloudBillingRepository, CCloudChargebackRepository
+from plugins.confluent_cloud.storage.tables import (
+    CCloudAllocationLineagePortionTable,
+    CCloudAllocationLineageRunTable,
+    CCloudPreviewSourceAllocationLineagePortionTable,
+)
 from tests.unit.core.preview.conftest import preview_module
 
 
@@ -83,6 +98,255 @@ def _scope() -> object:
         start=datetime(2026, 7, 1, tzinfo=UTC),
         end=datetime(2026, 7, 2, tzinfo=UTC),
     )
+
+
+def _preview_read_uow(engine: Any) -> object:
+    from core.preview.storage_availability import PreviewEvidenceAvailability, PreviewEvidenceAvailabilityState
+    from plugins.confluent_cloud.storage.preview_unit_of_work import CCloudPreviewGenerationReadSQLModelUnitOfWork
+
+    url = str(engine.url)
+    return CCloudPreviewGenerationReadSQLModelUnitOfWork(
+        url,
+        PreviewEvidenceAvailability(PreviewEvidenceAvailabilityState.READY),
+    )
+
+
+def _insert_source_attempt(session: Session, tenant_id: str) -> int:
+    attempt = CCloudSourceEvidenceAttemptTable(
+        ecosystem="confluent_cloud",
+        tenant_id=tenant_id,
+        refresh_token=f"refresh-{tenant_id}",
+        refresh_start=datetime(2026, 7, 1, tzinfo=UTC),
+        refresh_end=datetime(2026, 7, 2, tzinfo=UTC),
+        status="succeeded",
+        started_at=datetime(2026, 7, 3, tzinfo=UTC),
+        completed_at=datetime(2026, 7, 3, 1, tzinfo=UTC),
+    )
+    session.add(attempt)
+    session.flush()
+    assert attempt.attempt_sequence is not None
+    return attempt.attempt_sequence
+
+
+def _insert_source_attempt_sentinel(session: Session, tenant_id: str) -> None:
+    _insert_source_attempt(session, tenant_id)
+
+
+def _insert_readiness_sentinel(session: Session, tenant_id: str) -> None:
+    attempt_sequence = _insert_source_attempt(session, tenant_id)
+    session.add(
+        CCloudSourceCaptureReadinessTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            window_start=datetime(2026, 7, 1, tzinfo=UTC),
+            window_end=datetime(2026, 7, 2, tzinfo=UTC),
+            capture_id=f"current-{tenant_id}",
+            captured_at=datetime(2026, 7, 3, tzinfo=UTC),
+            source_count=1,
+            attempt_sequence=attempt_sequence,
+        )
+    )
+    session.flush()
+    session.exec(
+        delete(CCloudSourceEvidenceAttemptTable).where(
+            CCloudSourceEvidenceAttemptTable.attempt_sequence == attempt_sequence
+        )
+    )
+
+
+def _insert_readiness_history_sentinel(session: Session, tenant_id: str) -> None:
+    attempt_sequence = _insert_source_attempt(session, tenant_id)
+    session.add(
+        CCloudSourceCaptureReadinessHistoryTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            attempt_sequence=attempt_sequence,
+            window_start=datetime(2026, 7, 1, tzinfo=UTC),
+            window_end=datetime(2026, 7, 2, tzinfo=UTC),
+            capture_id=f"history-{tenant_id}",
+            captured_at=datetime(2026, 7, 3, tzinfo=UTC),
+            source_count=1,
+        )
+    )
+    session.flush()
+    session.exec(
+        delete(CCloudSourceEvidenceAttemptTable).where(
+            CCloudSourceEvidenceAttemptTable.attempt_sequence == attempt_sequence
+        )
+    )
+
+
+def _insert_source_record_sentinel(session: Session, tenant_id: str) -> None:
+    CCloudBillingRepository(session).replace_source_window(
+        "confluent_cloud",
+        tenant_id,
+        datetime(2026, 6, 30, tzinfo=UTC),
+        datetime(2026, 7, 4, tzinfo=UTC),
+        [_source(f"source-{tenant_id}", tenant_id=tenant_id)],
+    )
+
+
+def _insert_organization_authority_sentinel(session: Session, tenant_id: str) -> None:
+    session.add(
+        CCloudOrganizationAuthorityAttemptTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            status="available",
+            started_at=datetime(2026, 7, 3, tzinfo=UTC),
+            completed_at=datetime(2026, 7, 3, 1, tzinfo=UTC),
+            organization_id=f"org-{tenant_id}",
+        )
+    )
+
+
+def _insert_allocation_run_sentinel(session: Session, tenant_id: str) -> None:
+    session.add(
+        CCloudAllocationLineageRunTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            tracking_date=date(2026, 7, 1),
+            calculation_id=f"calculation-{tenant_id}",
+            calculation_completed_at=datetime(2026, 7, 3, tzinfo=UTC),
+            capture_status="available",
+            portion_count=1,
+        )
+    )
+
+
+def _insert_allocation_portion_sentinel(session: Session, tenant_id: str) -> None:
+    session.add(
+        CCloudAllocationLineagePortionTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            tracking_date=date(2026, 7, 1),
+            calculation_id=f"calculation-{tenant_id}",
+            origin_timestamp=datetime(2026, 7, 1, tzinfo=UTC),
+            origin_env_id="env-1",
+            origin_resource_id="lkc-1",
+            origin_product_type="KAFKA_STORAGE",
+            origin_product_category="KAFKA",
+            portion_ordinal=0,
+            target_kind="resource",
+            target_id="lkc-1",
+            allocated_cost="8.00",
+            allocated_quantity="5.00",
+            allocation_ratio="1.00",
+            method_id="direct",
+            method_version="v1",
+            method_details_json="{}",
+        )
+    )
+
+
+def _insert_preview_allocation_portion_sentinel(session: Session, tenant_id: str) -> None:
+    session.add(
+        CCloudPreviewSourceAllocationLineagePortionTable(
+            ecosystem="confluent_cloud",
+            tenant_id=tenant_id,
+            tracking_date=date(2026, 7, 1),
+            calculation_id=f"calculation-{tenant_id}",
+            source_record_id=f"source-{tenant_id}",
+            evidence_scope_start=datetime(2026, 7, 1, tzinfo=UTC),
+            evidence_scope_end=datetime(2026, 7, 2, tzinfo=UTC),
+            origin_timestamp=datetime(2026, 7, 1, tzinfo=UTC),
+            origin_env_id="env-1",
+            origin_resource_id="lkc-1",
+            origin_product_type="KAFKA_STORAGE",
+            origin_product_category="KAFKA",
+            portion_ordinal=0,
+            target_kind="resource",
+            target_id="lkc-1",
+            allocated_cost="8.00",
+            allocated_quantity="5.00",
+            allocated_original_cost="10.00",
+            allocation_ratio="1.00",
+            method_id="direct",
+            method_version="v1",
+            method_details_json="{}",
+        )
+    )
+
+
+def test_preview_evidence_existence_rejects_blank_ownership_and_requires_an_entered_uow(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    uow = _preview_read_uow(engine)
+    try:
+        with pytest.raises(RuntimeError, match="context"):
+            uow.has_any_preview_evidence("confluent_cloud", "tenant-1")
+        with uow as opened:
+            with pytest.raises(ValueError, match="ecosystem"):
+                opened.has_any_preview_evidence(" ", "tenant-1")
+            with pytest.raises(ValueError, match="tenant_id"):
+                opened.has_any_preview_evidence("confluent_cloud", " ")
+    finally:
+        engine.dispose()
+
+
+def test_preview_evidence_existence_is_false_for_empty_and_other_tenant_only_state(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    try:
+        with _preview_read_uow(engine) as uow:
+            assert uow.has_any_preview_evidence("confluent_cloud", "tenant-1") is False
+        with Session(engine) as session:
+            _insert_source_attempt_sentinel(session, "tenant-2")
+            session.commit()
+        with _preview_read_uow(engine) as uow:
+            assert uow.has_any_preview_evidence("confluent_cloud", "tenant-1") is False
+            assert uow.has_any_preview_evidence("confluent_cloud", "tenant-2") is True
+    finally:
+        engine.dispose()
+
+
+def test_preview_evidence_existence_propagates_a_storage_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine(tmp_path)
+    try:
+        with _preview_read_uow(engine) as uow:
+            session = uow._session
+            if session is None:
+                raise AssertionError("entered preview read UoW must expose its storage session")
+
+            def fail_query(*_args: object, **_kwargs: object) -> object:
+                raise OSError("controlled preview evidence query failure")
+
+            monkeypatch.setattr(session, "exec", fail_query)
+            monkeypatch.setattr(session, "execute", fail_query)
+            with pytest.raises(OSError, match="controlled preview evidence query failure"):
+                uow.has_any_preview_evidence("confluent_cloud", "tenant-1")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("family", "insert_sentinel"),
+    [
+        ("source-attempt", _insert_source_attempt_sentinel),
+        ("source-readiness", _insert_readiness_sentinel),
+        ("source-readiness-history", _insert_readiness_history_sentinel),
+        ("native-source-record", _insert_source_record_sentinel),
+        ("organization-authority", _insert_organization_authority_sentinel),
+        ("allocation-lineage-run", _insert_allocation_run_sentinel),
+        ("allocation-lineage-portion", _insert_allocation_portion_sentinel),
+        ("preview-source-allocation-lineage-portion", _insert_preview_allocation_portion_sentinel),
+    ],
+)
+def test_preview_evidence_existence_detects_each_demo_written_table_family(
+    tmp_path: Path,
+    family: str,
+    insert_sentinel: Callable[[Session, str], None],
+) -> None:
+    engine = _engine(tmp_path)
+    try:
+        with Session(engine) as session:
+            insert_sentinel(session, "tenant-1")
+            session.commit()
+
+        with _preview_read_uow(engine) as uow:
+            assert uow.has_any_preview_evidence("confluent_cloud", "tenant-1") is True, family
+    finally:
+        engine.dispose()
 
 
 def test_source_candidates_include_native_overlap_and_undated_evidence_overlap(tmp_path: Path) -> None:

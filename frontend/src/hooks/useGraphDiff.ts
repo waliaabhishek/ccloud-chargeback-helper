@@ -8,6 +8,7 @@ export interface UseGraphDiffParams {
   toStart: string | null;
   toEnd: string | null;
   focus: string | null;
+  timezone?: string | null;
   depth?: number;
 }
 
@@ -49,6 +50,7 @@ export function useGraphDiff(params: UseGraphDiffParams): UseGraphDiffResult {
     toStart,
     toEnd,
     focus,
+    timezone = null,
     depth = 1,
   } = params;
 
@@ -67,6 +69,7 @@ export function useGraphDiff(params: UseGraphDiffParams): UseGraphDiffResult {
       fromEnd,
       toStart,
       toEnd,
+      timezone,
       focus ?? null,
       depth ?? 1,
     ],
@@ -78,6 +81,7 @@ export function useGraphDiff(params: UseGraphDiffParams): UseGraphDiffResult {
       qs.set("to_end", toEnd!);
       qs.set("depth", String(depth));
       if (focus) qs.set("focus", focus);
+      if (timezone) qs.set("timezone", timezone);
 
       const url = `${API_URL}/tenants/${tenantName}/graph/diff?${qs.toString()}`;
       const response = await fetch(url, { signal });

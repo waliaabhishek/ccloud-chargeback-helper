@@ -34,7 +34,8 @@ interface TopicAttributionFilterPanelProps {
   onBatchChange?: (updates: Partial<TopicAttributionFilters>) => void;
   onReset: () => void;
   onRefresh?: () => void;
-  activeTab?: "table" | "analytics";
+  activeTab?: "table" | "analytics" | "compare";
+  showDateRange?: boolean;
 }
 
 export function TopicAttributionFilterPanel({
@@ -45,6 +46,7 @@ export function TopicAttributionFilterPanel({
   onReset,
   onRefresh,
   activeTab,
+  showDateRange = true,
 }: TopicAttributionFilterPanelProps): React.JSX.Element {
   const { data: availableDates } = useQuery({
     queryKey: ["topic-attribution-dates", tenantName],
@@ -68,20 +70,26 @@ export function TopicAttributionFilterPanel({
 
   return (
     <Form layout="inline" style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-      <Form.Item label="Date Range">
-        <DatePicker.RangePicker
-          value={[startValue, endValue]}
-          disabledDate={disabledDate}
-          onChange={(dates) => {
-            if (onBatchChange) {
-              onBatchChange({
+      {showDateRange && (
+        <Form.Item label="Date Range">
+          <DatePicker.RangePicker
+            value={[startValue, endValue]}
+            disabledDate={disabledDate}
+            onChange={(dates) => {
+              const updates = {
                 start_date: dates?.[0]?.format("YYYY-MM-DD") ?? null,
                 end_date: dates?.[1]?.format("YYYY-MM-DD") ?? null,
-              });
-            }
-          }}
-        />
-      </Form.Item>
+              };
+              if (onBatchChange) {
+                onBatchChange(updates);
+              } else {
+                onChange("start_date", updates.start_date);
+                onChange("end_date", updates.end_date);
+              }
+            }}
+          />
+        </Form.Item>
+      )}
       <Form.Item label="Cluster">
         <Input
           placeholder="Any cluster"
@@ -117,7 +125,9 @@ export function TopicAttributionFilterPanel({
       <Form.Item label="Attribution Method">
         <Tooltip
           title={
-            activeTab === "analytics" ? "Applies to table view only" : undefined
+            activeTab === "analytics"
+              ? "Applies to table view only"
+              : undefined
           }
         >
           <Select
@@ -129,6 +139,9 @@ export function TopicAttributionFilterPanel({
             options={ATTRIBUTION_METHOD_OPTIONS}
           />
         </Tooltip>
+        <span>
+          Applies to table and comparison views
+        </span>
       </Form.Item>
       <Form.Item label="Timezone">
         <Select

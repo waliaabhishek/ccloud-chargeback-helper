@@ -4,6 +4,10 @@ site_description: Multi-ecosystem chargeback engine — allocate infrastructure 
 repo_url: https://github.com/waliaabhishek/chitragupta
 repo_name: chitragupta
 
+exclude_docs: |
+  /agents/
+  /adr/
+
 theme:
   name: material
   features:
@@ -72,6 +76,7 @@ nav:
   - Getting Started:
     - getting-started/index.md
     - Prerequisites: getting-started/prerequisites.md
+    - Demo: getting-started/demo.md
     - Quickstart: getting-started/quickstart.md
     - Configuration: getting-started/configuration.md
     - First Run: getting-started/first-run.md

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from fastapi.testclient import TestClient  # noqa: TC002
 from sqlalchemy import create_engine, inspect
 
+from core.api import dependencies
 from core.models.chargeback import ChargebackRow, CostType
 from core.storage.backends.sqlmodel.unit_of_work import SQLModelBackend  # noqa: TC001
 
@@ -33,8 +35,20 @@ class TestListChargebacks:
         assert data["items"][0]["identity_id"] == "user-1"
         assert data["items"][0]["amount"] == "10.00"
 
+    @pytest.mark.parametrize(
+        "utc_anchor",
+        [
+            pytest.param(None, id="host-clock"),
+            pytest.param(date(2024, 1, 15), id="past-clock"),
+            pytest.param(date(2035, 6, 15), id="future-clock"),
+        ],
+    )
     def test_ccloud_metadata_does_not_create_or_read_self_managed_team_snapshot(
-        self, app_with_ccloud_backend: TestClient, in_memory_ccloud_backend: SQLModelBackend
+        self,
+        app_with_ccloud_backend: TestClient,
+        in_memory_ccloud_backend: SQLModelBackend,
+        monkeypatch: pytest.MonkeyPatch,
+        utc_anchor: date | None,
     ) -> None:
         row = ChargebackRow(
             ecosystem="test-eco",
@@ -49,13 +63,22 @@ class TestListChargebacks:
             allocation_method="direct",
             metadata={"env_id": "env-1", "team": "not-a-ccloud-field"},
         )
+        if utc_anchor is not None:
+            monkeypatch.setattr(dependencies, "utc_today", lambda: utc_anchor)
+
         with in_memory_ccloud_backend.create_unit_of_work() as uow:
             uow.chargebacks.upsert(row)
             uow.commit()
 
-        response = app_with_ccloud_backend.get("/api/v1/tenants/test-tenant/chargebacks")
+        fixture_date = row.timestamp.date().isoformat()
+        response = app_with_ccloud_backend.get(
+            "/api/v1/tenants/test-tenant/chargebacks",
+            params={"start_date": fixture_date, "end_date": fixture_date},
+        )
         assert response.status_code == 200
-        assert response.json()["items"][0]["metadata"] == {"env_id": "env-1"}
+        data = response.json()
+        assert data["total"] == 1
+        assert data["items"][0]["metadata"] == {"env_id": "env-1"}
 
         engine = create_engine(in_memory_ccloud_backend._connection_string)  # noqa: SLF001
         try:

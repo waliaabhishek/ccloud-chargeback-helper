@@ -4,6 +4,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../../test/mocks/server";
+import { ConfluentLinkRenderer } from "../common/ConfluentLinkRenderer";
 import { ChargebackGrid } from "./ChargebackGrid";
 
 type AgGridProps = {
@@ -109,6 +110,27 @@ describe("ChargebackGrid", () => {
     expect(
       screen.getByTestId("ag-grid").getAttribute("data-has-datasource"),
     ).toBe("true");
+  });
+
+  it("keeps identity and resource columns on the shared ConfluentLinkRenderer", () => {
+    let capturedColumnDefs: ColDef[] | undefined;
+    renderOverride = ({ columnDefs }) => {
+      capturedColumnDefs = columnDefs;
+      return <div data-testid="ag-grid" />;
+    };
+
+    render(
+      <ChargebackGrid tenantName="acme" filters={{}} onRowClick={vi.fn()} />,
+    );
+
+    expect(
+      capturedColumnDefs?.find((column) => column.field === "identity_id")
+        ?.cellRenderer,
+    ).toBe(ConfluentLinkRenderer);
+    expect(
+      capturedColumnDefs?.find((column) => column.field === "resource_id")
+        ?.cellRenderer,
+    ).toBe(ConfluentLinkRenderer);
   });
 
   it("calls onRowClick when row is clicked", () => {

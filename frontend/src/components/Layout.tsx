@@ -59,7 +59,7 @@ export function AppLayout({
   const location = useLocation();
   const { currentTenant } = useTenant();
   const { readiness } = useReadiness();
-  const { enabled: deepLinksEnabled, setEnabled: setDeepLinksEnabled } =
+  const { available: deepLinksAvailable, enabled: deepLinksEnabled, setEnabled: setDeepLinksEnabled } =
     useResourceLinks();
   const {
     token: { colorBgContainer },
@@ -241,8 +241,11 @@ export function AppLayout({
             onClick={onToggleTheme}
             title={isDark ? "Switch to light mode" : "Switch to dark mode"}
           />
-          <Tooltip title="Toggles clickable deep links from resource and identity IDs to their Confluent Cloud console pages. Connectors and identity pools are not supported — Confluent does not expose stable URLs for these. Deleted resources and identities will not have clickable links as they are excluded from the lookup index.">
+          <Tooltip title={deepLinksAvailable
+            ? "Toggles clickable deep links from resource and identity IDs to their Confluent Cloud console pages. Connectors and identity pools are not supported — Confluent does not expose stable URLs for these. Deleted resources and identities will not have clickable links as they are excluded from the lookup index."
+            : "Links are available only for Confluent Cloud tenants."}>
             <Switch
+              disabled={!deepLinksAvailable}
               checked={deepLinksEnabled}
               onChange={setDeepLinksEnabled}
               checkedChildren="Links"

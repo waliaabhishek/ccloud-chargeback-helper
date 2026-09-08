@@ -568,6 +568,16 @@ class TopicAttributionRepository(Protocol):
         """Yield rows matching filters in batches. No limit cap; bounded memory."""
         ...
 
+    def get_distinct_timestamps_in_range(
+        self,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> set[datetime]:
+        """Return source timestamps present for the tenant in the range."""
+        ...
+
     def aggregate(
         self,
         ecosystem: str,
@@ -909,3 +919,10 @@ class StorageBackend(Protocol):
     def create_read_only_unit_of_work(self) -> ReadOnlyUnitOfWork: ...
     def create_tables(self) -> None: ...
     def dispose(self) -> None: ...
+
+
+@runtime_checkable
+class ConsistentReadStorageBackend(Protocol):
+    """Optional backend capability for transactionally consistent read UoWs."""
+
+    def create_consistent_read_unit_of_work(self) -> ReadOnlyUnitOfWork: ...

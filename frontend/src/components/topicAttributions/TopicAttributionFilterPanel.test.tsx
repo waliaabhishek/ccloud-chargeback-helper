@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TopicAttributionFilterPanel } from "./TopicAttributionFilterPanel";
@@ -102,5 +102,20 @@ describe("TopicAttributionFilterPanel — Attribution Method tooltip", () => {
     expect(
       document.querySelector('[data-tooltip="Applies to table view only"]'),
     ).toBeNull();
+  });
+
+  it("hides the ordinary date range when comparison provides both periods", () => {
+    render(
+      <TopicAttributionFilterPanel
+        tenantName="acme"
+        filters={defaultFilters}
+        onChange={vi.fn()}
+        onReset={vi.fn()}
+        activeTab="compare"
+        showDateRange={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("range-picker")).toBeNull();
   });
 });

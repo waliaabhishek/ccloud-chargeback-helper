@@ -1,4 +1,4 @@
-# Chitragupta (formerly ccloud-chargeback-helper)
+# Chitragupta
 
 [![CI](https://github.com/waliaabhishek/chitragupta/actions/workflows/ci.yml/badge.svg)](https://github.com/waliaabhishek/chitragupta/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/waliaabhishek/chitragupta)](https://codecov.io/gh/waliaabhishek/chitragupta)
@@ -9,99 +9,79 @@
 
 > In Hindu tradition, [Chitragupta](https://en.wikipedia.org/wiki/Chitragupta) is the deity who maintains a complete record of every being's actions; the divine accountant himself. Fitting name for a system that tracks exactly who used what and how much it cost.
 
-Multi-ecosystem infrastructure cost chargeback engine. Allocates costs to teams and service accounts across Confluent Cloud, self-managed Kafka, and any Prometheus-instrumented system.
-The goal is to support multiple ecosystems and custom cost allocation strategies. 
-This was originally built for Confluent Cloud but has been extended to support other ecosystems. 
+Understand where your infrastructure spend goes and allocate it to the teams and service accounts using it. Chitragupta brings together billing, resource inventory, and usage data across Confluent Cloud, self-managed Kafka, and Prometheus-instrumented systems.
 
-> [!IMPORTANT] 
-> The v2 version is a complete rewrite from ground up for a full plugin architecture, multi-tenancy, FastAPI, proper storage layer with mitigations, emitter framework, docs site. 
-> Essentially an entirely new system with a lot more features and a much better performance profile. 
+
+> [!IMPORTANT]
+> The v2 version is a complete rewrite from ground up for a full plugin architecture, multi-tenancy, FastAPI, proper storage layer with mitigations, emitter framework, docs site.
+> Essentially an entirely new system with a lot more features and a much better performance profile.
 > The goal is to keep adding more features and improvements as I go along and as more requests come in.
 
-## New Features
+## See it working
 
-- 4x-10x faster performance for chargeback calculations and persistence compared to V1.
-- Custom Tags support to allow ease of filters and chargeback grouping/aggregation.
-- Full documentation website for ease of use.
-- Pulls billing data from APIs or YAML cost models
-- Discovers resources and identities using plugin specific implementations. 
-- Allocation strategies are now pluggable and can be customized for each SKU type.
-- Evolving REST API for querying chargeback data and triggering pipeline runs.
-- New UI (still in progress) that does need Grafana or external viewers.
-- Multi emitter support for different output formats and more coming as needed/requested in the future.
-- Topic attribution overlay — breaks Kafka cluster costs down to individual topics using Prometheus metrics (CCloud-only, requires a configured metrics source).
-- Nascent support for Self Managed Kafka styled cost models.
+Start with total spend, explore the resources behind it, and inspect how Kafka
+cluster costs are distributed across topics. These examples use synthetic data.
 
-## Breaking Changes from V1
+### Watch a cost investigation
 
-- Config YAML format has changed substantially to support multiple ecosystems and custom cost allocation strategies.
-- Plugin based architecture for adding new ecosystems, cost allocation strategies, emitters and more.
-- Code now has internal persistence layer using SQLite(default) instead of in-memory cache.
-- Prometheus metrics have been removed in favor of a database-backed retention.
-- Grafana directly queries the database instead of Prometheus. No prometheus instance or script to write are needed anymore, yay!
+Follow a cost increase from the dashboard to a Kafka topic, compare daily
+amounts, and inspect processing status and reporting options.
 
+https://github.com/user-attachments/assets/2a67c100-83c8-4bc0-9f46-4e386959c30b
 
-## Supported Ecosystems
+### Explore the resources behind the bill
 
-| Ecosystem | Plugin | Billing Source |
-|-----------|--------|----------------|
-| Confluent Cloud | `confluent_cloud` | CCloud Billing API |
-| Self-managed Kafka | `self_managed_kafka` | YAML cost model + Prometheus |
-| Generic metrics | `generic_metrics_only` | YAML cost model + Prometheus |
+Navigate from a tenant to its environments and resources in Cost Explorer.
 
-## Quick Start
+![Cost Explorer showing a synthetic tenant and its Analytics, Commerce, Fulfillment, and Logistics environments](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-cost-explorer.png)
+
+### Find the topics contributing most to cost
+
+Compare topic costs in a treemap, then filter by cluster, topic, or date to
+investigate further.
+
+![Topic Attribution treemap showing the relative costs of synthetic Kafka topics](https://github.com/waliaabhishek/chitragupta/releases/download/demo-media/chitragupta-demo-topic-attribution.png)
+
+## Try it without credentials
+
+Use the demo for a local evaluation or a presentation. You need Git and Docker
+with Compose; no provider API keys or secrets are required.
 
 ```bash
 git clone https://github.com/waliaabhishek/chitragupta.git
-cd chitragupta/examples/ccloud-full
-
-# Fill in your CCloud API credentials
-cp .env.example .env
-vim .env
-
-# Start the full stack (API + Grafana + UI)
-docker compose up -d
+cd chitragupta
+./demo --showcase
 ```
 
-- API: http://localhost:8080
-- Grafana dashboards: http://localhost:3000 (admin / password)
-- Frontend UI: http://localhost:8081
+Open **<http://127.0.0.1:8081>** once startup completes. Showcase includes cost
+changes to investigate; run `./demo` for the Clean profile with healthy,
+fully allocated data.
 
-The [Quickstart guide](docs/getting-started/quickstart.md) covers everything end-to-end: service account creation, permissions, API key setup, and running with Docker Compose. Three self-contained examples are available in [`examples/`](examples/) — see `ccloud-grafana/`, `ccloud-full/`, or `self-managed-full/`.
+The [Demo guide](https://waliaabhishek.github.io/chitragupta/latest/getting-started/demo/) walks through a cost investigation
+and explains how to stop, reset, or customize the demo.
 
-## Architecture
+## Connect your own environment
 
-```
-AppSettings → WorkflowRunner → ChargebackOrchestrator
-                                  ├── EcosystemPlugin
-                                  │     ├── ServiceHandler×N → CostAllocator
-                                  │     ├── CostInput
-                                  │     └── MetricsSource
-                                  ├── StorageBackend
-                                  └── Emitter×N
-```
+| Ecosystem | Cost source |
+|---|---|
+| Confluent Cloud | Confluent Cloud billing API |
+| Self-managed Kafka | Your configured cost model and Prometheus usage metrics |
+| Generic metrics | Your configured cost model and Prometheus usage metrics |
 
-Each tenant maps to one ecosystem plugin. The orchestrator runs a per-tenant, per-date pipeline: gather resources → resolve identities → fetch costs → allocate → store → emit. An optional **topic attribution** overlay stage (CCloud + Prometheus only) runs after chargeback calculation to attribute Kafka cluster costs to individual topics.
+Follow the [Quickstart](https://waliaabhishek.github.io/chitragupta/latest/getting-started/quickstart/) to configure credentials
+and start your deployment. The [configuration reference](https://waliaabhishek.github.io/chitragupta/latest/configuration/)
+covers each ecosystem.
+
+You can filter and group allocated costs with tags, query results through the
+REST API, and export data for reporting. Confluent Cloud also offers a
+[FOCUS Mapping Preview](https://waliaabhishek.github.io/chitragupta/latest/focus-mapping-preview/), with documented conformance
+limitations.
 
 ## Documentation
 
-Full documentation is available [here](https://waliaabhishek.github.io/chitragupta/latest/).
-
-## Development
-
-```bash
-# Install with dev dependencies
-uv sync --group dev
-
-# Run tests
-uv run pytest
-
-# Lint and type check
-uv run ruff check
-uv run mypy src
-```
-
-## Requirements
-
-- Python 3.14+
-- [uv](https://docs.astral.sh/uv/) package manager
+- [Documentation website](https://waliaabhishek.github.io/chitragupta/latest/)
+- [Demo guide](https://waliaabhishek.github.io/chitragupta/latest/getting-started/demo/)
+- [Configuration](https://waliaabhishek.github.io/chitragupta/latest/configuration/)
+- [Deployment and operations](https://waliaabhishek.github.io/chitragupta/latest/operations/)
+- [API reference](https://waliaabhishek.github.io/chitragupta/latest/api-reference/)
+- [Upgrading](https://waliaabhishek.github.io/chitragupta/latest/operations/upgrading/)

@@ -8,6 +8,7 @@ import {
   Descriptions,
   Row,
   Steps,
+  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -315,17 +316,35 @@ function PipelineStatusContent({
       {/* Left: Run Pipeline (AC-2) */}
       <Col xs={24} sm={10} lg={8}>
         <Card title="Run Pipeline">
-          <Button
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            disabled={pipelineRunning || isApiOnly || isReadOnly || isRunning}
-            onClick={() => {
-              void handleRunPipeline();
-            }}
-            loading={isRunning}
-          >
-            Run Pipeline
-          </Button>
+          {isApiOnly ? (
+            <Tooltip title="Pipeline execution is unavailable in API-only mode.">
+              <span tabIndex={0}>
+                <Button
+                  type="primary"
+                  icon={<PlayCircleOutlined />}
+                  disabled
+                  onClick={() => {
+                    void handleRunPipeline();
+                  }}
+                  loading={isRunning}
+                >
+                  Run Pipeline
+                </Button>
+              </span>
+            </Tooltip>
+          ) : (
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              disabled={pipelineRunning || isReadOnly || isRunning}
+              onClick={() => {
+                void handleRunPipeline();
+              }}
+              loading={isRunning}
+            >
+              Run Pipeline
+            </Button>
+          )}
           {runResult && (
             <Alert
               style={{ marginTop: 12 }}

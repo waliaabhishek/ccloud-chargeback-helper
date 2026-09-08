@@ -18,6 +18,8 @@ export interface FetchTopicAttributionsParams {
   topic_name?: string;
   product_type?: string;
   attribution_method?: string;
+  tag_key?: string;
+  tag_value?: string;
 }
 
 export interface FetchTopicAttributionAggregationParams {
@@ -64,6 +66,8 @@ export async function fetchTopicAttributions(
   if (params.product_type) qs.set("product_type", params.product_type);
   if (params.attribution_method)
     qs.set("attribution_method", params.attribution_method);
+  if (params.tag_key) qs.set("tag_key", params.tag_key);
+  if (params.tag_value) qs.set("tag_value", params.tag_value);
 
   const response = await fetch(
     `${API_URL}/tenants/${tenantName}/topic-attributions?${qs.toString()}`,

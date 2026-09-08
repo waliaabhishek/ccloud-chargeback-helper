@@ -3,7 +3,43 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TopicAttributionPage } from "./list";
-import type { TenantStatusSummary } from "../../types/api";
+import type { ComparisonRow, TenantStatusSummary } from "../../types/api";
+import type { SetURLSearchParams } from "react-router";
+
+const { comparisonViewSpy, comparisonRow, clusterComparisonRow } = vi.hoisted(
+  () => ({
+    comparisonViewSpy: vi.fn(),
+    comparisonRow: {
+      key: "topic:lkc-primary:orders",
+      kind: "entity" as const,
+      dimensions: {
+        cluster_resource_id: "lkc-primary",
+        topic_name: "orders",
+      },
+      baseline_amount: "0",
+      comparison_amount: "1",
+      change: "1",
+      percentage_change: "100",
+      baseline_row_count: 0,
+      comparison_row_count: 1,
+      observed_presence: "comparison_only" as const,
+    },
+    clusterComparisonRow: {
+      key: "cluster:lkc-primary",
+      kind: "entity" as const,
+      dimensions: {
+        cluster_resource_id: "lkc-primary",
+      },
+      baseline_amount: "1",
+      comparison_amount: "2",
+      change: "1",
+      percentage_change: "100",
+      baseline_row_count: 1,
+      comparison_row_count: 1,
+      observed_presence: "both" as const,
+    },
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Mock TopicAttributionGrid — captures filters prop for integration assertions
@@ -39,6 +75,43 @@ vi.mock(
 
 vi.mock("../../components/topicAttributions/TopicAttributionAnalytics", () => ({
   TopicAttributionAnalytics: () => <div data-testid="analytics-view" />,
+}));
+
+vi.mock("../../components/costComparison/CostComparisonView", () => ({
+  CostComparisonView: ({
+    onInvestigate,
+    onGroupByChange,
+    groupBy,
+  }: {
+    onInvestigate: (row: ComparisonRow) => void;
+    onGroupByChange: (groupBy: "topic" | "cluster") => void;
+    groupBy: "topic" | "cluster";
+  }) => {
+    comparisonViewSpy({ onInvestigate, onGroupByChange, groupBy });
+    return (
+      <>
+        <button
+          data-testid="open-filtered-topic-list"
+          onClick={() => onInvestigate(comparisonRow)}
+        >
+          Open filtered Topic Attribution list
+        </button>
+        <button
+          data-testid="select-cluster-comparison"
+          onClick={() => onGroupByChange("cluster")}
+        >
+          Cluster grouping
+        </button>
+        <button
+          data-testid="open-filtered-cluster-list"
+          disabled={groupBy !== "cluster"}
+          onClick={() => onInvestigate(clusterComparisonRow)}
+        >
+          Open filtered cluster list
+        </button>
+      </>
+    );
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -257,6 +330,11 @@ function setupTenantContext(
   });
 }
 
+function requireAppliedParams(value: URLSearchParams | null): URLSearchParams {
+  if (value === null) throw new Error("comparison navigation was not applied");
+  return value;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -305,7 +383,7 @@ describe("TopicAttributionPage — filter param integration", () => {
   afterEach(() => {
     vi.mocked(useSearchParams).mockImplementation(() => [
       new URLSearchParams(),
-      vi.fn(),
+      vi.fn<SetURLSearchParams>(),
     ]);
   });
 
@@ -314,7 +392,7 @@ describe("TopicAttributionPage — filter param integration", () => {
       new URLSearchParams(
         "cluster_resource_id=lkc-abc123&start_date=2026-01-01&end_date=2026-01-31",
       ),
-      vi.fn(),
+      vi.fn<SetURLSearchParams>(),
     ]);
     setupTenantContext("acme", false, "enabled");
     render(<TopicAttributionPage />);
@@ -331,7 +409,7 @@ describe("TopicAttributionPage — filter param integration", () => {
   it("grid is not rendered when no tenant is selected, even with filter params", () => {
     vi.mocked(useSearchParams).mockImplementation(() => [
       new URLSearchParams("cluster_resource_id=lkc-abc123"),
-      vi.fn(),
+      vi.fn<SetURLSearchParams>(),
     ]);
     setupTenantContext(null);
     render(<TopicAttributionPage />);
@@ -392,6 +470,109 @@ describe("TASK-198: AG Grid 0px height fix", () => {
     render(<TopicAttributionPage />);
     expect(screen.getByTestId("ag-grid")).toBeTruthy();
     expect(screen.queryByTestId("analytics-view")).toBeNull();
+  });
+
+  it("keeps Table and Analytics while adding Compare for enabled tenants", () => {
+    setupTenantContext("acme", false, "enabled");
+    render(<TopicAttributionPage />);
+
+    expect(screen.getByTestId("tab-table")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-analytics")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-compare")).toBeInTheDocument();
+    expect(screen.getByTestId("segmented")).toHaveAttribute(
+      "data-value",
+      "table",
+    );
+  });
+
+  it("opens a comparison topic in Table atomically with its full stored filters", async () => {
+    const original = new URLSearchParams(
+      "cluster_resource_id=lkc-old&topic_name=old-topic&product_type=KAFKA_STORAGE&attribution_method=bytes_ratio&tag_key=team&tag_value=platform&timezone=America%2FChicago&start_date=2026-02-01&end_date=2026-02-28",
+    );
+    let applied: URLSearchParams | null = null;
+    const setSearchParams = vi.fn<SetURLSearchParams>(
+      (update) => {
+        if (typeof update === "function") {
+          applied = update(original) as URLSearchParams;
+        }
+      },
+    );
+    vi.mocked(useSearchParams).mockImplementation(() => [
+      original,
+      setSearchParams,
+    ]);
+    setupTenantContext("acme", false, "enabled");
+    render(<TopicAttributionPage />);
+
+    await userEvent.click(screen.getByTestId("tab-compare"));
+    await userEvent.click(screen.getByTestId("open-filtered-topic-list"));
+
+    expect(comparisonViewSpy).toHaveBeenCalled();
+    expect(screen.getByTestId("segmented")).toHaveAttribute(
+      "data-value",
+      "table",
+    );
+    const appliedParams = requireAppliedParams(applied);
+    expect(appliedParams.get("cluster_resource_id")).toBe("lkc-primary");
+    expect(appliedParams.get("topic_name")).toBe("orders");
+    expect(appliedParams.get("product_type")).toBe("KAFKA_STORAGE");
+    expect(appliedParams.get("attribution_method")).toBe("bytes_ratio");
+    expect(appliedParams.get("tag_key")).toBe("team");
+    expect(appliedParams.get("tag_value")).toBe("platform");
+    expect(appliedParams.get("timezone")).toBe("America/Chicago");
+  });
+
+  it("retains a constraining topic filter when opening a cluster comparison", async () => {
+    const original = new URLSearchParams(
+      "topic_name=orders&product_type=KAFKA_STORAGE&timezone=America%2FChicago",
+    );
+    let applied: URLSearchParams | null = null;
+    const setSearchParams = vi.fn<SetURLSearchParams>((update) => {
+      if (typeof update === "function") {
+        applied = update(original) as URLSearchParams;
+      }
+    });
+    vi.mocked(useSearchParams).mockImplementation(() => [
+      original,
+      setSearchParams,
+    ]);
+    setupTenantContext("acme", false, "enabled");
+    render(<TopicAttributionPage />);
+
+    await userEvent.click(screen.getByTestId("tab-compare"));
+    await userEvent.click(screen.getByTestId("select-cluster-comparison"));
+    await userEvent.click(screen.getByTestId("open-filtered-cluster-list"));
+
+    const appliedParams = requireAppliedParams(applied);
+    expect(appliedParams.get("cluster_resource_id")).toBe("lkc-primary");
+    expect(appliedParams.get("topic_name")).toBe("orders");
+  });
+
+  it("does not serialize a topic value when opening an unconstrained cluster comparison", async () => {
+    const original = new URLSearchParams(
+      "cluster_resource_id=lkc-old&product_type=KAFKA_STORAGE&timezone=America%2FChicago",
+    );
+    let applied: URLSearchParams | null = null;
+    const setSearchParams = vi.fn<SetURLSearchParams>((update) => {
+      if (typeof update === "function") {
+        applied = update(original) as URLSearchParams;
+      }
+    });
+    vi.mocked(useSearchParams).mockImplementation(() => [
+      original,
+      setSearchParams,
+    ]);
+    setupTenantContext("acme", false, "enabled");
+    render(<TopicAttributionPage />);
+
+    await userEvent.click(screen.getByTestId("tab-compare"));
+    await userEvent.click(screen.getByTestId("select-cluster-comparison"));
+    await userEvent.click(screen.getByTestId("open-filtered-cluster-list"));
+
+    const appliedParams = requireAppliedParams(applied);
+    expect(appliedParams.get("cluster_resource_id")).toBe("lkc-primary");
+    expect(appliedParams.get("topic_name")).toBeNull();
+    expect(appliedParams.toString()).not.toContain("undefined");
   });
 
   it("clicking Analytics hides grid and shows analytics", async () => {

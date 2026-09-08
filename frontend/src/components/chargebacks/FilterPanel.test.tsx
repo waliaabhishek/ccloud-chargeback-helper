@@ -545,6 +545,21 @@ describe("FilterPanel", () => {
     expect(screen.getByText("Refresh Data")).toBeInTheDocument();
   });
 
+  it("hides the ordinary date range when a comparison owns its two periods", () => {
+    render(
+      <FilterPanel
+        filters={defaultFilters}
+        onChange={vi.fn()}
+        onReset={vi.fn()}
+        tenantName="t1"
+        showDateRange={false}
+      />,
+    );
+
+    expect(screen.queryByTestId("date-range-set")).toBeNull();
+    expect(screen.queryByTestId("date-range-clear")).toBeNull();
+  });
+
   it("FilterPanel_no_Refresh_Data_button_when_onRefresh_omitted", () => {
     render(
       <FilterPanel

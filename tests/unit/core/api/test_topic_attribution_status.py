@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from core.api.schemas import TenantReadiness, TenantStatusDetailResponse, TenantStatusSummary
-from core.api.topic_attribution_status import TopicAttributionStatus, resolve_topic_attribution_status
+from core.api.topic_attribution_status import (
+    TopicAttributionStatus,
+    resolve_topic_attribution_retention_days,
+    resolve_topic_attribution_status,
+)
 from core.config.models import AppSettings, PluginSettingsBase, StorageConfig, TenantConfig
 from core.metrics.config import MetricsConnectionConfig
 from plugins.confluent_cloud.config import CCloudCredentials, CCloudPluginConfig, TopicAttributionConfig
+from plugins.self_managed_kafka.config import SelfManagedKafkaConfig
 from tests.integration.core.api.backend_provider import install_backend
 
 # ---------------------------------------------------------------------------
@@ -122,6 +129,94 @@ class TestResolveTopicAttributionStatus:
         settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": True}})
         result = resolve_topic_attribution_status(settings, ecosystem="other")
         assert result.status == "enabled"
+
+
+class TestResolveTopicAttributionRetentionDays:
+    @pytest.mark.parametrize("ecosystem", ["confluent_cloud", "self_managed_kafka"])
+    @pytest.mark.parametrize("retention", [None, 30, 180, "120"])
+    def test_builtin_raw_and_typed_settings_use_the_effective_plugin_policy(
+        self, ecosystem: str, retention: int | str | None
+    ) -> None:
+        values: dict[str, Any] = {
+            "metrics": {"url": "http://prometheus.invalid"},
+            "topic_attribution": {"enabled": True},
+        }
+        model: type[CCloudPluginConfig] | type[SelfManagedKafkaConfig]
+        if ecosystem == "confluent_cloud":
+            model = CCloudPluginConfig
+            values["ccloud_api"] = {"key": "test-key", "secret": "test-secret"}  # pragma: allowlist secret
+        else:
+            model = SelfManagedKafkaConfig
+            values.update(
+                {
+                    "cluster_id": "cluster",
+                    "metrics_identifier": "cluster",
+                    "broker_count": 3,
+                    "cost_model": {
+                        "compute_hourly_rate": "1",
+                        "storage_per_gib_hourly": "0.01",
+                        "network_ingress_per_gib": "0.01",
+                        "network_egress_per_gib": "0.01",
+                    },
+                }
+            )
+        if retention is not None:
+            values["topic_attribution"]["retention_days"] = retention
+        typed = model.model_validate(values)
+        raw = PluginSettingsBase.model_validate(values)
+
+        assert resolve_topic_attribution_retention_days(raw, ecosystem) == typed.topic_attribution.retention_days
+        assert resolve_topic_attribution_retention_days(typed, ecosystem) == typed.topic_attribution.retention_days
+
+    @pytest.mark.parametrize("ecosystem", ["confluent_cloud", "self_managed_kafka"])
+    def test_invalid_builtin_settings_do_not_establish_a_policy(self, ecosystem: str) -> None:
+        settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": True, "retention_days": 90}})
+
+        assert resolve_topic_attribution_retention_days(settings, ecosystem) is None
+
+    def test_returns_explicit_days_from_enabled_raw_settings(self) -> None:
+        settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": True, "retention_days": 120}})
+
+        assert resolve_topic_attribution_retention_days(settings, "other") == 120
+
+    def test_returns_explicit_days_when_disabled(self) -> None:
+        settings = PluginSettingsBase.model_validate({"topic_attribution": {"enabled": False, "retention_days": 45}})
+
+        assert resolve_topic_attribution_retention_days(settings, "other") == 45
+
+    def test_returns_explicit_days_from_typed_topic_attribution_settings(self) -> None:
+        config = _make_ccloud_plugin_config(enabled=True)
+        config.topic_attribution.retention_days = 180
+
+        assert resolve_topic_attribution_retention_days(config, "confluent_cloud") == 180
+
+    @pytest.mark.parametrize(
+        "topic_attribution",
+        [
+            None,
+            {},
+            {"enabled": True},
+            {"enabled": True, "retention_days": True},
+            {"enabled": True, "retention_days": 0},
+            {"enabled": True, "retention_days": 366},
+            {"enabled": True, "retention_days": "90"},
+            [],
+        ],
+    )
+    def test_returns_none_when_route_owned_settings_cannot_prove_a_valid_policy(
+        self, topic_attribution: object
+    ) -> None:
+        settings = PluginSettingsBase.model_validate(
+            {} if topic_attribution is None else {"topic_attribution": topic_attribution}
+        )
+
+        assert resolve_topic_attribution_retention_days(settings, "other") is None
+
+    def test_returns_none_when_existing_status_reports_configuration_error(self) -> None:
+        settings = _make_raw_plugin_settings_with_ta_enabled()
+        assert resolve_topic_attribution_status(settings, "confluent_cloud").status == "config_error"
+
+        assert resolve_topic_attribution_retention_days(settings, "confluent_cloud") is None
 
 
 # ---------------------------------------------------------------------------

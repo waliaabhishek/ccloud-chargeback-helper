@@ -1,0 +1,20 @@
+services:
+  grafana:
+    image: grafana/grafana:12.4.0
+    env_file:
+      - ../shared/grafana/plugins.env
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-password}
+    ports:
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ../../examples/shared/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/provisioning/datasources/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ${DEMO_STATE_DIR:-../../.demo/state/clean}:/var/lib/grafana/data/demo:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s

@@ -1,0 +1,38 @@
+services:
+  media-tool:
+    image: ghcr.io/waliaabhishek/chitragupta:${DEMO_IMAGE_TAG:-local}
+    user: "${DEMO_UID}:${DEMO_GID}"
+    working_dir: /app
+    entrypoint: ["python", "/opt/chitragupta-demo-media/tool.py"]
+    volumes:
+      - ./media/tool.py:/opt/chitragupta-demo-media/tool.py:ro
+      - ./media/capture-spec.json:/opt/chitragupta-demo-media/capture-spec.json:ro
+      - ./config.yaml:/app/config/config.yaml:ro
+      - ${DEMO_MEDIA_DIR}:/app/media:rw
+      - ${DEMO_MEDIA_DIR}/state:/app/data:rw
+    network_mode: none
+    restart: "no"
+
+  media-capture:
+    build:
+      context: ./media
+      dockerfile: Dockerfile
+    user: "${DEMO_UID}:${DEMO_GID}"
+    environment:
+      HOME: /tmp/chitragupta-demo-media-home
+    volumes:
+      - ./media/capture-spec.json:/opt/chitragupta-demo-media/capture-spec.json:ro
+      - ${DEMO_MEDIA_DIR}:/app/media:rw
+    networks:
+      - demo
+    restart: "no"
+
+  media-encoder:
+    image: jrottenberg/ffmpeg:7.1-ubuntu2404@sha256:97c70b903cab39fbdcde5f75af2687b9c38133bbe376de53bbd3c259799a31eb
+    user: "${DEMO_UID}:${DEMO_GID}"
+    entrypoint: ["/bin/sh", "/opt/chitragupta-demo-media/encode.sh"]
+    volumes:
+      - ./media/encode.sh:/opt/chitragupta-demo-media/encode.sh:ro
+      - ${DEMO_MEDIA_DIR}:/app/media:rw
+    network_mode: none
+    restart: "no"

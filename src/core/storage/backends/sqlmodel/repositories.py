@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from cachetools import TTLCache
-from sqlalchemy import case, cast, delete, func, literal, or_, update
+from sqlalchemy import and_, case, cast, delete, func, literal, or_, update
 from sqlalchemy.types import String
 from sqlmodel import Session, col, select
 
@@ -2033,7 +2033,7 @@ class TopicAttributionRepository:
             env_id=row.env_id,
             cluster_resource_id=row.cluster_resource_id,
             topic_name=row.topic_name,
-            resource_id=f"{row.cluster_resource_id}:topic:{row.topic_name}",
+            resource_id=row.resource_id,
             product_category=row.product_category,
             product_type=row.product_type,
             attribution_method=row.attribution_method,
@@ -2253,6 +2253,30 @@ class TopicAttributionRepository:
         )
         for partition in self._session.execute(stmt).partitions(batch_size):
             yield from (_ta_to_domain(dim, fact) for dim, fact in partition)
+
+    def get_distinct_timestamps_in_range(
+        self,
+        ecosystem: str,
+        tenant_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> set[datetime]:
+        """Return unfiltered source timestamps for this tenant and range."""
+        stmt = (
+            select(TopicAttributionFactTable.timestamp)
+            .join(
+                TopicAttributionDimensionTable,
+                col(TopicAttributionFactTable.dimension_id) == col(TopicAttributionDimensionTable.dimension_id),
+            )
+            .where(
+                col(TopicAttributionDimensionTable.ecosystem) == ecosystem,
+                col(TopicAttributionDimensionTable.tenant_id) == tenant_id,
+                col(TopicAttributionFactTable.timestamp) >= start,
+                col(TopicAttributionFactTable.timestamp) < end,
+            )
+            .distinct()
+        )
+        return set(self._session.exec(stmt).all())
 
     def aggregate(
         self,
@@ -2540,17 +2564,32 @@ class SQLModelGraphRepository:
         period_start: datetime,
         period_end: datetime,
     ) -> GraphNeighborhood:
-        """Return all environments as nodes with a synthetic tenant→env edge per environment."""
+        """Return environments and parentless clusters beneath the synthetic tenant root."""
         where = _temporal_active_at_filter(ResourceTable, ecosystem, tenant_id, at)
-        where.append(col(ResourceTable.resource_type) == "environment")
-        env_rows = self._session.exec(select(ResourceTable).where(*where)).all()
+        where.append(
+            or_(
+                col(ResourceTable.resource_type) == "environment",
+                and_(
+                    col(ResourceTable.resource_type).in_({"kafka_cluster", "dedicated_cluster", "cluster"}),
+                    col(ResourceTable.parent_id).is_(None),
+                ),
+            )
+        )
+        root_rows = self._session.exec(select(ResourceTable).where(*where)).all()
 
-        env_ids = [r.resource_id for r in env_rows]
-        # Environments are billed via env_id on chargeback_dimensions, not resource_id
+        root_ids = [r.resource_id for r in root_rows]
+        env_ids = [r.resource_id for r in root_rows if r.resource_type == "environment"]
+        cluster_ids = [r.resource_id for r in root_rows if r.resource_type != "environment"]
+        # Environment costs group by env_id; parentless cluster costs group by resource_id.
         cost_map = self._aggregate_costs(
             ecosystem, tenant_id, env_ids, period_start, period_end, group_by_column="env_id"
         )
-        tags_map = self._tags.find_tags_for_entities(tenant_id, "resource", env_ids)
+        cost_map.update(
+            self._aggregate_costs(
+                ecosystem, tenant_id, cluster_ids, period_start, period_end, group_by_column="resource_id"
+            )
+        )
+        tags_map = self._tags.find_tags_for_entities(tenant_id, "resource", root_ids)
 
         nodes = [
             GraphNodeData(
@@ -2566,7 +2605,7 @@ class SQLModelGraphRepository:
                 region=r.region,
                 status=r.status,
             )
-            for r in env_rows
+            for r in root_rows
         ]
         # Synthetic tenant node (no DB row — tenant is config-only)
         tenant_node = GraphNodeData(
@@ -2582,9 +2621,9 @@ class SQLModelGraphRepository:
             region=None,
             status="active",
         )
-        # All parent edges: parent (tenant) → child (env)
+        # All parent edges point from the tenant to its top-level resources.
         edges = [
-            GraphEdgeData(source=tenant_id, target=r.resource_id, relationship_type=EdgeType.parent) for r in env_rows
+            GraphEdgeData(source=tenant_id, target=r.resource_id, relationship_type=EdgeType.parent) for r in root_rows
         ]
         return GraphNeighborhood(nodes=[tenant_node, *nodes], edges=edges)
 

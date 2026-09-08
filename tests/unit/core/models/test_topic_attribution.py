@@ -7,6 +7,7 @@ from core.models.topic_attribution import (
     TopicAttributionAggregationBucket,
     TopicAttributionAggregationResult,
     TopicAttributionRow,
+    topic_resource_id,
 )
 
 
@@ -50,6 +51,12 @@ class TestTopicAttributionRow:
     def test_topic_attribution_row_with_dimension_id(self) -> None:
         row = self._make_row(dimension_id=42)
         assert row.dimension_id == 42
+
+    def test_resource_id_uses_the_canonical_cluster_scoped_topic_builder(self) -> None:
+        row = self._make_row(cluster_resource_id="cluster-a", topic_name="orders")
+
+        assert topic_resource_id("cluster-a", "orders") == "cluster-a:topic:orders"
+        assert row.resource_id == "cluster-a:topic:orders"
 
 
 class TestTopicAttributionAggregationBucket:

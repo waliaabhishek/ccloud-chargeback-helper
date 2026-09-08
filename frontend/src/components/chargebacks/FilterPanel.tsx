@@ -18,6 +18,7 @@ interface FilterPanelProps {
   onReset: () => void;
   onRefresh?: () => void;
   tenantName: string;
+  showDateRange?: boolean;
 }
 
 export function FilterPanel({
@@ -27,6 +28,7 @@ export function FilterPanel({
   onReset,
   onRefresh,
   tenantName,
+  showDateRange = true,
 }: FilterPanelProps): React.JSX.Element {
   const startValue = filters.start_date ? dayjs(filters.start_date) : null;
   const endValue = filters.end_date ? dayjs(filters.end_date) : null;
@@ -36,22 +38,28 @@ export function FilterPanel({
 
   return (
     <Form layout="inline" style={{ padding: "8px 0", flexWrap: "wrap" }}>
-      <Form.Item label="Date Range">
-        <DatePicker.RangePicker
-          value={startValue && endValue ? [startValue, endValue] : [null, null]}
-          onChange={(dates) => {
-            const start = dates?.[0] ? dates[0].format("YYYY-MM-DD") : null;
-            const end = dates?.[1] ? dates[1].format("YYYY-MM-DD") : null;
-            if (onBatchChange) {
-              onBatchChange({ start_date: start, end_date: end });
-            } else {
-              onChange("start_date", start);
-              onChange("end_date", end);
+      {showDateRange && (
+        <Form.Item label="Date Range">
+          <DatePicker.RangePicker
+            value={
+              startValue && endValue ? [startValue, endValue] : [null, null]
             }
-          }}
-          allowClear
-        />
-      </Form.Item>
+            onChange={(dates) => {
+              const start = dates?.[0]
+                ? dates[0].format("YYYY-MM-DD")
+                : null;
+              const end = dates?.[1] ? dates[1].format("YYYY-MM-DD") : null;
+              if (onBatchChange) {
+                onBatchChange({ start_date: start, end_date: end });
+              } else {
+                onChange("start_date", start);
+                onChange("end_date", end);
+              }
+            }}
+            allowClear
+          />
+        </Form.Item>
+      )}
 
       <Form.Item label="Identity">
         <Select

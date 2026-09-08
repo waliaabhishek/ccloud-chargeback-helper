@@ -20,6 +20,8 @@ from core.storage.backends.sqlmodel.repositories import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection, Transaction
+
     from core.emitters.repository import EmissionRepository
     from core.plugin.protocols import StorageModule
     from core.preview.persistence import (
@@ -84,6 +86,12 @@ class SQLModelUnitOfWork:
     def __enter__(self) -> Self:
         self._session = Session(self._engine)
         self._committed = False
+        self._attach_repositories()
+        return self
+
+    def _attach_repositories(self) -> None:
+        if self._session is None:
+            raise RuntimeError("Cannot attach repositories outside of a transaction")
         self._topic_attributions = None
         self.resources = self._storage_module.create_resource_repository(self._session)
         self.identities = self._storage_module.create_identity_repository(self._session)
@@ -102,7 +110,6 @@ class SQLModelUnitOfWork:
             self.source_attempt_fallback = (
                 self._preview_source_fallback_module.create_preview_source_attempt_fallback_repository(self._session)
             )
-        return self
 
     def __exit__(
         self,
@@ -165,6 +172,63 @@ class ReadOnlySQLModelUnitOfWork(SQLModelUnitOfWork):
 
     def commit(self) -> None:
         raise RuntimeError("Cannot commit on a read-only UnitOfWork — use get_write_unit_of_work dependency")
+
+
+class ConsistentReadSQLModelUnitOfWork(ReadOnlySQLModelUnitOfWork):
+    """Read-only UoW that keeps all repository reads in one database snapshot."""
+
+    def __init__(self, connection_string: str, storage_module: StorageModule) -> None:
+        super().__init__(connection_string, storage_module)
+        self._connection: Connection | None = None
+        self._transaction: Transaction | None = None
+
+    def __enter__(self) -> Self:
+        try:
+            self._connection = self._engine.connect()
+            if self._connection.dialect.name == "postgresql":
+                self._connection = self._connection.execution_options(isolation_level="REPEATABLE READ")
+                self._transaction = self._connection.begin()
+                self._connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+            else:
+                self._transaction = self._connection.begin()
+                self._connection.exec_driver_sql("BEGIN")
+            self._session = Session(bind=self._connection)
+            self._committed = False
+            self._attach_repositories()
+            return self
+        except BaseException:
+            self._close_consistent_read()
+            raise
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        self._close_consistent_read()
+
+    def _close_consistent_read(self) -> None:
+        session = self._session
+        transaction = self._transaction
+        connection = self._connection
+        self._session = None
+        self._transaction = None
+        self._connection = None
+        try:
+            if session is not None:
+                session.rollback()
+        finally:
+            try:
+                if session is not None:
+                    session.close()
+            finally:
+                try:
+                    if transaction is not None and transaction.is_active:
+                        transaction.rollback()
+                finally:
+                    if connection is not None:
+                        connection.close()
 
 
 class PreviewWriteSQLModelUnitOfWork:
@@ -275,6 +339,12 @@ class SQLModelBackend:
 
     def create_read_only_unit_of_work(self) -> ReadOnlySQLModelUnitOfWork:
         return ReadOnlySQLModelUnitOfWork(
+            self._connection_string,
+            self._storage_module,
+        )
+
+    def create_consistent_read_unit_of_work(self) -> ConsistentReadSQLModelUnitOfWork:
+        return ConsistentReadSQLModelUnitOfWork(
             self._connection_string,
             self._storage_module,
         )

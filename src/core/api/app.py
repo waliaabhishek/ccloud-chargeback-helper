@@ -322,6 +322,7 @@ def create_app(
         aggregation,
         billing,
         chargebacks,
+        cost_comparison,
         export,
         focus_preview,
         graph,
@@ -330,6 +331,7 @@ def create_app(
         inventory,
         pipeline,
         readiness,
+        resource_links,
         resources,
         tags,
         tenants,
@@ -343,9 +345,11 @@ def create_app(
     # aggregation must be registered before chargebacks so static /chargebacks/aggregate
     # takes precedence over the dynamic /chargebacks/{dimension_id} GET route
     app.include_router(aggregation.router, prefix="/api/v1")
+    app.include_router(cost_comparison.router, prefix="/api/v1")
     app.include_router(chargebacks.router, prefix="/api/v1")
     app.include_router(resources.router, prefix="/api/v1")
     app.include_router(identities.router, prefix="/api/v1")
+    app.include_router(resource_links.router, prefix="/api/v1")
     app.include_router(inventory.router, prefix="/api/v1")
     app.include_router(tags.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")

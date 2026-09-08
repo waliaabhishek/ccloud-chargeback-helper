@@ -11,6 +11,11 @@ from core.models.emit_descriptors import MetricDescriptor
 logger = logging.getLogger(__name__)
 
 
+def topic_resource_id(cluster_resource_id: str, topic_name: str) -> str:
+    """Build the stable resource identity for a topic within a cluster."""
+    return f"{cluster_resource_id}:topic:{topic_name}"
+
+
 @dataclass
 class TopicAttributionRow:
     """A single row of topic-level cost attribution.
@@ -30,6 +35,11 @@ class TopicAttributionRow:
     amount: Decimal = Decimal(0)  # attributed cost
     metadata: dict[str, Any] = field(default_factory=dict)
     dimension_id: int | None = None
+
+    @property
+    def resource_id(self) -> str:
+        """Return the canonical cluster-scoped resource identity."""
+        return topic_resource_id(self.cluster_resource_id, self.topic_name)
 
     __csv_fields__: ClassVar[tuple[str, ...]] = (
         "ecosystem",

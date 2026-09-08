@@ -1,1368 +1,1143 @@
 import type React from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode, useEffect, useLayoutEffect } from "react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../test/mocks/server";
+import { tenantFixtures } from "../test/mocks/handlers";
+import { ConfluentLinkRenderer } from "../components/common/ConfluentLinkRenderer";
 import { ResourceLinkProvider, useResourceLinks } from "./ResourceLinkContext";
 import { TenantProvider, useTenant } from "./TenantContext";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const RESOLVE_PATH = "/api/v1/tenants/:tenant/resource-links/resolve";
 
-function makeWrapper() {
-  return function Wrapper({
-    children,
-  }: {
-    children: ReactNode;
-  }): React.JSX.Element {
-    return (
-      <TenantProvider>
-        <ResourceLinkProvider>{children}</ResourceLinkProvider>
-      </TenantProvider>
-    );
-  };
+type BatchResponse = {
+  resources: Record<
+    string,
+    {
+      resource_type: string;
+      parent_id: string | null;
+      kafka_cluster_id: string | null;
+    }
+  >;
+  identities: Record<string, { identity_type: string }>;
+};
+
+type BatchRequest = { tenant: string; identifiers: string[] };
+
+function response(
+  resources: BatchResponse["resources"] = {},
+  identities: BatchResponse["identities"] = {},
+): BatchResponse {
+  return { resources, identities };
 }
 
-const RESOURCE_API = "/api/v1/tenants/acme/resources";
-const IDENTITY_API = "/api/v1/tenants/acme/identities";
-
-/** Minimal resource shape returned by the API for index building. */
-function makeResourcesResponse(
-  items: Array<{
-    resource_id: string;
-    resource_type: string;
-    parent_id: string | null;
-    metadata?: Record<string, unknown>;
-  }>,
-) {
-  return {
-    items: items.map((r) => ({
-      ecosystem: "ccloud",
-      tenant_id: "t-001",
-      resource_id: r.resource_id,
-      resource_type: r.resource_type,
-      display_name: null,
-      parent_id: r.parent_id,
-      owner_id: null,
-      status: "active",
-      created_at: null,
-      deleted_at: null,
-      last_seen_at: null,
-      metadata: r.metadata ?? {},
-    })),
-    total: items.length,
-    page: 1,
-    page_size: 100,
-    pages: 1,
-  };
+function Wrapper({ children }: { children: ReactNode }): React.JSX.Element {
+  return (
+    <TenantProvider>
+      <ResourceLinkProvider>{children}</ResourceLinkProvider>
+    </TenantProvider>
+  );
 }
 
-/** Minimal identity shape returned by the identities API. */
-function makeIdentitiesResponse(
-  items: Array<{
-    identity_id: string;
-    identity_type: string;
-  }>,
-) {
-  return {
-    items: items.map((r) => ({
-      identity_id: r.identity_id,
-      identity_type: r.identity_type,
-      display_name: null,
-      deleted_at: null,
-    })),
-    total: items.length,
-    page: 1,
-    page_size: 100,
-    pages: 1,
-  };
+type Controller = {
+  links: ReturnType<typeof useResourceLinks>;
+  tenant: ReturnType<typeof useTenant>;
+};
+
+function ControllerProbe({
+  onReady,
+  value,
+}: {
+  onReady: (controller: Controller) => void;
+  value?: string;
+}): React.JSX.Element {
+  const links = useResourceLinks();
+  const tenant = useTenant();
+
+  useEffect(() => onReady({ links, tenant }), [links, onReady, tenant]);
+  return value === undefined ? (
+    <span>probe</span>
+  ) : (
+    <ConfluentLinkRenderer value={value} />
+  );
+}
+
+function LayoutRegistrationProbe({ value }: { value: string }): React.JSX.Element {
+  const { registerIdentifier } = useResourceLinks();
+
+  useLayoutEffect(() => registerIdentifier(value), [registerIdentifier, value]);
+  return <span>layout-probe</span>;
+}
+
+function installBatchHandler(
+  handler: (request: BatchRequest) => Response | Promise<Response>,
+): BatchRequest[] {
+  const calls: BatchRequest[] = [];
+  server.use(
+    http.post(RESOLVE_PATH, async ({ params, request }) => {
+      const body = (await request.json()) as { identifiers: string[] };
+      const batchRequest = {
+        tenant: String(params.tenant),
+        identifiers: body.identifiers,
+      };
+      calls.push(batchRequest);
+      return handler(batchRequest);
+    }),
+    http.get("/api/v1/tenants/:tenant/resources", () => {
+      throw new Error("link resolution must not load paginated resources");
+    }),
+    http.get("/api/v1/tenants/:tenant/identities", () => {
+      throw new Error("link resolution must not load paginated identities");
+    }),
+  );
+  return calls;
+}
+
+async function waitForCalls(calls: BatchRequest[], count: number): Promise<void> {
+  await waitFor(() => expect(calls).toHaveLength(count));
 }
 
 afterEach(() => {
   localStorage.clear();
 });
 
-// ---------------------------------------------------------------------------
-// Feature flag defaults
-// ---------------------------------------------------------------------------
+beforeEach(() => {
+  server.use(http.get("/api/v1/tenants", () => HttpResponse.json({
+    tenants: tenantFixtures.tenants.map((tenant) => ({ ...tenant, ecosystem: "confluent_cloud" })),
+  })));
+});
 
-describe("ResourceLinkContext — feature flag", () => {
-  it("feature flag defaults to off", async () => {
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-    expect(result.current.enabled).toBe(false);
-  });
-
-  it("feature flag can be toggled on via setEnabled", async () => {
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-
-    act(() => {
-      result.current.setEnabled(true);
-    });
-
-    expect(result.current.enabled).toBe(true);
-  });
-
-  it("feature flag state persists across page refreshes via localStorage", async () => {
+describe("ResourceLinkProvider tenant eligibility", () => {
+  it.each(["self_managed_kafka", "generic_metrics_only"])("blocks saved and requested links for %s", async (ecosystem) => {
     localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    act(() => result.current.tenant.setCurrentTenant({
+      ...result.current.tenant.currentTenant!, ecosystem,
+    }));
 
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    act(() => {
+      result.current.links.setEnabled(true);
+      result.current.links.registerIdentifier("env-blocked");
     });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-    expect(result.current.enabled).toBe(true);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(result.current.links.enabled).toBe(false);
+    expect(calls).toEqual([]);
   });
 
-  it("feature flag toggle updates localStorage", async () => {
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-
-    act(() => {
-      result.current.setEnabled(true);
-    });
-
+  it("disables links during an SMK switch and restores the Confluent preference on return", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    let finishRequest!: (value: Response) => void;
+    const calls = installBatchHandler(() => new Promise<Response>((resolve) => { finishRequest = resolve; }));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    const confluent = result.current.tenant.currentTenant!;
+    act(() => result.current.links.registerIdentifier("env-pending"));
+    await waitForCalls(calls, 1);
+    act(() => result.current.tenant.setCurrentTenant({ ...confluent, ecosystem: "self_managed_kafka" }));
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    expect(result.current.links.isLoading).toBe(false);
+    act(() => result.current.links.setEnabled(false));
     expect(localStorage.getItem("chargeback_deep_links_enabled")).toBe("true");
+    await act(async () => finishRequest(HttpResponse.json(response({
+      "env-pending": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+    }))));
+    expect(result.current.links.resolveUrl("env-pending")).toBeNull();
 
-    act(() => {
-      result.current.setEnabled(false);
-    });
-
-    expect(localStorage.getItem("chargeback_deep_links_enabled")).toBe("false");
+    act(() => result.current.tenant.setCurrentTenant(confluent));
+    expect(result.current.links.available).toBe(true);
+    expect(result.current.links.enabled).toBe(true);
+    expect(result.current.links.resolveUrl("env-pending")).toBeNull();
+    act(() => result.current.links.setEnabled(false));
+    expect(result.current.links.enabled).toBe(false);
   });
 
-  it("resolveUrl returns null when feature flag is off", async () => {
-    // Exercises the if (!enabled) return null branch inside resolveUrl
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(false));
-    expect(result.current.resolveUrl("sa-anything")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Resource fetch behaviour
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — resource fetching", () => {
-  it("does not fetch resources when feature flag is off", async () => {
-    let fetchCount = 0;
-    server.use(
-      http.get(RESOURCE_API, () => {
-        fetchCount++;
-        return HttpResponse.json(makeResourcesResponse([]));
-      }),
+  it("does not allow toggling without a selected tenant", async () => {
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
     );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-    // Wait a tick to ensure any async fetch would have fired
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    expect(fetchCount).toBe(0);
-  });
-
-  it("fetches resources when feature flag is turned on", async () => {
-    let fetchCount = 0;
-    server.use(
-      http.get(RESOURCE_API, () => {
-        fetchCount++;
-        return HttpResponse.json(makeResourcesResponse([]));
-      }),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current).toBeDefined());
-
-    act(() => {
-      result.current.setEnabled(true);
-    });
-
-    await waitFor(() => expect(fetchCount).toBeGreaterThan(0));
-  });
-
-  it("non-ok API response does not crash — index remains empty", async () => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    let fetchAttempted = false;
-    server.use(
-      http.get(RESOURCE_API, () => {
-        fetchAttempted = true;
-        return new HttpResponse(null, { status: 500 });
-      }),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // Wait for fetch to fire and complete (isLoading starts false, goes true, then false again)
-    await waitFor(() => expect(fetchAttempted).toBe(true));
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.resolveUrl("lkc-any")).toBeNull();
-  });
-
-  it("deleted resources are excluded from the index", async () => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json({
-          items: [
-            {
-              ecosystem: "ccloud",
-              tenant_id: "t-001",
-              resource_id: "mock-deleted-001",
-              resource_type: "service_account",
-              display_name: null,
-              parent_id: null,
-              owner_id: null,
-              status: "deleted",
-              created_at: null,
-              deleted_at: "2024-01-01T00:00:00Z",
-              last_seen_at: null,
-              metadata: {},
-            },
-            {
-              ecosystem: "ccloud",
-              tenant_id: "t-001",
-              resource_id: "mock-active-001",
-              resource_type: "service_account",
-              display_name: null,
-              parent_id: null,
-              owner_id: null,
-              status: "active",
-              created_at: null,
-              deleted_at: null,
-              last_seen_at: null,
-              metadata: {},
-            },
-          ],
-          total: 2,
-          page: 1,
-          page_size: 100,
-          pages: 1,
-        }),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // mock-active-001 is in index → resolves; mock-deleted-001 is excluded
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-active-001")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("mock-deleted-001")).toBeNull();
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    act(() => result.current.tenant.setCurrentTenant(null));
+    act(() => result.current.links.setEnabled(true));
+    expect(result.current.links.available).toBe(false);
+    expect(result.current.links.enabled).toBe(false);
+    expect(localStorage.getItem("chargeback_deep_links_enabled")).toBeNull();
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolveUrl — index lookups
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — resolveUrl index lookups", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-  });
-
-  it("env-xxx resolves to environments URL", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "env-abc123",
-              resource_type: "environment",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.resolveUrl("env-abc123")).toBe(
-        "https://confluent.cloud/environments/env-abc123",
-      );
-    });
-  });
-
-  it("environment resource with non-env- prefix resolves via index to environment URL", async () => {
-    // mock-environment-001 has no env- prefix — prefix fallback won't fire.
-    // resolveFromEntry's case "environment" is exercised via the index.
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-environment-001",
-              resource_type: "environment",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-environment-001")).toBe(
-        "https://confluent.cloud/environments/mock-environment-001",
-      );
-    });
-  });
-
-  it("lkc-xxx resolves to cluster URL when parent env is in index", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "env-abc123",
-              resource_type: "environment",
-              parent_id: null,
-            },
-            {
-              resource_id: "lkc-def456",
-              resource_type: "kafka_cluster",
-              parent_id: "env-abc123",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      const url = result.current.resolveUrl("lkc-def456");
-      expect(url).toBeTruthy();
-    });
-
-    const url = result.current.resolveUrl("lkc-def456");
-    expect(url).toBe(
-      "https://confluent.cloud/environments/env-abc123/clusters/lkc-def456",
-    );
-  });
-
-  it("lkc-xxx not in index returns null (parent unknown, no fallback)", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    const url = result.current.resolveUrl("lkc-not-in-index");
-    expect(url).toBeNull();
-  });
-
-  it("schema_registry resolves to schema registry URL when parent env is in index", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "env-abc123",
-              resource_type: "environment",
-              parent_id: null,
-            },
-            {
-              resource_id: "lsrc-def456",
-              resource_type: "schema_registry",
-              parent_id: "env-abc123",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      const url = result.current.resolveUrl("lsrc-def456");
-      expect(url).toBeTruthy();
-    });
-
-    const url = result.current.resolveUrl("lsrc-def456");
-    expect(url).toBe(
-      "https://confluent.cloud/environments/env-abc123/stream-governance/schema-registry/overview",
-    );
-  });
-
-  it("connector in index returns null (broken link disabled)", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "env-abc123",
-              resource_type: "environment",
-              parent_id: null,
-            },
-            {
-              resource_id: "lkc-def456",
-              resource_type: "kafka_cluster",
-              parent_id: "env-abc123",
-            },
-            {
-              resource_id: "lcc-conn01",
-              resource_type: "connector",
-              parent_id: "lkc-def456",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // Wait for resource index to load. Must use lkc- (no prefix fallback) not env- (has prefix fallback line 245).
-    await waitFor(() => {
-      expect(result.current.resolveUrl("lkc-def456")).toBeTruthy();
-    });
-
-    expect(result.current.resolveUrl("lcc-conn01")).toBeNull();
-  });
-
-  it("service_account in index resolves via service_account type to per-principal URL", async () => {
-    // Use an ID with no prefix fallback so waitFor can only pass after index loads,
-    // ensuring resolveFromEntry's service_account case is exercised.
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-sa-001",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-sa-001")).toBe(
-        "https://confluent.cloud/settings/principals/mock-sa-001?view=identity",
-      );
-    });
-  });
-
-  it("unknown resource_type in index returns null (default branch)", async () => {
-    // Include a lkc- resource so we can gate on index load (lkc- has no prefix fallback).
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "env-abc123",
-              resource_type: "environment",
-              parent_id: null,
-            },
-            {
-              resource_id: "lkc-def456",
-              resource_type: "kafka_cluster",
-              parent_id: "env-abc123",
-            },
-            {
-              resource_id: "unknown-001",
-              resource_type: "unknown_type",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // lkc-def456 only resolves after the index loads — guarantees resolveFromEntry is reached
-    await waitFor(() => {
-      expect(result.current.resolveUrl("lkc-def456")).toBeTruthy();
-    });
-
-    const url = result.current.resolveUrl("unknown-001");
-    expect(url).toBeNull();
-  });
-
-  it("kafka_cluster with null parent_id in index returns null", async () => {
-    // mock-gate-001 is service_account — no prefix fallback, resolves only after index loads.
-    // When it resolves, lkc-orphan is also indexed.
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-001",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lkc-orphan",
-              resource_type: "kafka_cluster",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-001")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lkc-orphan")).toBeNull();
-  });
-
-  it("schema_registry with null parent_id in index returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-002",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lsrc-orphan",
-              resource_type: "schema_registry",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-002")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lsrc-orphan")).toBeNull();
-  });
-
-  it("connector with null parent_id in index returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-003",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lcc-orphan",
-              resource_type: "connector",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-003")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lcc-orphan")).toBeNull();
-  });
-
-  it("connector with valid parent_id but cluster not in index returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-005",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lcc-missing-cluster",
-              resource_type: "connector",
-              parent_id: "lkc-not-in-index",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-005")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lcc-missing-cluster")).toBeNull();
-  });
-
-  it("connector with valid parent_id but cluster has null parent_id returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-004",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lkc-no-env",
-              resource_type: "kafka_cluster",
-              parent_id: null,
-            },
-            {
-              resource_id: "lcc-broken",
-              resource_type: "connector",
-              parent_id: "lkc-no-env",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-004")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lcc-broken")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveUrl — prefix fallback (sa-)
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — prefix fallback for sa-", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-  });
-
-  it("sa-xxx not in index resolves via prefix fallback to org service-accounts URL", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    const url = result.current.resolveUrl("sa-abc123");
-    expect(url).toBe(
-      "https://confluent.cloud/settings/principals/sa-abc123?view=identity",
-    );
-  });
-
-  it("sa- identity_id in chargebacks context resolves via prefix fallback", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    // Simulates chargebacks grid identity_id column with sa- prefix
-    const url = result.current.resolveUrl("sa-service-account-001");
-    expect(url).toBe(
-      "https://confluent.cloud/settings/principals/sa-service-account-001?view=identity",
-    );
-  });
-
-  it("sa- identity_id in allocation issues context resolves via prefix fallback", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    const url = result.current.resolveUrl("sa-xyz999");
-    expect(url).toBe(
-      "https://confluent.cloud/settings/principals/sa-xyz999?view=identity",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveUrl — no broken links for unknown IDs
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — no broken links", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-  });
-
-  it("resource ID with no index entry and no prefix fallback returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    // Unknown prefix (xyz- has no fallback), not in index
-    const url = result.current.resolveUrl("xyz-unknownprefix");
-    expect(url).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveUrl — flink_compute_pool
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — resolveUrl flink_compute_pool", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-  });
-
-  it("flink_compute_pool in index resolves to flink URL", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-flink",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lfcp-def456",
-              resource_type: "flink_compute_pool",
-              parent_id: "env-abc123",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-flink")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lfcp-def456")).toBe(
-      "https://confluent.cloud/environments/env-abc123/flink/pools/lfcp-def456/overview",
-    );
-  });
-
-  it("flink_compute_pool with null parent_id returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-flink2",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lfcp-orphan",
-              resource_type: "flink_compute_pool",
-              parent_id: null,
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-flink2")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lfcp-orphan")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveUrl — ksqldb_cluster
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — resolveUrl ksqldb_cluster", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-  });
-
-  it("ksqldb_cluster in index resolves to ksqlDB editor URL", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-ksql",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lksqlc-ghi789",
-              resource_type: "ksqldb_cluster",
-              parent_id: "env-abc123",
-              metadata: { kafka_cluster_id: "lkc-def456" },
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-ksql")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lksqlc-ghi789")).toBe(
-      "https://confluent.cloud/environments/env-abc123/clusters/lkc-def456/ksql/lksqlc-ghi789/editor",
-    );
-  });
-
-  it("ksqldb_cluster with null parent_id returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-ksql2",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lksqlc-orphan",
-              resource_type: "ksqldb_cluster",
-              parent_id: null,
-              metadata: { kafka_cluster_id: "lkc-def456" },
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-ksql2")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lksqlc-orphan")).toBeNull();
-  });
-
-  it("ksqldb_cluster with missing kafka_cluster_id in metadata returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-ksql3",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lksqlc-no-kafka",
-              resource_type: "ksqldb_cluster",
-              parent_id: "env-abc123",
-              metadata: {},
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-ksql3")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lksqlc-no-kafka")).toBeNull();
-  });
-
-  it("ksqldb_cluster with non-string kafka_cluster_id in metadata returns null", async () => {
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(
-          makeResourcesResponse([
-            {
-              resource_id: "mock-gate-ksql4",
-              resource_type: "service_account",
-              parent_id: null,
-            },
-            {
-              resource_id: "lksqlc-bad-kafka",
-              resource_type: "ksqldb_cluster",
-              parent_id: "env-abc123",
-              metadata: { kafka_cluster_id: 42 },
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-gate-ksql4")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("lksqlc-bad-kafka")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// resolveUrl — identity index
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — identity index", () => {
-  beforeEach(() => {
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
-    server.use(
-      http.get(RESOURCE_API, () =>
-        HttpResponse.json(makeResourcesResponse([])),
-      ),
-    );
-  });
-
-  it("service_account in identity index resolves to per-principal URL", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(
-          makeIdentitiesResponse([
-            {
-              identity_id: "mock-sa-via-identity",
-              identity_type: "service_account",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    expect(result.current.resolveUrl("mock-sa-via-identity")).toBe(
-      "https://confluent.cloud/settings/principals/mock-sa-via-identity?view=identity",
-    );
-  });
-
-  it("user in identity index resolves to principals URL", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(
-          makeIdentitiesResponse([
-            { identity_id: "mock-user-via-identity", identity_type: "user" },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-user-via-identity")).toBe(
-        "https://confluent.cloud/settings/principals/mock-user-via-identity?view=identity",
-      );
-    });
-  });
-
-  it("identity_provider in identity index resolves to workload_identities URL", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(
-          makeIdentitiesResponse([
-            {
-              identity_id: "mock-op-via-identity",
-              identity_type: "identity_provider",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-op-via-identity")).toBe(
-        "https://confluent.cloud/settings/org/workload_identities/provider/oidc/view/mock-op-via-identity",
-      );
-    });
-  });
-
-  it("identity_pool in identity index returns null (broken link disabled)", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(
-          makeIdentitiesResponse([
-            {
-              identity_id: "mock-pool-via-identity",
-              identity_type: "identity_pool",
-            },
-            { identity_id: "mock-gate-pool", identity_type: "api_key" },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // Wait for identity index to load. Must use api_key (no prefix fallback) not sa- (has prefix fallback line 244).
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-gate-pool")).toBeTruthy();
-    });
-
-    expect(result.current.resolveUrl("mock-pool-via-identity")).toBeNull();
-  });
-
-  it("api_key in identity index resolves via identity fallback", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(
-          makeIdentitiesResponse([
-            { identity_id: "TRFPF55LGU5RBQIT", identity_type: "api_key" },
-            // non-prefixed gate to confirm identity index loaded
-            {
-              identity_id: "mock-gate-apikey",
-              identity_type: "service_account",
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // Gate on the non-prefixed identity entry — only resolves after identity index loads
-    await waitFor(() => {
-      expect(result.current.resolveUrl("mock-gate-apikey")).toBeTruthy();
-    });
-
-    expect(result.current.resolveUrl("TRFPF55LGU5RBQIT")).toBe(
-      "https://confluent.cloud/settings/api-keys/edit/TRFPF55LGU5RBQIT",
-    );
-  });
-
-  it("deleted identities are excluded from the identity index", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json({
-          items: [
-            {
-              identity_id: "mock-deleted-identity",
-              identity_type: "service_account",
-              display_name: null,
-              deleted_at: "2024-01-01T00:00:00Z",
-            },
-            {
-              identity_id: "mock-active-identity",
-              identity_type: "user",
-              display_name: null,
-              deleted_at: null,
-            },
-          ],
-          total: 2,
-          page: 1,
-          page_size: 100,
-          pages: 1,
-        }),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    // Gate: mock-active-identity has no prefix, resolves only after identity index loads
-    await waitFor(() =>
-      expect(result.current.resolveUrl("mock-active-identity")).toBeTruthy(),
-    );
-
-    expect(result.current.resolveUrl("mock-deleted-identity")).toBeNull();
-  });
-
-  it("u-* prefix fallback resolves without identity index", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    expect(result.current.resolveUrl("u-xyz999")).toBe(
-      "https://confluent.cloud/settings/principals/u-xyz999?view=identity",
-    );
-  });
-
-  it("op-* prefix fallback resolves to workload_identities URL", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    expect(result.current.resolveUrl("op-xyz999")).toBe(
-      "https://confluent.cloud/settings/org/workload_identities/provider/oidc/view/op-xyz999",
-    );
-  });
-
-  it("pool-* prefix fallback returns null (broken link disabled)", async () => {
-    server.use(
-      http.get(IDENTITY_API, () =>
-        HttpResponse.json(makeIdentitiesResponse([])),
-      ),
-    );
-
-    const { result } = renderHook(() => useResourceLinks(), {
-      wrapper: makeWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.enabled).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-
-    expect(result.current.resolveUrl("pool-xyz999")).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tenant switch
-// ---------------------------------------------------------------------------
-
-describe("ResourceLinkContext — tenant switch", () => {
-  it("tenant switch clears and rebuilds the resource index", async () => {
-    // Track fetch calls to ANY tenant's resources and identities endpoints.
-    let resourceFetchCount = 0;
-    let identityFetchCount = 0;
-    server.use(
-      http.get("/api/v1/tenants/:tenant/resources", () => {
-        resourceFetchCount++;
-        return HttpResponse.json(makeResourcesResponse([]));
-      }),
-      http.get("/api/v1/tenants/:tenant/identities", () => {
-        identityFetchCount++;
-        return HttpResponse.json(makeIdentitiesResponse([]));
-      }),
-    );
-
-    localStorage.setItem("chargeback_deep_links_enabled", "true");
+describe("ResourceLinkProvider batch registration", () => {
+  it("defaults off and makes no link-context request until registration is enabled", async () => {
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
 
     const { result } = renderHook(
-      () => ({
-        links: useResourceLinks(),
-        tenant: useTenant(),
-      }),
-      { wrapper: makeWrapper() },
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
     );
-
-    await waitFor(() => expect(result.current.links.enabled).toBe(true));
-
-    const resourceFetchCountAfterInit = resourceFetchCount;
-    const identityFetchCountAfterInit = identityFetchCount;
-
-    // Simulate tenant switch by changing the active tenant
     act(() => {
-      result.current.tenant.setCurrentTenant({
-        tenant_name: "globex",
-        tenant_id: "t-002",
-        ecosystem: "self_managed",
-        dates_pending: 0,
-        dates_calculated: 5,
-        last_calculated_date: "2024-01-08",
-        topic_attribution_status: "disabled" as const,
-        topic_attribution_error: null,
-      });
+      result.current.links.registerIdentifier("env-hidden");
     });
 
-    await waitFor(() =>
-      expect(resourceFetchCount).toBeGreaterThan(resourceFetchCountAfterInit),
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(result.current.links.enabled).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not request identifiers registered with no selected tenant", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
     );
-    await waitFor(() =>
-      expect(identityFetchCount).toBeGreaterThan(identityFetchCountAfterInit),
+
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    act(() => result.current.tenant.setCurrentTenant(null));
+    await waitFor(() => expect(result.current.tenant.currentTenant).toBeNull());
+    act(() => result.current.links.registerIdentifier("env-without-tenant"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not retain a no-tenant registration when a tenant is selected later", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
     );
+
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    const tenant = result.current.tenant.currentTenant!;
+    act(() => result.current.tenant.setCurrentTenant(null));
+    await waitFor(() => expect(result.current.tenant.currentTenant).toBeNull());
+    act(() => result.current.links.registerIdentifier("env-not-retained"));
+    act(() => result.current.tenant.setCurrentTenant(tenant));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("acme"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not schedule empty or whitespace-only identifiers and preserves nonblank bytes", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    act(() => {
+      result.current.links.registerIdentifier("");
+      result.current.links.registerIdentifier("   ");
+      result.current.links.registerIdentifier("  u-kept  ");
+    });
+
+    await waitForCalls(calls, 1);
+    expect(calls[0]).toEqual({ tenant: "acme", identifiers: ["  u-kept  "] });
+  });
+
+  it("coalesces duplicate mounted identifiers and removes an unused identifier before dispatch", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    vi.useFakeTimers();
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    let cleanupFirst: () => void = () => undefined;
+    let cleanupSecond: () => void = () => undefined;
+    let cleanupLastFirst: () => void = () => undefined;
+    let cleanupLastSecond: () => void = () => undefined;
+    let removeUnused: () => void = () => undefined;
+    act(() => {
+      cleanupFirst = result.current.links.registerIdentifier("env-duplicate");
+      cleanupSecond = result.current.links.registerIdentifier("env-duplicate");
+      cleanupLastFirst = result.current.links.registerIdentifier("env-last-cleanup");
+      cleanupLastSecond = result.current.links.registerIdentifier("env-last-cleanup");
+      removeUnused = result.current.links.registerIdentifier("env-unmounted");
+      cleanupFirst();
+      cleanupLastFirst();
+      cleanupLastSecond();
+      removeUnused();
+      vi.advanceTimersByTime(0);
+    });
+
+    await waitForCalls(calls, 1);
+    expect(calls[0].identifiers).toEqual(["env-duplicate"]);
+    act(() => cleanupSecond());
+  });
+
+  it.each([
+    [1, 1],
+    [100, 1],
+    [101, 2],
+    [251, 3],
+  ])(
+    "sends %i visible identifiers in %i bounded sequential batches independent of catalog size",
+    async (visibleCount, expectedCalls) => {
+      localStorage.setItem("chargeback_deep_links_enabled", "true");
+      const catalog = new Set(
+        Array.from({ length: 10_000 }, (_, index) => `environment-${index}`),
+      );
+      const calls = installBatchHandler(({ identifiers }) => {
+        const resources = Object.fromEntries(
+          identifiers.filter((identifier) => catalog.has(identifier)).map((identifier) => [
+            identifier,
+            {
+              resource_type: "environment",
+              parent_id: null,
+              kafka_cluster_id: null,
+            },
+          ]),
+        );
+        return HttpResponse.json(response(resources));
+      });
+      const { result } = renderHook(
+        () => ({ links: useResourceLinks(), tenant: useTenant() }),
+        { wrapper: Wrapper },
+      );
+      await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+      act(() => {
+        for (let index = 0; index < visibleCount; index += 1) {
+          result.current.links.registerIdentifier(`environment-${index}`);
+        }
+      });
+
+      await waitForCalls(calls, expectedCalls);
+      expect(calls.flatMap((call) => call.identifiers)).toHaveLength(visibleCount);
+      expect(calls.every((call) => call.identifiers.length <= 100)).toBe(true);
+      const requestedIdentifiers = Array.from(
+        { length: visibleCount },
+        (_, index) => `environment-${index}`,
+      );
+      expect(calls.flatMap((call) => call.identifiers)).toEqual(requestedIdentifiers);
+      await waitFor(() => {
+        expect(
+          requestedIdentifiers.every(
+            (identifier) =>
+              result.current.links.resolveUrl(identifier) ===
+              `https://confluent.cloud/environments/${identifier}`,
+          ),
+        ).toBe(true);
+      });
+      expect(
+        requestedIdentifiers.filter(
+          (identifier) => result.current.links.resolveUrl(identifier) !== null,
+        ),
+      ).toHaveLength(visibleCount);
+    },
+  );
+
+  it("caches successful URLs and definitive misses across unmount and remount", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(({ identifiers }) =>
+      HttpResponse.json(
+        response({
+          [identifiers[0]]: {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      ),
+    );
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    let cleanupKnown: () => void = () => undefined;
+    let cleanupMissing: () => void = () => undefined;
+    act(() => {
+      cleanupKnown = result.current.links.registerIdentifier("env-cached");
+      cleanupMissing = result.current.links.registerIdentifier("missing-cached");
+    });
+    await waitForCalls(calls, 1);
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("env-cached")).toBe(
+        "https://confluent.cloud/environments/env-cached",
+      );
+      expect(result.current.links.resolveUrl("missing-cached")).toBeNull();
+    });
+
+    act(() => {
+      cleanupKnown();
+      cleanupMissing();
+      result.current.links.registerIdentifier("env-cached");
+      result.current.links.registerIdentifier("missing-cached");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(calls).toHaveLength(1);
+
+    const tenantA = result.current.tenant.currentTenant!;
+    const tenantB = result.current.tenant.tenants.find(
+      (tenant) => tenant.tenant_name === "globex",
+    )!;
+    act(() => result.current.tenant.setCurrentTenant(tenantB));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("globex"));
+    act(() => result.current.tenant.setCurrentTenant(tenantA));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("acme"));
+    act(() => {
+      result.current.links.registerIdentifier("env-cached");
+      result.current.links.registerIdentifier("missing-cached");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps resource precedence when an unsupported resource collides with a supported identity", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(({ identifiers }) =>
+      HttpResponse.json(
+        response(
+          {
+            [identifiers[0]]: {
+              resource_type: "connector",
+              parent_id: "lkc-parent",
+              kafka_cluster_id: null,
+            },
+          },
+          { [identifiers[0]]: { identity_type: "user" } },
+        ),
+      ),
+    );
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    act(() => {
+      result.current.links.registerIdentifier("collision");
+    });
+    await waitForCalls(calls, 1);
+    await waitFor(() => expect(result.current.links.resolveUrl("collision")).toBeNull());
+  });
+
+  it("resolves prototype-sensitive identifiers with resource precedence and safe misses", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const resourceEntry = (resourceType: string) => ({
+      resource_type: resourceType,
+      parent_id: null,
+      kafka_cluster_id: null,
+    });
+    const resources = Object.fromEntries(
+      ["constructor", "toString", "__proto__"].map((identifier) => [
+        identifier,
+        resourceEntry("environment"),
+      ]),
+    );
+    const identities = Object.fromEntries(
+      ["constructor", "toString", "__proto__", "identity-only"].map((identifier) => [
+        identifier,
+        { identity_type: "user" },
+      ]),
+    );
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(response(resources, identities)),
+    );
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    const identifiers = ["constructor", "toString", "__proto__", "identity-only", "unknown"];
+    act(() => {
+      for (const identifier of identifiers) result.current.links.registerIdentifier(identifier);
+    });
+    await waitForCalls(calls, 1);
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("constructor")).toBe(
+        "https://confluent.cloud/environments/constructor",
+      );
+      expect(result.current.links.resolveUrl("toString")).toBe(
+        "https://confluent.cloud/environments/toString",
+      );
+      expect(result.current.links.resolveUrl("__proto__")).toBe(
+        "https://confluent.cloud/environments/__proto__",
+      );
+      expect(result.current.links.resolveUrl("identity-only")).toBe(
+        "https://confluent.cloud/settings/principals/identity-only?view=identity",
+      );
+      expect(result.current.links.resolveUrl("unknown")).toBeNull();
+    });
+  });
+
+  it("resolves every supported resource and identity URL from minimal batch entries", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const resources = {
+      "env-1": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+      "lkc-1": { resource_type: "kafka_cluster", parent_id: "env-1", kafka_cluster_id: null },
+      "lsrc-1": { resource_type: "schema_registry", parent_id: "env-1", kafka_cluster_id: null },
+      "resource-sa": { resource_type: "service_account", parent_id: null, kafka_cluster_id: null },
+      "lfcp-1": { resource_type: "flink_compute_pool", parent_id: "env-1", kafka_cluster_id: null },
+      "lksqlc-1": { resource_type: "ksqldb_cluster", parent_id: "env-1", kafka_cluster_id: "lkc-1" },
+    };
+    const identities = {
+      "identity-sa": { identity_type: "service_account" },
+      "user-1": { identity_type: "user" },
+      "op-1": { identity_type: "identity_provider" },
+      "api-key-1": { identity_type: "api_key" },
+    };
+    const calls = installBatchHandler(() => HttpResponse.json(response(resources, identities)));
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    act(() => {
+      for (const identifier of [...Object.keys(resources), ...Object.keys(identities)]) {
+        result.current.links.registerIdentifier(identifier);
+      }
+    });
+    await waitForCalls(calls, 1);
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("lksqlc-1")).toBe(
+        "https://confluent.cloud/environments/env-1/clusters/lkc-1/ksql/lksqlc-1/editor",
+      );
+    });
+
+    expect(result.current.links.resolveUrl("env-1")).toBe("https://confluent.cloud/environments/env-1");
+    expect(result.current.links.resolveUrl("lkc-1")).toBe("https://confluent.cloud/environments/env-1/clusters/lkc-1");
+    expect(result.current.links.resolveUrl("lsrc-1")).toBe(
+      "https://confluent.cloud/environments/env-1/stream-governance/schema-registry/overview",
+    );
+    expect(result.current.links.resolveUrl("resource-sa")).toBe(
+      "https://confluent.cloud/settings/principals/resource-sa?view=identity",
+    );
+    expect(result.current.links.resolveUrl("lfcp-1")).toBe(
+      "https://confluent.cloud/environments/env-1/flink/pools/lfcp-1/overview",
+    );
+    expect(result.current.links.resolveUrl("identity-sa")).toBe(
+      "https://confluent.cloud/settings/principals/identity-sa?view=identity",
+    );
+    expect(result.current.links.resolveUrl("user-1")).toBe(
+      "https://confluent.cloud/settings/principals/user-1?view=identity",
+    );
+    expect(result.current.links.resolveUrl("op-1")).toBe(
+      "https://confluent.cloud/settings/org/workload_identities/provider/oidc/view/op-1",
+    );
+    expect(result.current.links.resolveUrl("api-key-1")).toBe(
+      "https://confluent.cloud/settings/api-keys/edit/api-key-1",
+    );
+  });
+
+  it("keeps deleted, unknown, unsupported, connector, identity-pool, and incomplete parent entries plain text", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(
+        response(
+          {
+            unsupported: { resource_type: "unknown", parent_id: null, kafka_cluster_id: null },
+            connector: { resource_type: "connector", parent_id: "lkc-1", kafka_cluster_id: null },
+            orphanCluster: { resource_type: "kafka_cluster", parent_id: null, kafka_cluster_id: null },
+            orphanKsql: { resource_type: "ksqldb_cluster", parent_id: "env-1", kafka_cluster_id: null },
+          },
+          { pool: { identity_type: "identity_pool" } },
+        ),
+      ),
+    );
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    const identifiers = [
+      "deleted-omitted",
+      "unknown-omitted",
+      "unsupported",
+      "connector",
+      "pool",
+      "orphanCluster",
+      "orphanKsql",
+      "sa-not-authoritative",
+      "env-not-authoritative",
+      "u-not-authoritative",
+      "op-not-authoritative",
+    ];
+
+    act(() => {
+      for (const identifier of identifiers) result.current.links.registerIdentifier(identifier);
+    });
+    await waitForCalls(calls, 1);
+    await waitFor(() => expect(result.current.links.resolveUrl("connector")).toBeNull());
+
+    for (const identifier of identifiers) {
+      expect(result.current.links.resolveUrl(identifier)).toBeNull();
+    }
   });
 });
 
-// ---------------------------------------------------------------------------
-// useResourceLinks outside provider
-// ---------------------------------------------------------------------------
+describe("ResourceLinkProvider generations and failures", () => {
+  it("immediately clears loading when disabling or clearing the tenant while a request is in flight", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const deferred: Array<(response: Response) => void> = [];
+    const calls = installBatchHandler(
+      () =>
+        new Promise<Response>((resolve) => deferred.push(resolve)),
+    );
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
 
-describe("ResourceLinkContext — guard", () => {
-  it("useResourceLinks called outside ResourceLinkProvider throws with descriptive error", () => {
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
-    try {
-      expect(() => renderHook(() => useResourceLinks())).toThrow(
-        /ResourceLinkProvider/,
+    act(() => result.current.links.registerIdentifier("env-loading"));
+    await waitForCalls(calls, 1);
+    await waitFor(() => expect(result.current.links.isLoading).toBe(true));
+    act(() => result.current.links.setEnabled(false));
+    expect(result.current.links.isLoading).toBe(false);
+    act(() => result.current.links.setEnabled(true));
+    act(() => result.current.links.registerIdentifier("env-loading-again"));
+    await waitForCalls(calls, 2);
+    await waitFor(() => expect(result.current.links.isLoading).toBe(true));
+    const tenantA = result.current.tenant.currentTenant!;
+    act(() => result.current.tenant.setCurrentTenant(null));
+    expect(result.current.links.isLoading).toBe(false);
+
+    await act(async () => {
+      deferred[0](HttpResponse.json(response()));
+      deferred[1](
+        HttpResponse.json(
+          response({
+            "env-loading-again": {
+              resource_type: "environment",
+              parent_id: null,
+              kafka_cluster_id: null,
+            },
+          }),
+        ),
       );
+      await Promise.resolve();
+    });
+    expect(result.current.links.isLoading).toBe(false);
+    expect(result.current.links.resolveUrl("env-loading-again")).toBeNull();
+
+    act(() => result.current.tenant.setCurrentTenant(tenantA));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("acme"));
+    act(() => result.current.links.registerIdentifier("env-loading-again"));
+    await waitForCalls(calls, 3);
+    await act(async () => {
+      deferred[2](
+        HttpResponse.json(
+          response({
+            "env-loading-again": {
+              resource_type: "environment",
+              parent_id: null,
+              kafka_cluster_id: null,
+            },
+          }),
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("env-loading-again")).toBe(
+        "https://confluent.cloud/environments/env-loading-again",
+      );
+    });
+  });
+
+  it("continues with newly queued identifiers after a failed batch and suppresses failed identifiers in the same generation", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    let failFirst: ((response: Response) => void) | undefined;
+    const calls = installBatchHandler(({ identifiers }) => {
+      if (identifiers.includes("env-failed")) {
+        return new Promise<Response>((resolve) => {
+          failFirst = resolve;
+        });
+      }
+      return HttpResponse.json(
+        response({
+          "env-later": {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      );
+    });
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    act(() => result.current.links.registerIdentifier("env-failed"));
+    await waitForCalls(calls, 1);
+    act(() => result.current.links.registerIdentifier("env-later"));
+    await act(async () => {
+      failFirst?.(new HttpResponse(null, { status: 500 }));
+    });
+    await waitForCalls(calls, 2);
+    expect(calls[1].identifiers).toEqual(["env-later"]);
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("env-later")).toBe(
+        "https://confluent.cloud/environments/env-later",
+      );
+    });
+
+    act(() => result.current.links.registerIdentifier("env-failed"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("retries a failed identifier only after a flag generation transition", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    let attempts = 0;
+    const calls = installBatchHandler(() => {
+      attempts += 1;
+      return attempts === 1
+        ? new HttpResponse(null, { status: 500 })
+        : HttpResponse.json(
+            response({
+              "env-retry": {
+                resource_type: "environment",
+                parent_id: null,
+                kafka_cluster_id: null,
+              },
+            }),
+          );
+    });
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+    act(() => result.current.links.registerIdentifier("env-retry"));
+    await waitForCalls(calls, 1);
+    await waitFor(() => expect(result.current.links.isLoading).toBe(false));
+    act(() => result.current.links.setEnabled(false));
+    await waitFor(() => expect(result.current.links.enabled).toBe(false));
+    act(() => result.current.links.setEnabled(true));
+    await waitFor(() => expect(result.current.links.enabled).toBe(true));
+    act(() => result.current.links.registerIdentifier("env-retry"));
+    await waitForCalls(calls, 2);
+    await waitFor(() => {
+      expect(result.current.links.resolveUrl("env-retry")).toBe(
+        "https://confluent.cloud/environments/env-retry",
+      );
+    });
+  });
+
+  it.each(["network", "invalid-json", "malformed"] as const)(
+    "suppresses a %s response failure, continues the queue, and retries after a generation transition",
+    async (failure) => {
+      localStorage.setItem("chargeback_deep_links_enabled", "true");
+      let attempts = 0;
+      const calls = installBatchHandler(({ identifiers }) => {
+        attempts += 1;
+        if (attempts === 1) {
+          if (failure === "network") return HttpResponse.error();
+          if (failure === "invalid-json") {
+            return HttpResponse.text("{", {
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return HttpResponse.json({ resources: [], identities: [] });
+        }
+        return HttpResponse.json(
+          response(
+            Object.fromEntries(
+              identifiers.map((identifier) => [
+                identifier,
+                { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+              ]),
+            ),
+          ),
+        );
+      });
+      const { result } = renderHook(
+        () => ({ links: useResourceLinks(), tenant: useTenant() }),
+        { wrapper: Wrapper },
+      );
+      await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+
+      act(() => result.current.links.registerIdentifier("env-failed"));
+      await waitForCalls(calls, 1);
+      act(() => result.current.links.registerIdentifier("env-later"));
+      await waitForCalls(calls, 2);
+      expect(calls[1].identifiers).toEqual(["env-later"]);
+      await waitFor(() => {
+        expect(result.current.links.resolveUrl("env-later")).toBe(
+          "https://confluent.cloud/environments/env-later",
+        );
+      });
+      expect(result.current.links.resolveUrl("env-failed")).toBeNull();
+
+      act(() => result.current.links.registerIdentifier("env-failed"));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(calls).toHaveLength(2);
+
+      act(() => result.current.links.setEnabled(false));
+      await waitFor(() => expect(result.current.links.enabled).toBe(false));
+      act(() => result.current.links.setEnabled(true));
+      await waitFor(() => expect(result.current.links.enabled).toBe(true));
+      act(() => result.current.links.registerIdentifier("env-failed"));
+      await waitForCalls(calls, 3);
+      await waitFor(() => {
+        expect(result.current.links.resolveUrl("env-failed")).toBe(
+          "https://confluent.cloud/environments/env-failed",
+        );
+      });
+    },
+  );
+
+  it("does not let a stale A response populate B or a later A generation", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const deferred: Array<(response: Response) => void> = [];
+    const calls = installBatchHandler(
+      () =>
+        new Promise<Response>((resolve) => {
+          deferred.push(resolve);
+        }),
+    );
+    let controller: Controller | undefined;
+    const onReady = (next: Controller): void => {
+      controller = next;
+    };
+
+    render(
+      <Wrapper>
+        <ControllerProbe onReady={onReady} value="env-a" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(controller?.tenant.currentTenant?.tenant_name).toBe("acme"));
+    await waitForCalls(calls, 1);
+    const tenantA = controller!.tenant.currentTenant!;
+    const tenantB = controller!.tenant.tenants.find((tenant) => tenant.tenant_name === "globex")!;
+
+    act(() => controller!.tenant.setCurrentTenant(tenantB));
+    await waitForCalls(calls, 2);
+    await act(async () => {
+      deferred[0](
+        HttpResponse.json(
+          response({
+            "env-a": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+          }),
+        ),
+      );
+    });
+    expect(screen.queryByRole("link")).toBeNull();
+
+    act(() => controller!.tenant.setCurrentTenant(tenantA));
+    await waitForCalls(calls, 3);
+    await act(async () => {
+      deferred[2](
+        HttpResponse.json(
+          response({
+            "env-a": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+          }),
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("link")).toHaveAttribute(
+        "href",
+        "https://confluent.cloud/environments/env-a",
+      );
+    });
+  });
+
+  it("keeps a new A registration when an old A cleanup runs after A to B to A", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    let releaseFirst: ((response: Response) => void) | undefined;
+    let firstRequest = true;
+    const calls = installBatchHandler(() => {
+      if (firstRequest) {
+        firstRequest = false;
+        return new Promise<Response>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return HttpResponse.json(response());
+    });
+    const { result } = renderHook(
+      () => ({ links: useResourceLinks(), tenant: useTenant() }),
+      { wrapper: Wrapper },
+    );
+    await waitFor(() => expect(result.current.tenant.currentTenant).not.toBeNull());
+    const tenantA = result.current.tenant.currentTenant!;
+    const tenantB = result.current.tenant.tenants.find((tenant) => tenant.tenant_name === "globex")!;
+    let staleCleanup: () => void = () => undefined;
+
+    act(() => {
+      staleCleanup = result.current.links.registerIdentifier("env-generation");
+    });
+    await waitForCalls(calls, 1);
+    act(() => result.current.tenant.setCurrentTenant(tenantB));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("globex"));
+    act(() => result.current.tenant.setCurrentTenant(tenantA));
+    await waitFor(() => expect(result.current.tenant.currentTenant?.tenant_name).toBe("acme"));
+    act(() => {
+      result.current.links.registerIdentifier("env-generation");
+      staleCleanup();
+    });
+    releaseFirst?.(HttpResponse.json(response()));
+    await waitForCalls(calls, 2);
+    expect(calls[1]).toEqual({ tenant: "acme", identifiers: ["env-generation"] });
+  });
+
+  it("recreates a same-scope runtime after StrictMode effect replay and resolves the mounted renderer", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(
+        response({
+          "env-strict": {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      ),
+    );
+
+    render(
+      <StrictMode>
+        <Wrapper>
+          <ConfluentLinkRenderer value="env-strict" />
+        </Wrapper>
+      </StrictMode>,
+    );
+    await waitForCalls(calls, 1);
+    expect(calls[0].identifiers).toEqual(["env-strict"]);
+    await waitFor(() => {
+      expect(screen.getByRole("link")).toHaveAttribute(
+        "href",
+        "https://confluent.cloud/environments/env-strict",
+      );
+    });
+  });
+});
+
+describe("ResourceLinkProvider and ConfluentLinkRenderer integration", () => {
+  it("re-registers a mounted renderer when a selected tenant follows a null tenant", async () => {
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(
+        response({
+          "env-null-selected": {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      ),
+    );
+    let controller: Controller | undefined;
+
+    render(
+      <Wrapper>
+        <ControllerProbe onReady={(next) => { controller = next; }} value="env-null-selected" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(controller?.tenant.currentTenant).not.toBeNull());
+    const tenant = controller!.tenant.currentTenant!;
+    act(() => {
+      controller!.links.setEnabled(true);
+      controller!.tenant.setCurrentTenant(null);
+    });
+    await waitFor(() => expect(controller?.tenant.currentTenant).toBeNull());
+    expect(controller?.links.enabled).toBe(false);
+    act(() => controller!.tenant.setCurrentTenant(tenant));
+    await waitForCalls(calls, 1);
+    expect(calls[0]).toEqual({ tenant: "acme", identifiers: ["env-null-selected"] });
+  });
+
+  it("establishes the runtime before a child layout registration and keeps it idempotent", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(
+        response({
+          "env-layout": {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      ),
+    );
+
+    render(
+      <Wrapper>
+        <LayoutRegistrationProbe value="env-layout" />
+      </Wrapper>,
+    );
+    await waitForCalls(calls, 1);
+    expect(calls[0]).toEqual({ tenant: "acme", identifiers: ["env-layout"] });
+  });
+
+  it("keeps a direct topic URL client-only without a batch request", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const calls = installBatchHandler(() => HttpResponse.json(response()));
+    let listRequests = 0;
+    server.use(
+      http.get("/api/v1/tenants/:tenant/resources", () => {
+        listRequests += 1;
+        return HttpResponse.json({ items: [], page: 1, pages: 1 });
+      }),
+      http.get("/api/v1/tenants/:tenant/identities", () => {
+        listRequests += 1;
+        return HttpResponse.json({ items: [], page: 1, pages: 1 });
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ConfluentLinkRenderer
+          value="topic-direct"
+          url="https://confluent.cloud/environments/env-direct/clusters/lkc-direct/topics/topic-direct"
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByRole("link", { name: "topic-direct" })).toHaveAttribute(
+      "href",
+      "https://confluent.cloud/environments/env-direct/clusters/lkc-direct/topics/topic-direct",
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(calls).toHaveLength(0);
+    expect(listRequests).toBe(0);
+  });
+
+  it("posts a mounted identifier only after enabling links and rerenders it as a link", async () => {
+    const calls = installBatchHandler(() =>
+      HttpResponse.json(
+        response({
+          "env-toggle": {
+            resource_type: "environment",
+            parent_id: null,
+            kafka_cluster_id: null,
+          },
+        }),
+      ),
+    );
+    let controller: Controller | undefined;
+
+    render(
+      <Wrapper>
+        <ControllerProbe onReady={(next) => { controller = next; }} value="env-toggle" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(controller?.links.available).toBe(true));
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    act(() => controller!.links.setEnabled(true));
+    await waitForCalls(calls, 1);
+    expect(calls[0].identifiers).toEqual(["env-toggle"]);
+    await waitFor(() => {
+      expect(screen.getByRole("link")).toHaveAttribute(
+        "href",
+        "https://confluent.cloud/environments/env-toggle",
+      );
+    });
+  });
+
+  it("posts B's first mounted value once, rejects A's stale response, and reuses only settled tenant caches", async () => {
+    localStorage.setItem("chargeback_deep_links_enabled", "true");
+    const deferred: Array<(response: Response) => void> = [];
+    const calls = installBatchHandler(
+      () => new Promise<Response>((resolve) => deferred.push(resolve)),
+    );
+    let controller: Controller | undefined;
+    const { rerender } = render(
+      <Wrapper>
+        <ControllerProbe onReady={(next) => { controller = next; }} value="env-a" />
+      </Wrapper>,
+    );
+    await waitForCalls(calls, 1);
+    const tenantA = controller!.tenant.currentTenant!;
+    const tenantB = controller!.tenant.tenants.find((tenant) => tenant.tenant_name === "globex")!;
+
+    act(() => controller!.tenant.setCurrentTenant(tenantB));
+    rerender(
+      <Wrapper>
+        <ControllerProbe onReady={(next) => { controller = next; }} value="env-b" />
+      </Wrapper>,
+    );
+    await waitForCalls(calls, 2);
+    expect(calls[1]).toEqual({ tenant: "globex", identifiers: ["env-b"] });
+    await act(async () => {
+      deferred[0](
+        HttpResponse.json(
+          response({
+            "env-a": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+          }),
+        ),
+      );
+    });
+    expect(screen.queryByRole("link")).toBeNull();
+
+    await act(async () => {
+      deferred[1](
+        HttpResponse.json(
+          response({
+            "env-b": { resource_type: "environment", parent_id: null, kafka_cluster_id: null },
+          }),
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("link")).toHaveAttribute(
+        "href",
+        "https://confluent.cloud/environments/env-b",
+      );
+    });
+
+    act(() => controller!.tenant.setCurrentTenant(tenantA));
+    rerender(
+      <Wrapper>
+        <ControllerProbe onReady={(next) => { controller = next; }} value="env-a" />
+      </Wrapper>,
+    );
+    await waitForCalls(calls, 3);
+    expect(calls[2]).toEqual({ tenant: "acme", identifiers: ["env-a"] });
+  });
+});
+
+describe("ResourceLinkProvider guard", () => {
+  it("throws outside its provider", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() => renderHook(() => useResourceLinks())).toThrow(/ResourceLinkProvider/);
     } finally {
       consoleError.mockRestore();
     }

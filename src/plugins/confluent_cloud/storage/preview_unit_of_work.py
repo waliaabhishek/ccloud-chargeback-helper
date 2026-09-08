@@ -4,7 +4,8 @@ import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Self
 
-from sqlmodel import Session
+from sqlalchemy import exists
+from sqlmodel import Session, col, select
 
 from core.preview.storage_availability import (
     PreviewEvidenceAvailability,
@@ -20,6 +21,16 @@ from plugins.confluent_cloud.storage.preview_repositories import (
     SQLModelPreviewRetentionOutcomeRepository,
     SQLModelPreviewSourceReadinessRepository,
     SQLModelPreviewSourceWindowRepository,
+)
+from plugins.confluent_cloud.storage.preview_tables import (
+    CCloudAllocationLineagePortionTable,
+    CCloudAllocationLineageRunTable,
+    CCloudCostSourceRecordTable,
+    CCloudOrganizationAuthorityAttemptTable,
+    CCloudPreviewSourceAllocationLineagePortionTable,
+    CCloudSourceCaptureReadinessHistoryTable,
+    CCloudSourceCaptureReadinessTable,
+    CCloudSourceEvidenceAttemptTable,
 )
 from plugins.confluent_cloud.storage.repositories import CCloudBillingRepository, CCloudChargebackRepository
 
@@ -155,3 +166,33 @@ class CCloudPreviewGenerationReadSQLModelUnitOfWork:
         if self._session is not None:
             self._session.close()
             self._session = None
+
+    def has_any_preview_evidence(self, ecosystem: str, tenant_id: str) -> bool:
+        """Return whether this tenant owns a row in any generated preview table."""
+        if self._session is None:
+            raise RuntimeError("Preview evidence queries require an entered UoW context")
+        if not ecosystem.strip():
+            raise ValueError("ecosystem must not be blank")
+        if not tenant_id.strip():
+            raise ValueError("tenant_id must not be blank")
+
+        tables = (
+            CCloudSourceEvidenceAttemptTable,
+            CCloudSourceCaptureReadinessTable,
+            CCloudSourceCaptureReadinessHistoryTable,
+            CCloudCostSourceRecordTable,
+            CCloudOrganizationAuthorityAttemptTable,
+            CCloudAllocationLineageRunTable,
+            CCloudAllocationLineagePortionTable,
+            CCloudPreviewSourceAllocationLineagePortionTable,
+        )
+        for table in tables:
+            statement = select(
+                exists().where(
+                    col(table.ecosystem) == ecosystem,
+                    col(table.tenant_id) == tenant_id,
+                )
+            )
+            if self._session.exec(statement).one():
+                return True
+        return False

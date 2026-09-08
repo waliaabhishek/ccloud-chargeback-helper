@@ -1,7 +1,11 @@
 import type React from "react";
-import { useMemo, useState } from "react";
-import { Col, Radio, Row, Typography } from "antd";
-import type { TenantStatusSummary } from "../../types/api";
+import { useCallback, useMemo, useState } from "react";
+import { Col, Radio, Row, Segmented, Typography } from "antd";
+import type {
+  ChargebackComparisonGroup,
+  ComparisonRow,
+  TenantStatusSummary,
+} from "../../types/api";
 import { useTenant } from "../../providers/TenantContext";
 import { useChargebackFilters } from "../../hooks/useChargebackFilters";
 import type { UseAggregationParams } from "../../hooks/useAggregation";
@@ -22,6 +26,10 @@ import { ProductChartTypeToggle } from "../../components/charts/ProductChartType
 import { DimensionPieChart } from "../../components/charts/DimensionPieChart";
 import type { ChargebackFilters } from "../../types/filters";
 import { TagPivotPanel } from "../../components/pivotPanel/TagPivotPanel";
+import { CostComparisonView } from "../../components/costComparison/CostComparisonView";
+import { useCostComparison } from "../../hooks/useCostComparison";
+import { useComparisonController } from "../../hooks/useComparisonController";
+import { useNavigate } from "react-router";
 
 const { Title, Text } = Typography;
 
@@ -250,6 +258,79 @@ export function CostDashboardPage(): React.JSX.Element {
     useChargebackFilters();
   const [timeBucket, setTimeBucket] = useState<TimeBucket>("day");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [view, setView] = useState<"overview" | "compare">("overview");
+  const navigate = useNavigate();
+
+  const tenantName = currentTenant?.tenant_name ?? null;
+  const comparisonController = useComparisonController<ChargebackComparisonGroup>({
+    tenant: currentTenant,
+    defaultGroup: "principal",
+    pageTimezone: filters.timezone,
+  });
+  const comparison = comparisonController.comparison;
+
+  const comparisonParams = useMemo(
+    () =>
+      comparison && comparisonController.ready
+        ? {
+            baseline_start: comparison.periods.baseline.start_date || null,
+            baseline_end: comparison.periods.baseline.end_date || null,
+            comparison_start: comparison.periods.comparison.start_date || null,
+            comparison_end: comparison.periods.comparison.end_date || null,
+            timezone: comparison.periods.timezone,
+            group_by: comparison.groupBy,
+            movement: comparison.movement,
+            sort_by: comparison.sortBy,
+            sort_direction: comparison.sortDirection,
+            limit: comparison.limit,
+            identity_id: filters.identity_id,
+            product_type: filters.product_type,
+            resource_id: filters.resource_id,
+            cost_type: filters.cost_type,
+            tag_key: filters.tag_key,
+            tag_value: filters.tag_value,
+          }
+        : {
+            baseline_start: null,
+            baseline_end: null,
+            comparison_start: null,
+            comparison_end: null,
+            timezone: null,
+            group_by: "principal" as const,
+            movement: "all" as const,
+            sort_by: "absolute_change" as const,
+            sort_direction: "desc" as const,
+            limit: 100,
+          },
+    [comparison, comparisonController.ready, filters],
+  );
+
+  const comparisonQuery = useCostComparison({
+    tenantName,
+    source: "chargeback",
+    params: comparisonParams,
+    enabled:
+      view === "compare" &&
+      comparisonController.ready &&
+      comparisonController.periodsValid,
+  });
+
+  const investigate = useCallback(
+    (row: ComparisonRow) => {
+      if (!comparisonQuery.data || row.kind !== "entity") return;
+      const query = new URLSearchParams({
+        focus: row.key,
+        diff: "true",
+        from_start: comparisonQuery.data.baseline.start_date,
+        from_end: comparisonQuery.data.baseline.end_date,
+        to_start: comparisonQuery.data.comparison.start_date,
+        to_end: comparisonQuery.data.comparison.end_date,
+        timezone: comparisonQuery.data.timezone,
+      });
+      navigate(`/explorer?${query.toString()}`);
+    },
+    [comparisonQuery.data, navigate],
+  );
 
   return (
     <div>
@@ -259,6 +340,14 @@ export function CostDashboardPage(): React.JSX.Element {
         <Text type="secondary">Select a tenant to view cost analytics.</Text>
       ) : (
         <>
+          <Segmented
+            options={[
+              { label: "Overview", value: "overview" },
+              { label: "Compare", value: "compare" },
+            ]}
+            value={view}
+            onChange={(value) => setView(value as "overview" | "compare")}
+          />
           <FilterPanel
             filters={filters}
             onChange={setFilter}
@@ -266,25 +355,57 @@ export function CostDashboardPage(): React.JSX.Element {
             onReset={resetFilters}
             onRefresh={() => setRefreshKey((k) => k + 1)}
             tenantName={currentTenant.tenant_name}
+            showDateRange={view === "overview"}
           />
-
-          <div style={{ margin: "12px 0" }}>
-            <Radio.Group
-              value={timeBucket}
-              onChange={(e) => setTimeBucket(e.target.value as TimeBucket)}
-            >
-              <Radio.Button value="day">Daily</Radio.Button>
-              <Radio.Button value="week">Weekly</Radio.Button>
-              <Radio.Button value="month">Monthly</Radio.Button>
-            </Radio.Group>
-          </div>
-
-          <DashboardContent
-            key={refreshKey}
-            tenant={currentTenant}
-            filters={filters}
-            timeBucket={timeBucket}
-          />
+          {view === "overview" ? (
+            <>
+              <div style={{ margin: "12px 0" }}>
+                <Radio.Group
+                  value={timeBucket}
+                  onChange={(e) => setTimeBucket(e.target.value as TimeBucket)}
+                >
+                  <Radio.Button value="day">Daily</Radio.Button>
+                  <Radio.Button value="week">Weekly</Radio.Button>
+                  <Radio.Button value="month">Monthly</Radio.Button>
+                </Radio.Group>
+              </div>
+              <DashboardContent
+                key={refreshKey}
+                tenant={currentTenant}
+                filters={filters}
+                timeBucket={timeBucket}
+              />
+            </>
+          ) : (
+            <CostComparisonView
+              source="chargeback"
+              sourceLabel="Chargeback — allocated tenant costs"
+              response={comparisonQuery.data}
+              isLoading={comparisonQuery.isLoading}
+              error={comparisonQuery.error}
+              granularity={comparison?.granularity ?? "daily"}
+              preset={comparison?.preset ?? "previous_day"}
+              periods={
+                comparison?.periods ?? {
+                  baseline: { start_date: "", end_date: "" },
+                  comparison: { start_date: "", end_date: "" },
+                  timezone: "UTC",
+                }
+              }
+              groupBy={comparison?.groupBy ?? "principal"}
+              movement={comparison?.movement ?? "all"}
+              sortBy={comparison?.sortBy ?? "absolute_change"}
+              sortDirection={comparison?.sortDirection ?? "desc"}
+              limit={comparison?.limit ?? 100}
+              onPresetChange={comparisonController.onPresetChange}
+              onPeriodsChange={comparisonController.onPeriodsChange}
+              onGroupByChange={comparisonController.onGroupByChange}
+              onMovementChange={comparisonController.onMovementChange}
+              onSortChange={comparisonController.onSortChange}
+              onLimitChange={comparisonController.onLimitChange}
+              onInvestigate={investigate}
+            />
+          )}
         </>
       )}
     </div>

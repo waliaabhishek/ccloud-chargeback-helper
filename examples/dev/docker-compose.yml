@@ -35,12 +35,13 @@ services:
   grafana:
     container_name: chitragupta-grafana
     image: grafana/grafana:12.4.0
+    env_file:
+      - ../shared/grafana/plugins.env
     ports:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-password}
-      GF_INSTALL_PLUGINS: frser-sqlite-datasource,marcusolsson-treemap-panel
     volumes:
       - ../shared/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./data:/var/lib/grafana/data/chargeback:ro

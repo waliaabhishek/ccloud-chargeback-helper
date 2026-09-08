@@ -2,9 +2,94 @@ import type React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import type { CostComparisonResponse } from "../../types/api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useNavigate } from "react-router";
+import type { NavigateFunction } from "react-router";
+import { useCostComparison } from "../../hooks/useCostComparison";
 import { CostDashboardPage } from "./index";
+
+vi.mock("react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router")>();
+  return { ...actual, useNavigate: vi.fn() };
+});
+
+const DASHBOARD_COMPARISON_RESPONSE: CostComparisonResponse = {
+  source: "chargeback",
+  granularity: "daily",
+  group_by: "principal",
+  timezone: "America/Chicago",
+  coverage_evaluated_at: "2026-04-01T00:00:00Z",
+  unequal_durations: false,
+  baseline: {
+    start_date: "2026-03-01",
+    end_date: "2026-03-01",
+    start_at: "2026-03-01T06:00:00Z",
+    end_at: "2026-03-02T06:00:00Z",
+    duration_seconds: 86400,
+    coverage: {
+      status: "complete",
+      expected_dates: ["2026-03-01"],
+      unknown_dates: [],
+      incomplete_dates: [],
+      retention_qualified_dates: [],
+      availability_cutoff_at: null,
+    },
+  },
+  comparison: {
+    start_date: "2026-03-02",
+    end_date: "2026-03-02",
+    start_at: "2026-03-02T06:00:00Z",
+    end_at: "2026-03-03T06:00:00Z",
+    duration_seconds: 86400,
+    coverage: {
+      status: "complete",
+      expected_dates: ["2026-03-02"],
+      unknown_dates: [],
+      incomplete_dates: [],
+      retention_qualified_dates: [],
+      availability_cutoff_at: null,
+    },
+  },
+  summary: {
+    baseline_amount: "1",
+    comparison_amount: "2",
+    increases: "1",
+    decreases: "0",
+    net_change: "1",
+    percentage_change: "100",
+  },
+  reconciliation: {
+    full_group_count: 1,
+    selected_group_count: 1,
+    returned_group_count: 1,
+    movement_excluded_group_count: 0,
+    row_limit_omitted_group_count: 0,
+    returned_baseline_amount: "1",
+    returned_comparison_amount: "2",
+    returned_net_change: "1",
+    movement_excluded_baseline_amount: "0",
+    movement_excluded_comparison_amount: "0",
+    movement_excluded_net_change: "0",
+    row_limit_omitted_baseline_amount: "0",
+    row_limit_omitted_comparison_amount: "0",
+    row_limit_omitted_net_change: "0",
+  },
+  rows: [
+    {
+      key: "principal:sa-123",
+      kind: "entity",
+      dimensions: { identity_id: "sa-123" },
+      baseline_amount: "1",
+      comparison_amount: "2",
+      change: "1",
+      percentage_change: "100",
+      baseline_row_count: 1,
+      comparison_row_count: 1,
+      observed_presence: "both",
+    },
+  ],
+};
 
 // Mock echarts-for-react globally for all chart components
 vi.mock("echarts-for-react", () => ({
@@ -48,11 +133,19 @@ vi.mock("../../components/chargebacks/FilterPanel", () => ({
     ({
       onReset,
       onRefresh,
+      filters,
+      showDateRange = true,
     }: {
       onReset: () => void;
       onRefresh?: () => void;
+      filters: { timezone?: string | null };
+      showDateRange?: boolean;
     }) => (
-      <div data-testid="filter-panel">
+      <div
+        data-testid="filter-panel"
+        data-timezone={filters.timezone ?? ""}
+        data-show-date-range={String(showDateRange)}
+      >
         <button onClick={onReset}>Reset</button>
         {onRefresh !== undefined && (
           <button data-testid="filter-refresh" onClick={onRefresh}>
@@ -94,6 +187,14 @@ vi.mock("../../hooks/useAggregation", () => ({
     isLoading: false,
     error: null,
     refetch: vi.fn(),
+  })),
+}));
+
+vi.mock("../../hooks/useCostComparison", () => ({
+  useCostComparison: vi.fn(() => ({
+    data: null,
+    isLoading: false,
+    error: null,
   })),
 }));
 
@@ -151,6 +252,10 @@ vi.mock("antd", () => ({
     md?: number;
   }) => <div>{children}</div>,
   Card: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Alert: ({ message }: { message: ReactNode }) => <div>{message}</div>,
+  Empty: ({ description }: { description?: ReactNode }) => (
+    <div>{description}</div>
+  ),
   Skeleton: () => <div data-testid="skeleton" />,
   Statistic: ({ title, value }: { title: string; value: string | number }) => (
     <div>
@@ -182,6 +287,97 @@ vi.mock("antd", () => ({
       <button data-value={value}>{children}</button>
     ),
   },
+  Segmented: ({
+    options,
+    value,
+    onChange,
+  }: {
+    options: Array<{ label: string; value: string }>;
+    value: string;
+    onChange?: (value: string) => void;
+  }) => (
+    <div data-testid="comparison-mode" data-value={value}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          aria-pressed={value === option.value}
+          onClick={() => onChange?.(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  ),
+  Space: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Table: ({
+    dataSource,
+    columns,
+  }: {
+    dataSource: Array<Record<string, unknown>>;
+    columns: Array<{
+      title: ReactNode;
+      dataIndex?: string;
+      render?: (value: unknown, row: Record<string, unknown>) => ReactNode;
+    }>;
+  }) => (
+    <div>
+      {columns.map((column, index) => (
+        <span key={`header-${index}`}>{column.title}</span>
+      ))}
+      {dataSource.map((row, rowIndex) => (
+        <div key={String(row.key ?? rowIndex)}>
+          {columns.map((column, columnIndex) => (
+            <span key={`${String(row.key ?? rowIndex)}-${columnIndex}`}>
+              {column.render
+                ? column.render(
+                    column.dataIndex === undefined
+                      ? undefined
+                      : row[column.dataIndex],
+                    row,
+                  )
+                : column.dataIndex === undefined
+                  ? null
+                  : String(row[column.dataIndex] ?? "")}
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  ),
+  Select: ({
+    value,
+    onChange,
+    options,
+    disabled,
+    "aria-label": ariaLabel,
+  }: {
+    value?: string | number;
+    onChange?: (value: string) => void;
+    options?: Array<{
+      label: string;
+      value: string | number;
+      disabled?: boolean;
+    }>;
+    disabled?: boolean;
+    "aria-label"?: string;
+  }) => (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange?.(event.target.value)}
+    >
+      {options?.map((option) => (
+        <option
+          key={option.value}
+          value={option.value}
+          disabled={option.disabled}
+        >
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
 }));
 
 const mockTenant = {
@@ -287,6 +483,233 @@ describe("CostDashboardPage", () => {
     // FAILS in red state: dashboard/index.tsx still uses "Cost by Product Sub-Type".
     expect(screen.getByText("Cost by Product Category")).toBeInTheDocument();
     expect(screen.getByTestId("tag-pivot-panel")).toBeInTheDocument();
+  });
+
+  it("defaults to Overview while exposing Compare alongside the existing dashboard", async () => {
+    const { useTenant } = await import("../../providers/TenantContext");
+    vi.mocked(useTenant).mockReturnValue({
+      currentTenant: mockTenant,
+      tenants: [mockTenant],
+      setCurrentTenant: vi.fn(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isReadOnly: false,
+    });
+
+    render(<CostDashboardPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("comparison-mode")).toHaveAttribute(
+        "data-value",
+        "overview",
+      );
+    });
+    expect(screen.getByRole("button", { name: "Compare" })).toBeInTheDocument();
+    expect(screen.getByTestId("cost-trend-chart")).toBeInTheDocument();
+    expect(screen.getByTestId("filter-panel")).toBeInTheDocument();
+  });
+
+  it("passes inherited chargeback filters into the comparison request", async () => {
+    const { useTenant } = await import("../../providers/TenantContext");
+    const { useChargebackFilters } =
+      await import("../../hooks/useChargebackFilters");
+    const pageFilters = {
+      start_date: "2026-01-01",
+      end_date: "2026-01-31",
+      identity_id: "sa-123",
+      product_type: "KAFKA_STORAGE",
+      resource_id: "lkc-123",
+      cost_type: "usage",
+      tag_key: "team",
+      tag_value: "platform",
+      timezone: "America/Chicago",
+    };
+    vi.mocked(useChargebackFilters).mockReturnValue({
+      filters: pageFilters,
+      setFilter: vi.fn(),
+      setFilters: vi.fn(),
+      resetFilters: vi.fn(),
+      toQueryParams: vi.fn(() => pageFilters),
+      queryParams: pageFilters,
+    });
+    vi.mocked(useTenant).mockReturnValue({
+      currentTenant: mockTenant,
+      tenants: [mockTenant],
+      setCurrentTenant: vi.fn(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isReadOnly: false,
+    });
+
+    render(<CostDashboardPage />, { wrapper });
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+
+    await waitFor(() => {
+      expect(
+        vi
+          .mocked(useCostComparison)
+          .mock.calls.some(([request]) => request.enabled === true),
+      ).toBe(true);
+    });
+    const comparisonRequest = vi
+      .mocked(useCostComparison)
+      .mock.calls.find(([request]) => request.enabled === true)?.[0];
+    expect(comparisonRequest?.params).toMatchObject({
+      identity_id: "sa-123",
+      product_type: "KAFKA_STORAGE",
+      resource_id: "lkc-123",
+      cost_type: "usage",
+      tag_key: "team",
+      tag_value: "platform",
+      timezone: "America/Chicago",
+    });
+    expect(comparisonRequest?.params.baseline_start).not.toBe("2026-01-01");
+    expect(comparisonRequest?.params.comparison_start).not.toBe("2026-01-01");
+  });
+
+  it("opens a chargeback comparison row in Cost Explorer with both periods and timezone", async () => {
+    const { useTenant } = await import("../../providers/TenantContext");
+    const { useChargebackFilters } =
+      await import("../../hooks/useChargebackFilters");
+    vi.mocked(useTenant).mockReturnValue({
+      currentTenant: mockTenant,
+      tenants: [mockTenant],
+      setCurrentTenant: vi.fn(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isReadOnly: false,
+    });
+    vi.mocked(useChargebackFilters).mockReturnValue({
+      filters: {
+        start_date: "2026-01-01",
+        end_date: "2026-01-31",
+        identity_id: null,
+        product_type: null,
+        resource_id: null,
+        cost_type: null,
+        tag_key: null,
+        tag_value: null,
+        timezone: "America/Chicago",
+      },
+      setFilter: vi.fn(),
+      setFilters: vi.fn(),
+      resetFilters: vi.fn(),
+      toQueryParams: vi.fn(() => ({})),
+      queryParams: {},
+    });
+    vi.mocked(useCostComparison).mockReturnValue({
+      data: DASHBOARD_COMPARISON_RESPONSE,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const navigate = vi.fn();
+    vi.mocked(useNavigate).mockReturnValue(
+      navigate as unknown as NavigateFunction,
+    );
+
+    render(<CostDashboardPage />, { wrapper });
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Compare entity in Cost Explorer" }),
+    );
+
+    const destination =
+      navigate.mock.calls[navigate.mock.calls.length - 1]?.[0];
+    expect(typeof destination).toBe("string");
+    const query = new URLSearchParams(String(destination).split("?")[1]);
+    expect(query.get("focus")).toBe("principal:sa-123");
+    expect(query.get("diff")).toBe("true");
+    expect(query.get("from_start")).toBe("2026-03-01");
+    expect(query.get("from_end")).toBe("2026-03-01");
+    expect(query.get("to_start")).toBe("2026-03-02");
+    expect(query.get("to_end")).toBe("2026-03-02");
+    expect(query.get("timezone")).toBe("America/Chicago");
+  });
+
+  it("resets every comparison-local control for a new monthly tenant without rewriting page filters", async () => {
+    const { useTenant } = await import("../../providers/TenantContext");
+    const { useChargebackFilters } =
+      await import("../../hooks/useChargebackFilters");
+    const dailyTenant = {
+      ...mockTenant,
+      tenant_name: "daily",
+      chargeback_granularity: "daily" as const,
+    };
+    const monthlyTenant = {
+      ...mockTenant,
+      tenant_name: "monthly",
+      chargeback_granularity: "monthly" as const,
+    };
+    const pageFilters = {
+      start_date: "2026-01-01",
+      end_date: "2026-01-31",
+      identity_id: "sa-123",
+      product_type: "KAFKA_STORAGE",
+      resource_id: "lkc-123",
+      cost_type: "usage",
+      tag_key: "team",
+      tag_value: "platform",
+      timezone: "America/Chicago",
+    };
+    vi.mocked(useChargebackFilters).mockReturnValue({
+      filters: pageFilters,
+      setFilter: vi.fn(),
+      setFilters: vi.fn(),
+      resetFilters: vi.fn(),
+      toQueryParams: vi.fn(() => pageFilters),
+      queryParams: pageFilters,
+    });
+    vi.mocked(useTenant).mockReturnValue({
+      currentTenant: dailyTenant,
+      tenants: [dailyTenant, monthlyTenant],
+      setCurrentTenant: vi.fn(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isReadOnly: false,
+    });
+
+    const { rerender } = render(<CostDashboardPage />, { wrapper });
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await userEvent.selectOptions(screen.getByLabelText("Preset"), "custom");
+    await userEvent.selectOptions(screen.getByLabelText("Group by"), "resource");
+    await userEvent.click(screen.getByRole("button", { name: "Decreases" }));
+    await userEvent.selectOptions(screen.getByLabelText("Sort by"), "entity");
+    await userEvent.selectOptions(screen.getByLabelText("Rows"), "25");
+
+    vi.mocked(useTenant).mockReturnValue({
+      currentTenant: monthlyTenant,
+      tenants: [dailyTenant, monthlyTenant],
+      setCurrentTenant: vi.fn(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+      isReadOnly: false,
+    });
+    rerender(<CostDashboardPage />);
+
+    expect(screen.getByLabelText("Preset")).toHaveValue("calendar_month");
+    expect(screen.getByLabelText("Group by")).toHaveValue("principal");
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByLabelText("Sort by")).toHaveValue("absolute_change");
+    expect(screen.getByLabelText("Sort direction")).toHaveValue("desc");
+    expect(screen.getByLabelText("Rows")).toHaveValue("100");
+    expect(screen.getByLabelText("Comparison timezone")).toHaveValue("UTC");
+    expect(screen.getByTestId("filter-panel")).toHaveAttribute(
+      "data-timezone",
+      "America/Chicago",
+    );
+    expect(screen.getByTestId("filter-panel")).toHaveAttribute(
+      "data-show-date-range",
+      "false",
+    );
   });
 
   it("makes 6 useAggregation calls with tag:owner, environment_id, and product_category groupBy", async () => {

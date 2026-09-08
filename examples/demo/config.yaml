@@ -1,0 +1,60 @@
+logging:
+  level: INFO
+
+features:
+  enable_periodic_refresh: false
+
+preview:
+  artifact_root: "/app/data/focus-artifacts"
+  max_workers: 1
+
+api:
+  host: "0.0.0.0"
+  port: 8080
+
+tenants:
+  clean-confluent:
+    ecosystem: confluent_cloud
+    tenant_id: northstar-confluent
+    lookback_days: 200
+    cutoff_days: 5
+    storage:
+      backend: sqlmodel
+      connection_string: "sqlite:////app/data/confluent-cloud.db"
+    focus_preview:
+      commercial_profile: direct_payg
+      billing_currency: USD
+      effective_start_date: 2000-01-01
+      effective_end_date: 9999-12-31
+    plugin_settings:
+      ccloud_api:
+        key: "demo-placeholder-key"
+        secret: "demo-placeholder-secret"  # pragma: allowlist secret
+      metrics:
+        type: prometheus
+        url: "http://prometheus.invalid:9090"
+      topic_attribution:
+        enabled: true
+  clean-self-managed:
+    ecosystem: self_managed_kafka
+    tenant_id: northstar-self-managed
+    lookback_days: 200
+    cutoff_days: 5
+    storage:
+      backend: sqlmodel
+      connection_string: "sqlite:////app/data/self-managed-kafka.db"
+    plugin_settings:
+      cluster_id: northstar-logistics-kafka
+      metrics_identifier: northstar-logistics-kafka
+      broker_count: 3
+      cost_model:
+        compute_hourly_rate: "1.25"
+        storage_per_gib_hourly: "0.01"
+        network_ingress_per_gib: "0.02"
+        network_egress_per_gib: "0.04"
+      metrics:
+        type: prometheus
+        url: "http://prometheus.invalid:9090"
+      topic_attribution:
+        enabled: true
+        compute_policy: shared_even_v1

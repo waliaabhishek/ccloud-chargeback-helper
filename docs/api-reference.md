@@ -131,6 +131,46 @@ Detailed per-date pipeline state for a tenant.
 
 **Response:** `{tenant_name, tenant_id, ecosystem, topic_attribution_status, topic_attribution_error, states}` where `states` is a list of `{tracking_date, billing_gathered, resources_gathered, chargeback_calculated, topic_overlay_gathered, topic_attribution_calculated}` per date. The `topic_overlay_gathered` and `topic_attribution_calculated` fields are `false` when topic attribution is disabled or in `config_error` state.
 
+### `POST /api/v1/tenants/{tenant_name}/resource-links/resolve`
+
+Look up resource and identity metadata for identifiers within a tenant.
+The request body is:
+
+```json
+{"identifiers":["env-a","lkc-a","user-a"]}
+```
+
+`identifiers` must contain 1–100 non-blank strings. The limit is checked before
+duplicate values are removed. Results are scoped to the named tenant and use
+two minimal maps:
+
+```json
+{
+  "resources": {
+    "lkc-a": {
+      "resource_type": "kafka_cluster",
+      "parent_id": "env-a",
+      "kafka_cluster_id": null
+    }
+  },
+  "identities": {
+    "user-a": {"identity_type": "user"}
+  }
+}
+```
+
+Unknown and deleted identifiers are omitted. Resource entries contain only
+`resource_type`, `parent_id`, and `kafka_cluster_id`; identity entries contain
+only `identity_type`. A matching identifier may appear in both maps.
+
+| Status | Meaning |
+|---|---|
+| 200 | Maps of active resource and identity matches; missing matches are omitted |
+| 422 | Malformed JSON; missing body or `identifiers`; a non-object top-level body; non-string, blank, empty, or more than 100 identifiers |
+| 404 | The tenant is not configured |
+| 503 | The storage backend provider is unavailable |
+| 500 | Unexpected application or backend failure: `{"detail":"Internal server error","error_id":"<uuid>"}` |
+
 ---
 
 ## Billing
@@ -192,6 +232,183 @@ Aggregated view of failed or problematic allocations. Paginated. Same filters as
 **Response fields per item:** `ecosystem`, `resource_id`, `product_type`, `identity_id`, `allocation_detail`, `row_count`, `usage_cost`, `shared_cost`, `total_cost`.
 
 ---
+
+### Compare two cost periods
+
+The comparison endpoints return a ranked view of one source across two explicit
+inclusive date ranges. They do not combine chargeback and Topic Attribution
+amounts.
+
+```text
+GET /api/v1/tenants/{tenant_name}/chargebacks/comparison
+GET /api/v1/tenants/{tenant_name}/topic-attributions/comparison
+```
+
+The `chargebacks` route reports **Chargeback — allocated tenant costs**. It can
+group by `principal` (`identity_id`), `resource` (`resource_id`), or
+`environment` (`environment_id`). Its filters are `identity_id`,
+`product_type`, `resource_id`, `cost_type` (`usage` or `shared`), `tag_key`,
+and `tag_value`.
+
+The `topic-attributions` route reports **Topic Attribution — attributed Kafka
+costs, not the full tenant bill**. It can group by `topic` (a stable,
+cluster-scoped topic key with cluster and topic display fields) or `cluster`
+(`cluster_resource_id`). Its filters are `cluster_resource_id`, `topic_name`,
+`product_type`, `attribution_method`, `tag_key`, and `tag_value`.
+
+Topic Attribution's `cluster_resource_id` and `topic_name` filters retain the
+existing list behavior and match containing values. Other source filter values
+are passed as exact values. Tag keys must start with an alphanumeric character,
+then contain only alphanumerics, `_`, or `-`, with a maximum length of 63.
+
+#### Query parameters
+
+| Parameter | Type | Required | Default / constraints |
+|---|---|---:|---|
+| `baseline_start` | date | yes | Inclusive baseline date. |
+| `baseline_end` | date | yes | Inclusive baseline date. |
+| `comparison_start` | date | yes | Inclusive comparison date. |
+| `comparison_end` | date | yes | Inclusive comparison date. |
+| `timezone` | string | no | IANA timezone for date boundaries; `UTC` when omitted. |
+| `group_by` | string | no | `principal`, `resource`, or `environment` for chargeback; `topic` or `cluster` for Topic Attribution. Defaults to `principal` or `topic`. |
+| `movement` | string | no | `all`, `increase`, or `decrease`; defaults to `all`. Zero changes appear only with `all`. |
+| `sort_by` | string | no | `absolute_change`, `entity`, `baseline_amount`, `comparison_amount`, `change`, or `percentage_change`; defaults to `absolute_change`. |
+| `sort_direction` | string | no | `asc` or `desc`; defaults to `desc`. |
+| `limit` | integer | no | Defaults to `100`; must be between `1` and `500`. |
+| source filters | string | no | See the source lists above. `tag_value` requires `tag_key`. |
+
+The Compare control offers row limits of 25, 50, 100, 250, and 500; API
+clients may request any value from 1 through 500.
+
+The default order is absolute change descending, with the stable group key as
+the final ascending tie-breaker. Alternate sort fields use the same stable
+tie-breaker.
+
+The API always receives the four dates explicitly. The Compare controls provide
+these presets for hourly and daily tenants:
+
+- **Previous day:** the day before yesterday as the baseline versus yesterday as
+  the comparison.
+- **Previous week:** the prior Monday–Sunday week as the baseline versus the
+  latest completed Monday–Sunday week as the comparison.
+- **Calendar month:** the preceding complete calendar month as the baseline
+  versus the latest completed calendar month as the comparison.
+- **Custom:** two non-empty inclusive date ranges.
+
+Named presets use the current calendar date in the selected IANA timezone. A
+timezone change recomputes a named preset and resolves custom dates at local
+midnight. The response shows the requested dates and the effective UTC bounds;
+daylight-saving changes can make two date ranges have different elapsed
+durations.
+
+For monthly tenants, Compare uses `UTC`, offers Calendar month and Custom, and
+disables Previous day and Previous week. A custom monthly range must start on
+the first day of a UTC month and end on the last day of a UTC month. The API
+rejects a non-UTC timezone and partial UTC calendar months.
+
+#### Response
+
+Every monetary amount below is a JSON decimal string, including zero, negative
+values, and long fractional values. A non-null `percentage_change` is also a
+JSON decimal string; `percentage_change` may be `null` when the baseline is
+zero.
+
+| Field | Description |
+|---|---|
+| `source` | `chargeback` or `topic_attribution`. |
+| `granularity` | Tenant data granularity: `hourly`, `daily`, or `monthly`. |
+| `group_by` | The source-specific grouping used for the rows. |
+| `timezone` | The effective comparison timezone; monthly responses use `UTC`. |
+| `coverage_evaluated_at` | ISO 8601 UTC instant at which coverage was evaluated. |
+| `baseline`, `comparison` | Period objects described below. |
+| `unequal_durations` | `true` when the two resolved UTC durations differ. It does not reject or normalize the periods. |
+| `summary` | Full filtered-scope totals and movement values, independent of `movement` and `limit`. |
+| `reconciliation` | Counts and financial contributions for returned, movement-excluded, and top-N-omitted groups. |
+| `rows` | At most `limit` groups in the requested server-side order. |
+
+Each period contains `start_date`, `end_date`, `start_at`, `end_at`,
+`duration_seconds`, and `coverage`. `start_date` and `end_date` are the
+requested inclusive dates. `start_at` is the resolved UTC inclusive bound and
+`end_at` is the resolved UTC exclusive bound; both are ISO 8601 UTC datetimes.
+
+`coverage` contains:
+
+| Field | Description |
+|---|---|
+| `status` | `complete`, `incomplete`, or `unknown`. |
+| `expected_dates` | Source dates expected for the period's granularity. |
+| `unknown_dates` | Dates whose source availability cannot be confirmed. |
+| `incomplete_dates` | Dates without complete source processing evidence. |
+| `retention_qualified_dates` | Dates where current evidence cannot distinguish unavailable retained data from a valid zero. This does not assert that data was deleted. |
+| `availability_cutoff_at` | The captured source retention cutoff, or `null` when a valid Topic Attribution policy cannot be established. Confluent Cloud and self-managed Kafka use their validated plugin policy, including defaults and explicit overrides. |
+
+`unknown` takes precedence when both unknown and incomplete dates exist. A
+successful chargeback calculation can confirm a zero total even when no rows
+match the filters. Topic Attribution requires unfiltered source-date evidence
+for the selected slots, so a filtered zero or an empty source slot remains
+qualified when that evidence is absent. The UI labels values from either
+non-complete period as observed totals and shows a short warning identifying
+the affected periods. Detailed coverage dates remain available in the API.
+For the built-in Kafka plugins, omitting `topic_attribution.retention_days`
+uses the plugin's default; it does not by itself make coverage unknown.
+Coverage is checked independently of topic and cluster filters: a filter with
+no matching costs can report complete when the underlying source dates are
+complete. Missing source records, unfinished processing, and periods outside
+the retention window remain qualified.
+
+`summary` contains `baseline_amount`, `comparison_amount`, `increases`,
+`decreases`, `net_change`, and `percentage_change`. `increases` is the sum of
+positive row changes; `decreases` is the signed sum of negative row changes;
+`net_change` is the comparison total minus the baseline total. When the
+baseline total is exactly zero, `percentage_change` is `null`; the same rule
+applies to a row whose baseline amount is zero.
+
+Each row contains `key`, `kind`, `dimensions`, `baseline_amount`,
+`comparison_amount`, `change`, `percentage_change`, `baseline_row_count`,
+`comparison_row_count`, and `observed_presence`. Presence is based on row
+presence, so a zero-valued row is retained. A row absent from a complete period
+can be described as cost only in the other period; an absent period with
+incomplete or unknown coverage is described as no cost observed.
+
+`reconciliation` contains `full_group_count`, `selected_group_count`,
+`returned_group_count`, `movement_excluded_group_count`, and
+`row_limit_omitted_group_count`, plus baseline, comparison, and net amounts for
+each of the returned, movement-excluded, and row-limit-omitted groups. The
+amounts satisfy these identities independently for baseline, comparison, and
+net values:
+
+```text
+full = returned + movement_excluded + row_limit_omitted
+selected = returned + row_limit_omitted
+```
+
+A group count remains meaningful even when the corresponding omitted amounts
+cancel to zero. Unassigned and sentinel groups are included in these counts,
+but do not expose an investigation action.
+
+#### Errors
+
+| Condition | Status and response |
+|---|---|
+| Invalid date syntax, enum, source grouping, or `limit` bounds | `422`; FastAPI places the offending field at `detail[0].loc = ["query", "<field>"]`. |
+| Baseline or comparison start after its end | `400`, respectively `baseline_start must be <= baseline_end` or `comparison_start must be <= comparison_end`. |
+| `tag_value` without `tag_key` | `400`, `tag_value requires tag_key`. |
+| Invalid tag key format | `400`, `Invalid tag key format: '<key>'`. |
+| Unknown IANA timezone | `400`, `Unknown timezone: '<timezone>'`. |
+| Monthly request with a non-UTC timezone | `400`, `timezone must be UTC for monthly comparison data`. |
+| Monthly baseline is not a complete UTC calendar-month range | `400`, `baseline period must contain complete UTC calendar months for monthly comparison data`. |
+| Monthly comparison is not a complete UTC calendar-month range | `400`, `comparison period must contain complete UTC calendar months for monthly comparison data`. |
+| Tenant is not configured | `404`, `Tenant '<name>' not found`. |
+| Provider wiring is unavailable | `503`, `Storage backend provider is unavailable`. |
+| Leased backend cannot provide a consistent comparison read | `503`, `Storage backend does not support consistent comparison reads`. |
+| Provider initialization or another unhandled comparison failure | `500`, `{"detail":"Internal server error","error_id":"<uuid>"}`. |
+| Request exceeds the configured API timeout | `504`, `Request exceeded <seconds>s timeout`. |
+
+Malformed query input is rejected before settings or storage work. For valid
+queries, date-order checks run before the tag dependency, timezone validation,
+and monthly alignment checks. Provider initialization failures keep the normal
+sanitized 500 response; qualified 200 results are possible only after storage
+has been acquired successfully.
 
 ## Aggregation
 
@@ -948,7 +1165,8 @@ metrics history remains available.
 Topic attribution rows are produced by the optional `topic_overlay` pipeline
 stage (Confluent Cloud only). Each row represents the cost portion attributed to
 one topic for one billing line item. Requires `topic_attribution.enabled: true`
-in plugin settings.
+in plugin settings. For a two-period ranked comparison, use the
+[`topic-attributions` comparison endpoint](#compare-two-cost-periods).
 
 ### `GET /api/v1/tenants/{tenant_name}/topic-attributions`
 
@@ -1075,7 +1293,7 @@ Return a neighborhood of nodes and directed edges centred on a focus entity.
 
 **Views:**
 
-- **Root view** (`focus` omitted): returns a synthetic tenant node plus one environment node per active environment. Edges are `parent` type, directed tenant → environment.
+- **Root view** (`focus` omitted): returns a synthetic tenant node plus active environments and clusters without a parent. Confluent Cloud clusters remain under their environments; self-managed Kafka clusters appear directly under the tenant. Edges are `parent` type, directed tenant → resource. The tenant cost is the sum of these resource costs.
 - **Environment focus** (`focus=env-abc`): returns the environment node plus all direct child resources up to `depth` hops (clusters, connectors, flink pools, schema registries). Edges are `parent` type, directed parent → child.
 - **Cluster focus** (`focus=lkc-abc`): returns the cluster node, its child topic nodes, and any identity (service account / pool) nodes charged to the cluster via chargeback. Edges are `parent` (cluster → topic) and `charge` (cluster → identity).
 

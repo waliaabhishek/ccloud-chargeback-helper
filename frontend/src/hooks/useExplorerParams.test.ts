@@ -29,6 +29,7 @@ describe("useExplorerParams", () => {
     expect(result.current.params.from_end).toBeNull();
     expect(result.current.params.to_start).toBeNull();
     expect(result.current.params.to_end).toBeNull();
+    expect(result.current.params.timezone).toBeNull();
   });
 
   it("reads all params from URL on mount", () => {
@@ -74,6 +75,16 @@ describe("useExplorerParams", () => {
     expect(result.current.params.to_end).toBe("2026-02-28");
   });
 
+  it("preserves an optional timezone for a diff link", () => {
+    const { result } = renderHook(() => useExplorerParams(), {
+      wrapper: makeWrapper(
+        "?diff=true&from_start=2026-01-01&from_end=2026-01-31&to_start=2026-02-01&to_end=2026-02-28&timezone=America%2FChicago",
+      ),
+    });
+
+    expect(result.current.params.timezone).toBe("America/Chicago");
+  });
+
   it("pushParam updates URL (creates history entry via replace: false)", () => {
     const { result } = renderHook(() => useExplorerParams(), {
       wrapper: makeWrapper(),
@@ -114,6 +125,34 @@ describe("useExplorerParams", () => {
     expect(result.current.params.diff).toBe(true);
     expect(result.current.params.from_start).toBe("2026-01-01");
     expect(result.current.params.from_end).toBe("2026-01-31");
+  });
+
+  it("keeps both comparison periods and timezone in the Explorer diff action URL", () => {
+    const { result } = renderHook(() => useExplorerParams(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.pushParams({
+        focus: "sa-123",
+        diff: true,
+        from_start: "2026-02-01",
+        from_end: "2026-02-28",
+        to_start: "2026-03-01",
+        to_end: "2026-03-31",
+        timezone: "America/Chicago",
+      });
+    });
+
+    expect(result.current.params).toMatchObject({
+      focus: "sa-123",
+      diff: true,
+      from_start: "2026-02-01",
+      from_end: "2026-02-28",
+      to_start: "2026-03-01",
+      to_end: "2026-03-31",
+      timezone: "America/Chicago",
+    });
   });
 
   it("pushParam with null removes the param", () => {

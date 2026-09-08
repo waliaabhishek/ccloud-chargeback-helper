@@ -1,0 +1,29 @@
+services:
+  demo-generator:
+    extends:
+      file: docker-compose.internal.yml
+      service: demo-generator
+
+  chitragupta:
+    extends:
+      file: docker-compose.internal.yml
+      service: chitragupta
+    ports:
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_API_PORT:-8080}:8080"
+    networks:
+      - demo-public
+
+  chitragupta-ui:
+    extends:
+      file: docker-compose.internal.yml
+      service: chitragupta-ui
+    ports:
+      - "${DEMO_BIND_ADDRESS:-127.0.0.1}:${DEMO_UI_PORT:-8081}:80"
+    networks:
+      - demo-public
+
+networks:
+  demo:
+    internal: true
+  demo-public:
+    driver: bridge

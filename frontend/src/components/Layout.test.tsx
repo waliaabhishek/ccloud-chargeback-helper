@@ -33,9 +33,11 @@ vi.mock("./TenantSelector", () => ({
 // Mock ResourceLinkContext to avoid provider requirement.
 vi.mock("../providers/ResourceLinkContext", () => ({
   useResourceLinks: vi.fn(() => ({
+    available: true,
     enabled: false,
     setEnabled: vi.fn(),
     resolveUrl: vi.fn(() => null),
+    registerIdentifier: vi.fn(() => vi.fn()),
     isLoading: false,
   })),
   ResourceLinkProvider: ({ children }: { children: React.ReactNode }) =>
@@ -247,9 +249,11 @@ describe("TASK-197: Links toggle tooltip", () => {
   it("Switch onChange fires when clicked", () => {
     const mockSetEnabled = vi.fn();
     vi.mocked(useResourceLinks).mockReturnValueOnce({
+      available: true,
       enabled: true,
       setEnabled: mockSetEnabled,
       resolveUrl: vi.fn(() => null),
+      registerIdentifier: vi.fn(() => vi.fn()),
       isLoading: false,
     });
 
@@ -264,6 +268,25 @@ describe("TASK-197: Links toggle tooltip", () => {
     fireEvent.click(linksSwitch);
 
     expect(mockSetEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the Links switch when the selected tenant cannot use Confluent links", () => {
+    const setEnabled = vi.fn();
+    vi.mocked(useResourceLinks).mockReturnValueOnce({
+      available: false,
+      enabled: false,
+      setEnabled,
+      resolveUrl: vi.fn(() => null),
+      registerIdentifier: vi.fn(() => vi.fn()),
+      isLoading: false,
+    });
+    render(
+      <AppLayout isDark={false} onToggleTheme={vi.fn()}><div>content</div></AppLayout>,
+      { wrapper },
+    );
+    expect(screen.getByRole("switch")).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(setEnabled).not.toHaveBeenCalled();
   });
 });
 
